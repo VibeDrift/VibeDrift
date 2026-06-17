@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.tgz
+.DS_Store
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# Generated scan reports & local cache (both dir spellings)
+vibe-drift-report.html
+vibedrift-report.html
+vibedrift-report-detailed.html
+vibedrift-*.json
+vibedrift-*.html
+.vibedrift/
+.vibe-drift/
+.vercel
+
+# Calibration / eval run outputs (generated)
+test/calibration/reports/pr-*.json
+eval/reports/

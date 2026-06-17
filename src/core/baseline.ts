@@ -1,0 +1,191 @@
+/**
+ * RepoDriftBaseline — the per-HEAD cache that makes the MCP server fast.
+ *
+ * A whole-repo scan is 3–8s; the MCP server can't pay that per tool call. So a
+ * normal `vibedrift scan` writes this baseline once (dominant pattern per drift
+ * category + the team's intent hints + a MinHash index of every function), the
+ * long-lived server loads it once, and each tool call overlays at most one
+ * file's worth of work against the cached aggregate.
+ *
+ * Cache layout mirrors src/core/git-metadata.ts exactly:
+ *   ~/.vibedrift/baseline-cache/<sha256(rootDir)[:16]>.json
+ * Key is a content merkle (same idea as findings-cache.ts:computeAnalyzerCacheKey)
+ * so a stale baseline is detected and rebuilt rather than silently served.
+ */
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+
+import { buildAnalysisContext } from "./discovery.js";
+import { runDriftDetection } from "../drift/index.js";
+import { extractAllFunctions } from "../codedna/function-extractor.js";
+import { buildSignature } from "../codedna/minhash.js";
+import type { AnalysisContext } from "./types.js";
+import type { DriftFinding, DriftCategory } from "../drift/types.js";
+import type { IntentHint } from "../intent/types.js";
+
+const CACHE_DIR = join(homedir(), ".vibedrift", "baseline-cache");
+/** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
+export const BASELINE_VERSION = 1;
+
+export interface CategoryVote {
+  driftCategory: DriftCategory;
+  dominantPattern: string;
+  dominantCount: number;
+  totalRelevantFiles: number;
+  consistencyScore: number; // 0-100
+  dominantFiles: string[]; // exemplars to copy
+  /** Files that drift in this category + the pattern each uses instead — lets
+   *  check_file_drift report "your file does X, the repo does Y". */
+  deviators: Array<{ path: string; detectedPattern: string }>;
+}
+
+export interface MinhashEntry {
+  relativePath: string;
+  name: string;
+  line: number;
+  tokens: string[]; // buildSignature tokens, for exact LCS verify
+  signature: Uint32Array; // 128 × uint32 MinHash
+}
+
+export interface RepoDriftBaseline {
+  key: string;
+  rootDir: string;
+  ctxFiles: Array<{ path: string; hash: string }>;
+  perCategoryVote: Partial<Record<DriftCategory, CategoryVote>>;
+  intentHints: IntentHint[];
+  minhashIndex: MinhashEntry[];
+  builtAt: number;
+}
+
+/** On-disk shape: signatures degrade to number[] (JSON has no typed arrays). */
+interface SerializedBaseline extends Omit<RepoDriftBaseline, "minhashIndex"> {
+  minhashIndex: Array<Omit<MinhashEntry, "signature"> & { signature: number[] }>;
+}
+
+function projectHash(rootDir: string): string {
+  return createHash("sha256").update(rootDir).digest("hex").slice(0, 16);
+}
+
+/**
+ * Content merkle over (path, content-hash). Sorted by path so the key is
+ * order-independent; prefixed with BASELINE_VERSION so a logic bump invalidates
+ * every cached baseline at once.
+ */
+export function computeBaselineKey(files: Array<{ path: string; hash: string }>): string {
+  const merkle = [...files]
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .map((f) => `${f.path}:${f.hash}`)
+    .join("\n");
+  return createHash("sha256").update(`${BASELINE_VERSION}\n${merkle}`).digest("hex");
+}
+
+/**
+ * Project each drift category's tally off the fired DriftFindings. A category
+ * with multiple findings (e.g. architectural sub-aspects) keeps the one
+ * covering the most files — the most representative dominant for the category.
+ * Fully-consistent categories emit no finding, so they have no entry here and
+ * tools report them as 100%-consistent by inference.
+ */
+export function votesFromFindings(
+  findings: DriftFinding[],
+): Partial<Record<DriftCategory, CategoryVote>> {
+  const out: Partial<Record<DriftCategory, CategoryVote>> = {};
+  for (const f of findings) {
+    const existing = out[f.driftCategory];
+    if (existing && existing.totalRelevantFiles >= f.totalRelevantFiles) continue;
+    out[f.driftCategory] = {
+      driftCategory: f.driftCategory,
+      dominantPattern: f.dominantPattern,
+      dominantCount: f.dominantCount,
+      totalRelevantFiles: f.totalRelevantFiles,
+      consistencyScore: f.consistencyScore,
+      dominantFiles: f.dominantFiles ?? [],
+      deviators: f.deviatingFiles.map((d) => ({ path: d.path, detectedPattern: d.detectedPattern })),
+    };
+  }
+  return out;
+}
+
+/**
+ * Assemble a baseline from ALREADY-computed scan pieces. `vibedrift scan`
+ * calls this with the ctx + drift findings it just produced, so writing the
+ * baseline as a scan side-effect costs only the function-signature pass — no
+ * second whole-repo scan. `buildBaseline` is the standalone (re-scan) entry.
+ */
+export function assembleBaseline(
+  rootDir: string,
+  ctx: AnalysisContext,
+  driftFindings: DriftFinding[],
+): RepoDriftBaseline {
+  const ctxFiles = ctx.files.map((file) => ({
+    path: file.relativePath,
+    hash: createHash("sha256").update(file.content).digest("hex"),
+  }));
+
+  const minhashIndex: MinhashEntry[] = extractAllFunctions(ctx.files).map((fn) => {
+    const sig = buildSignature(fn.rawBody);
+    return {
+      relativePath: fn.relativePath,
+      name: fn.name,
+      line: fn.line,
+      tokens: sig.tokens,
+      signature: sig.signature,
+    };
+  });
+
+  return {
+    key: computeBaselineKey(ctxFiles),
+    rootDir,
+    ctxFiles,
+    perCategoryVote: votesFromFindings(driftFindings),
+    intentHints: ctx.intentHints ?? [],
+    minhashIndex,
+    builtAt: Date.now(),
+  };
+}
+
+/** Standalone builder: scans `rootDir` from scratch, then assembles. */
+export async function buildBaseline(rootDir: string): Promise<RepoDriftBaseline> {
+  const { ctx } = await buildAnalysisContext(rootDir);
+  const { driftFindings } = runDriftDetection(ctx);
+  return assembleBaseline(rootDir, ctx, driftFindings);
+}
+
+export async function writeBaseline(b: RepoDriftBaseline): Promise<void> {
+  await mkdir(CACHE_DIR, { recursive: true });
+  const serial: SerializedBaseline = {
+    ...b,
+    minhashIndex: b.minhashIndex.map((e) => ({ ...e, signature: Array.from(e.signature) })),
+  };
+  await writeFile(join(CACHE_DIR, `${projectHash(b.rootDir)}.json`), JSON.stringify(serial), "utf8");
+}
+
+function hydrate(parsed: SerializedBaseline): RepoDriftBaseline {
+  return {
+    ...parsed,
+    minhashIndex: parsed.minhashIndex.map((e) => ({ ...e, signature: Uint32Array.from(e.signature) })),
+  };
+}
+
+/** Read the persisted baseline regardless of freshness (caller checks staleness). */
+export async function loadBaselineUnchecked(rootDir: string): Promise<RepoDriftBaseline | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(CACHE_DIR, `${projectHash(rootDir)}.json`), "utf8");
+  } catch {
+    return null;
+  }
+  return hydrate(JSON.parse(raw) as SerializedBaseline);
+}
+
+/** Read the persisted baseline only if its key matches `expectKey` (else null → rebuild). */
+export async function loadBaseline(
+  rootDir: string,
+  expectKey: string,
+): Promise<RepoDriftBaseline | null> {
+  const loaded = await loadBaselineUnchecked(rootDir);
+  if (!loaded || loaded.key !== expectKey) return null;
+  return loaded;
+}

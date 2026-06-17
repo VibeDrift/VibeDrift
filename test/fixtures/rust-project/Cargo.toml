@@ -1,0 +1,8 @@
+[package]
+name = "rust-fixture"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0"
+tokio = "1.0"
+unused-crate = "0.1"

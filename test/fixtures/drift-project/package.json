@@ -1,0 +1,11 @@
+{
+  "name": "drift-project",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "express": "^4.18.0",
+    "prisma": "^5.0.0",
+    "pg": "^8.11.0",
+    "zod": "^3.22.0"
+  }
+}

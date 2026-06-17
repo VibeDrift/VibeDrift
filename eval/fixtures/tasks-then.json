@@ -1,0 +1,15 @@
+{
+  "_comment": "Discriminating experiment: then-chain-repo's dominant (.then() chains) FIGHTS Opus 4.8's async/await default. Without the repo's declared convention the agent should drift to async/await (= drift here); with it, it should match. Run with EVAL_SAMPLE_CAP=0 to strip the raw-file confound so the ONLY difference between arms is VibeDrift's distilled guidance.",
+  "tasks": [
+    { "id": "tc-fetch-subscription", "repo": "then-chain-repo", "targetPath": "subscriptions.ts",
+      "prompt": "Add a module that fetches a subscription by id (enriching the row) and lists subscriptions up to a limit." },
+    { "id": "tc-fetch-payment", "repo": "then-chain-repo", "targetPath": "payments.ts",
+      "prompt": "Add a module that fetches a payment by id (enriching the row) and lists payments up to a limit." },
+    { "id": "tc-fetch-team", "repo": "then-chain-repo", "targetPath": "teams.ts",
+      "prompt": "Add a module that fetches a team by id (enriching the row) and lists teams up to a limit." },
+    { "id": "tc-fetch-webhook", "repo": "then-chain-repo", "targetPath": "webhooks.ts",
+      "prompt": "Add a module that fetches a webhook by id (enriching the row) and lists webhooks up to a limit." },
+    { "id": "tc-fetch-apikey", "repo": "then-chain-repo", "targetPath": "apikeys.ts",
+      "prompt": "Add a module that fetches an API key by id (enriching the row) and lists API keys up to a limit." }
+  ]
+}

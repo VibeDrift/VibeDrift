@@ -1,0 +1,25 @@
+{
+  "_comment": "Drift-tempting coding tasks. Each is answerable from the repo alone; each has a natural way to drift (e.g. .then() vs async/await, default vs named export, raw db vs repo abstraction) that the agent will or won't take depending on whether it has VibeDrift's guidance.",
+  "tasks": [
+    { "id": "aa-fetch-settings", "repo": "async-await-repo", "targetPath": "settings-service.ts",
+      "prompt": "Add a service module that fetches a settings record by key and its default value, returning both. Throw if the key is unknown." },
+    { "id": "aa-fetch-session", "repo": "async-await-repo", "targetPath": "session-service.ts",
+      "prompt": "Add a service module that loads a session by token and the user it belongs to. Throw if the session is missing." },
+    { "id": "aa-fetch-notifications", "repo": "async-await-repo", "targetPath": "notification-service.ts",
+      "prompt": "Add a service module that loads a user's unread notifications and the total unread count." },
+    { "id": "aa-fetch-audit", "repo": "async-await-repo", "targetPath": "audit-service.ts",
+      "prompt": "Add a service module that fetches an audit entry by id and the actor who triggered it. Throw if the entry is missing." },
+    { "id": "aa-fetch-billing", "repo": "async-await-repo", "targetPath": "billing-service.ts",
+      "prompt": "Add a service module that loads a customer's current plan and their usage for the period." },
+    { "id": "rp-find-subscription", "repo": "repository-pattern-repo", "targetPath": "subscriptions.ts",
+      "prompt": "Add a module that finds a subscription by id and saves an updated subscription. Throw if the subscription is missing." },
+    { "id": "rp-find-payment", "repo": "repository-pattern-repo", "targetPath": "payments.ts",
+      "prompt": "Add a module that finds a payment by id and saves a new payment. Throw if the payment is missing." },
+    { "id": "rp-find-team", "repo": "repository-pattern-repo", "targetPath": "teams.ts",
+      "prompt": "Add a module that finds a team by id and saves a team. Throw if the team is missing." },
+    { "id": "rp-find-webhook", "repo": "repository-pattern-repo", "targetPath": "webhooks.ts",
+      "prompt": "Add a module that finds a webhook by id and saves a webhook. Throw if the webhook is missing." },
+    { "id": "rp-find-apikey", "repo": "repository-pattern-repo", "targetPath": "apikeys.ts",
+      "prompt": "Add a module that finds an API key by id and saves an API key. Throw if the key is missing." }
+  ]
+}

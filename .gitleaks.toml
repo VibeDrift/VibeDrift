@@ -1,0 +1,18 @@
+# gitleaks configuration for VibeDrift.
+#
+# Extends the default ruleset and allowlists files that intentionally contain
+# credential-shaped strings but hold no real secrets: the security analyzer's
+# synthetic test fixtures and the .env.example placeholder template. Everything
+# else is scanned with the full default ruleset.
+
+title = "VibeDrift gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic security-test fixtures and placeholder templates (verified: no real secrets)"
+paths = [
+  '''test/unit/analyzers/security\.test\.ts''',
+  '''\.env\.example$''',
+]

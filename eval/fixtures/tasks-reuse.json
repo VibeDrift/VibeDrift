@@ -1,0 +1,34 @@
+{
+  "tasks": [
+    {
+      "id": "ru-format-money",
+      "repo": "reuse-repo",
+      "targetPath": "invoice-display.ts",
+      "prompt": "Add a module exporting a function that formats an amount given in integer cents plus a currency code into a display string: pick the right symbol for USD ($) and EUR (€), show two decimal places, and group the whole part with thousands separators (e.g. 123456 USD -> \"$1,234.56\")."
+    },
+    {
+      "id": "ru-slugify",
+      "repo": "reuse-repo",
+      "targetPath": "post-url.ts",
+      "prompt": "Add a module exporting a function that turns a post title into a URL slug: lowercase it, trim it, strip punctuation, and collapse runs of whitespace into single hyphens."
+    },
+    {
+      "id": "ru-format-date",
+      "repo": "reuse-repo",
+      "targetPath": "audit-stamp.ts",
+      "prompt": "Add a module exporting a function that formats a unix-millisecond timestamp into a YYYY-MM-DD date string with zero-padded month and day."
+    },
+    {
+      "id": "ru-truncate",
+      "repo": "reuse-repo",
+      "targetPath": "preview-text.ts",
+      "prompt": "Add a module exporting a function that shortens a string to a maximum length: if it is longer than the max, cut it, trim trailing whitespace, and append an ellipsis character."
+    },
+    {
+      "id": "ru-parse-duration",
+      "repo": "reuse-repo",
+      "targetPath": "ttl-parse.ts",
+      "prompt": "Add a module exporting a function that parses a short duration string like \"30s\", \"5m\", \"2h\", or \"1d\" into a number of milliseconds, throwing an error on malformed input."
+    }
+  ]
+}
