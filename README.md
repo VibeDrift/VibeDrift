@@ -291,5 +291,5 @@ The VibeDrift CLI is open source under the [MIT License](./LICENSE), so you are 
 
 - **Website & docs:** [vibedrift.ai](https://vibedrift.ai)
 - **Issues:** [GitHub Issues](https://github.com/VibeDrift/VibeDrift/issues)
-- **Community:** [Discord](https://discord.gg/pAvupbVZ)
+- **Community:** [Discord](https://discord.gg/YVcQ65Jt3Q)
 - **Feedback:** `vibedrift feedback "your message"`
