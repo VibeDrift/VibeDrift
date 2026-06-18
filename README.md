@@ -12,11 +12,32 @@
 
 Your AI coding agent doesn't remember what it built yesterday. VibeDrift scans your project for the contradictions, hidden duplicates, and security gaps that creep in when AI writes code across multiple sessions, and gives you a single score with concrete file-level evidence.
 
-VibeDrift is open source (MIT) and runs entirely on your machine. The core CLI, every local analyzer, and the MCP server need no account, and your code never leaves your machine. VibeDrift does send a small anonymous usage beacon after each scan (language, file count, lines of code, scan time, CLI version, finding count, and score; no code, no file paths, no identifiers), on by default for everyone whether signed in or not. Turn it off with `vibedrift telemetry disable` (or set `VIBEDRIFT_TELEMETRY_DISABLED=1`), or run `--local-only` for a fully offline scan. An optional hosted deep-scan service adds AI-powered analysis on top.
+Open source (MIT) and fully local, so your code never leaves your machine. An optional hosted deep-scan service adds AI-powered analysis on top. The only thing VibeDrift sends is a small anonymous usage beacon (no code, no paths, no identifiers) you can turn off anytime; see [Privacy & Telemetry](#privacy--telemetry) for exactly what it contains.
 
 > **🆕 Use VibeDrift inside your AI coding agent.** The [MCP server](#mcp-server) lets Claude Code / Cursor check drift *while it writes code*, so new code matches your repo's conventions the first time. Drift **prevention**, not just detection. Free, local, your code never leaves your machine. [Set it up ↓](#mcp-server)
 
 ---
+
+## Contents
+
+- [Quick Start](#quick-start)
+- [Supported Languages](#supported-languages)
+- [What It Finds](#what-it-finds)
+- [Example Output](#example-output)
+- [Scoring](#scoring)
+- [Deep Scan](#deep-scan)
+- [MCP Server](#mcp-server)
+  - [Deep mode (in-loop AI checks)](#deep-mode-in-loop-ai-checks)
+  - [Install in any MCP client](#install-in-any-mcp-client)
+- [CI Integration](#ci-integration)
+- [Privacy & Telemetry](#privacy--telemetry)
+- [Usage Reference](#usage-reference)
+  - [Intent-hint files](#intent-hint-files)
+  - [Environment](#environment)
+  - [Output Formats](#output-formats)
+- [Contributing](#contributing)
+- [License](#license)
+- [Links](#links)
 
 ## Quick Start
 
@@ -82,7 +103,7 @@ Files: 9 (TS: 9) | Lines: 262 | Time: 0.0s
 
 The default run produces the interactive HTML report and serves it locally so you can click through every finding with line-level evidence.
 
-## Scoring (drift-only composite, out of 100)
+## Scoring
 
 VibeDrift reports **two independent scores**:
 
@@ -104,7 +125,7 @@ The Vibe Drift Score counts **all** cross-file drift signals — semantic duplic
 
 > **Scoring stays comparable across upgrades.** When the scoring changes between releases, VibeDrift recomputes your past scans under the new scoring automatically, so trend lines compare like-with-like. Scans are also fully deterministic: the same commit produces the same score on every machine and in CI.
 
-## Deep Scan (optional, AI-powered)
+## Deep Scan
 
 VibeDrift's local analysis is free and offline. An optional **deep scan** adds cloud-powered analysis that local static analysis can't do:
 
@@ -120,7 +141,7 @@ vibedrift . --deep       # run a deep scan
 
 Deep scan sends function snippets (not full files) to the hosted VibeDrift service, which processes them in memory and does not store them. It requires a free account. See [vibedrift.ai](https://vibedrift.ai) for what the hosted service includes.
 
-## MCP server
+## MCP Server
 
 VibeDrift ships an MCP server so an AI coding agent (Claude Code, Cursor) can consult your repo's own conventions **while it writes code** — turning drift detection into drift *prevention*. It exposes five tools:
 
@@ -132,7 +153,7 @@ VibeDrift ships an MCP server so an AI coding agent (Claude Code, Cursor) can co
 
 The five local tools are **free for everyone** — they run on your machine and never send your code, so there's no login and nothing to pay for. The tools build the repo's drift *baseline* automatically on first use, so there's no setup beyond adding the server.
 
-### Deep mode — in-loop AI checks
+### Deep mode (in-loop AI checks)
 
 `validate_change` and `find_similar_function` accept an opt-in **`deep: true`** that runs VibeDrift's deep scan on the single function being checked (intent-mismatch detection + LLM-validated semantic duplicates, the same engine as `vibedrift . --deep`). The agent catches a misleading name or a semantic clone *before the code lands*, not in a later review.
 
