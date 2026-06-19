@@ -119,7 +119,13 @@ export async function deepDuplicatesViaIndex(
         return { degraded: true, reason: verdict.reason, intentMismatches: [], duplicates: [] };
       }
     } else {
-      duplicates.push(...verdict.duplicates);
+      // Defense-in-depth: surface a borderline pair ONLY if the server's verdict
+      // cleared the high-confidence bar. The server boosts Claude-CONFIRMED pairs
+      // to >= HIGH_CONFIDENCE and leaves uncertain ones at their raw cosine, so
+      // this drops anything Claude didn't confirm — mirroring the full --deep
+      // path's client-side confidence filter rather than trusting the response
+      // verbatim. (Rejected pairs aren't returned at all.)
+      duplicates.push(...verdict.duplicates.filter((d) => d.confidence >= HIGH_CONFIDENCE));
     }
   }
 

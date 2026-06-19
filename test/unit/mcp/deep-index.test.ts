@@ -150,6 +150,20 @@ describe("deepDuplicatesViaIndex", () => {
     expect(r?.duplicates).toHaveLength(0);
   });
 
+  it("drops a server-returned duplicate that didn't clear the confidence bar (unconfirmed)", async () => {
+    tok("t");
+    (loadEmbeddingIndex as ReturnType<typeof vi.fn>).mockResolvedValue(borderlineIndex());
+    (embedFunctions as ReturnType<typeof vi.fn>).mockResolvedValue([{ id: QUERY.id, vector: [1, 0, 0] }]);
+    // Server returns the pair but unboosted (Claude didn't confirm) → below HIGH_CONFIDENCE.
+    (deepAnalyze as ReturnType<typeof vi.fn>).mockResolvedValue({
+      degraded: false,
+      intentMismatches: [],
+      duplicates: [{ kind: "duplicate", detail: "query::formatAmount ≈ a.ts::maybeTwin", confidence: 0.8, verdict: "possible_duplicate" }],
+    });
+    const r = await deepDuplicatesViaIndex("/r", QUERY, "bk");
+    expect(r?.duplicates).toHaveLength(0); // not confirmed → not surfaced
+  });
+
   it("reports degraded when the only matches are borderline and the cloud verdict fails", async () => {
     tok("t");
     (loadEmbeddingIndex as ReturnType<typeof vi.fn>).mockResolvedValue(borderlineIndex());
