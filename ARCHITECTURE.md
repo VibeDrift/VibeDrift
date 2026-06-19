@@ -19,28 +19,33 @@
 - [2. Design principles](#2-design-principles)
 - [3. The two faces and the shared core](#3-the-two-faces-and-the-shared-core)
 - [4. The layered analysis model](#4-the-layered-analysis-model)
-- [5. Repository map](#5-repository-map)
-- [6. Core data types](#6-core-data-types)
-- [7. The batch scan pipeline](#7-the-batch-scan-pipeline)
-- [8. Layer 1: static analyzers](#8-layer-1-static-analyzers)
-- [9. Layer 1: drift detectors and the dominance vote](#9-layer-1-drift-detectors-and-the-dominance-vote)
-- [10. Layer 1.7: the Code DNA engine](#10-layer-17-the-code-dna-engine)
-- [11. Layer 2: deep scan and the cloud seam](#11-layer-2-deep-scan-and-the-cloud-seam)
-- [12. Scoring: the Vibe Drift Score and the Hygiene Score](#12-scoring-the-vibe-drift-score-and-the-hygiene-score)
-- [13. Intent hints](#13-intent-hints)
-- [14. In-loop tools and channel portability](#14-in-loop-tools-and-channel-portability)
-- [15. Output and renderers](#15-output-and-renderers)
-- [16. Core plumbing, persistence, and determinism](#16-core-plumbing-persistence-and-determinism)
-- [17. Auth and telemetry](#17-auth-and-telemetry)
-- [18. The hosted API seam and the open-core boundary](#18-the-hosted-api-seam-and-the-open-core-boundary)
-- [19. Build, packaging, and distribution](#19-build-packaging-and-distribution)
-- [20. Extending VibeDrift](#20-extending-vibedrift)
-- [21. Constants reference](#21-constants-reference)
-- [22. Sharp edges worth knowing](#22-sharp-edges-worth-knowing)
+- [5. Core data types](#5-core-data-types)
+- [6. The batch scan pipeline](#6-the-batch-scan-pipeline)
+- [7. Layer 1: static analyzers](#7-layer-1-static-analyzers)
+- [8. Layer 1: drift detectors and the dominance vote](#8-layer-1-drift-detectors-and-the-dominance-vote)
+- [9. Layer 1.7: the Code DNA engine](#9-layer-17-the-code-dna-engine)
+- [10. Layer 2: deep scan and the cloud seam](#10-layer-2-deep-scan-and-the-cloud-seam)
+- [11. Scoring: the Vibe Drift Score and the Hygiene Score](#11-scoring-the-vibe-drift-score-and-the-hygiene-score)
+- [12. Intent hints](#12-intent-hints)
+- [13. In-loop tools and channel portability](#13-in-loop-tools-and-channel-portability)
+- [14. Output and renderers](#14-output-and-renderers)
+- [15. Core plumbing, persistence, and determinism](#15-core-plumbing-persistence-and-determinism)
+- [16. Auth and telemetry](#16-auth-and-telemetry)
+- [17. The hosted API seam and the open-core boundary](#17-the-hosted-api-seam-and-the-open-core-boundary)
+- [18. Build, packaging, and distribution](#18-build-packaging-and-distribution)
+- [19. Extending VibeDrift](#19-extending-vibedrift)
+- [20. Constants reference](#20-constants-reference)
+- [21. Sharp edges worth knowing](#21-sharp-edges-worth-knowing)
 
 ---
 
 ## 1. What VibeDrift is
+
+VibeDrift's product is drift *prevention*: an AI coding agent consults the repo's own conventions in
+the loop (over MCP plus three sibling channels) and self-checks new code before it lands. The batch
+scanner and the analysis engine in this document are the proof underneath that promise, since the
+same dominance-vote engine that scores a whole repo is what answers an agent's mid-edit questions.
+This document maps that engine.
 
 VibeDrift detects **drift** in AI-generated codebases: the gap between the patterns a codebase
 started with and the patterns new code introduces when an agent writes across many sessions. The
@@ -149,60 +154,7 @@ absent.
 
 ---
 
-## 5. Repository map
-
-```
-src/
-  cli/
-    index.ts              Commander program: registers 14 commands + every flag
-    commands/
-      scan.ts             THE ORCHESTRATOR (runScan): drives the whole pipeline
-      watch.ts            continuous local re-scan for AI sessions (forces --local-only)
-      hook.ts             git pre-push hook install/uninstall/status (gates on score)
-      login/logout/status/usage/billing/upgrade/update/doctor/feedback.ts
-  core/                   the shared spine
-    types.ts              SourceFile, AnalysisContext, Finding, ScanResult, CategoryScores
-    discovery.ts          gitignore-aware walk + manifest loaders + buildAnalysisContext
-    run-analyzers.ts      concurrent, order-preserving analyzer execution + cache
-    baseline.ts           RepoDriftBaseline: the cached per-repo aggregate for the tools
-    history.ts            scan history + scan-over-scan finding digests
-    git-metadata.ts       per-HEAD git history aggregation (temporal signal)
-    findings-cache.ts     per-analyzer Merkle-keyed cache
-    import-graph.ts       JS/TS export/import reachability graph
-    file-filter.ts language.ts config.ts scoring-notice.ts update-check.ts version.ts
-  analyzers/              Layer 1 static (13 analyzers + base.ts + index.ts)
-  drift/                  Layer 1 cross-file (14 detectors + utils.ts vote machinery + types.ts)
-  codedna/                Layer 1.7 (fingerprint, minhash, op-sequence, pattern, taint, deviation)
-  scoring/
-    engine.ts             the decay formula, drag penalty, drift + hygiene tracks
-    categories.ts         the 5 categories and the analyzer -> category -> kind map
-    dedup.ts              cross-layer duplicate-finding precedence
-  ml-client/              Layer 2 client (sampler, confidence, summarize, fix-prompts, log-scan, ...)
-  tools-core/             the 5 in-loop tools as transport-free functions ("./tools" export)
-    tools/                get-intent-hints, get-dominant-pattern, check-file-drift,
-                          find-similar-function, validate-change
-    result.ts nudge.ts finalize.ts
-  mcp/                    MCP adapter over tools-core
-    server.ts             stdio MCP server, registers the 5 tools
-    baseline-provider.ts  lazy baseline cache  (imported BY tools-core)
-    deep-client.ts        in-loop Layer-2 client (imported BY tools-core)
-    envelope.ts nudge.ts  wire serialization + nudge finalize
-    tools/                ~30-line adapters per tool
-  intent/                 parses CLAUDE.md / AGENTS.md / .cursorrules into IntentHint[]
-  output/                 terminal, html, csv, docx, history-diff, fix-prompt, tease, context-md
-  auth/                   device-auth flow, token resolution, config storage, API client
-  telemetry/              the anonymous scan beacon
-  render.ts               "./render" export: renderHtmlReport + scoring functions
-  utils/                  ast (tree-sitter wrapper), gitignore, text helpers
-bin/vibedrift.mjs         the executable shim (suppresses warnings, imports dist/cli/index.js)
-skills/vibedrift/         the Agent Skill channel (SKILL.md + scripts/vibedrift-tools.mjs)
-docs/                     algorithms.md (heuristic audit) + tools-api.md (tools reference)
-eval/                     manual, metered A/B drift-delta harness (not run by CI)
-```
-
----
-
-## 6. Core data types
+## 5. Core data types
 
 Five types in `src/core/types.ts` carry almost everything between subsystems.
 
@@ -228,7 +180,7 @@ Five types in `src/core/types.ts` carry almost everything between subsystems.
 
 ---
 
-## 7. The batch scan pipeline
+## 6. The batch scan pipeline
 
 `runScan` in `src/cli/commands/scan.ts` is the orchestrator. The ordering is fixed and
 load-bearing.
@@ -278,7 +230,7 @@ A few flags change the shape materially:
 
 ---
 
-## 8. Layer 1: static analyzers
+## 7. Layer 1: static analyzers
 
 Thirteen analyzers in `src/analyzers/`, each a small object implementing the `Analyzer` interface
 (`id`, `name`, `category`, `applicableLanguages`, optional `version`, `analyze(ctx)`).
@@ -315,7 +267,7 @@ so bumping it after a logic change drops stale cached results.
 
 ---
 
-## 9. Layer 1: drift detectors and the dominance vote
+## 8. Layer 1: drift detectors and the dominance vote
 
 This is the heart of the product. Fourteen detectors in `src/drift/` each profile every file down to
 one pattern, run a peer-group vote, and flag the files that deviate from the dominant pattern.
@@ -377,7 +329,7 @@ commit-archaeology                architectural_consistency       -   (git burst
 ```
 
 \*These `DRIFT_WEIGHTS` are per-category bar weights for the report radar only. They are not the
-composite score. The authoritative composite is the exponential-decay scoring engine (Section 12);
+composite score. The authoritative composite is the exponential-decay scoring engine (Section 11);
 an earlier second engine was collapsed, and `attachEngineComposite` only mirrors the engine's number
 onto `driftScores.composite` for the dashboard.
 
@@ -399,12 +351,13 @@ After all detectors run, `runDriftDetection` applies two passes over the finding
    is stamped with the declaration's source and line so the report can cite the rule directly.
 
 The wiring contract to remember: `driftFindingToFinding` keys the `analyzerId` off the typed
-`driftCategory` (`drift-<category>`), not off the free-form `detector` string. Relying on the
-`detector` string was a historical bug that silently excluded most detectors from the score.
+`driftCategory` (`drift-<category>`), not off the free-form `detector` string. That typed key is
+what routes every detector into the scoring engine, so a new detector must set its `driftCategory`
+(not just a `detector` label) to count toward the score.
 
 ---
 
-## 10. Layer 1.7: the Code DNA engine
+## 9. Layer 1.7: the Code DNA engine
 
 `src/codedna/` is local, network-free semantic analysis. `runCodeDnaAnalysis` extracts functions
 once, then runs five modules in a fixed order and aggregates their findings.
@@ -444,7 +397,7 @@ architectural signal.
 
 ---
 
-## 11. Layer 2: deep scan and the cloud seam
+## 10. Layer 2: deep scan and the cloud seam
 
 Layer 2 (`src/ml-client/`) is the only part that sends anything off the machine, and only what it
 sends is function snippets, never whole files. It is opt-in (`--deep`), requires sign-in, and is
@@ -486,7 +439,7 @@ model.
 
 ---
 
-## 12. Scoring: the Vibe Drift Score and the Hygiene Score
+## 11. Scoring: the Vibe Drift Score and the Hygiene Score
 
 `src/scoring/engine.ts` runs **two parallel tracks** over the same findings, split by each finding's
 `kind`:
@@ -550,7 +503,7 @@ once. This keeps trend lines comparable across releases without per-scan version
 
 ---
 
-## 13. Intent hints
+## 12. Intent hints
 
 `src/intent/parser.ts` reads team-declared conventions and turns them into a force that biases the
 dominance vote, so a stated rule outweighs a close raw vote and a violation becomes a
@@ -582,7 +535,7 @@ declared pattern is not the code's raw dominant.
 
 ---
 
-## 14. In-loop tools and channel portability
+## 13. In-loop tools and channel portability
 
 The five tools an agent calls while writing live in `src/tools-core/`, deliberately free of any
 transport import. They take a plain args object and return plain data with a `status`, never
@@ -656,7 +609,7 @@ scan is owned by the API.
 
 ---
 
-## 15. Output and renderers
+## 14. Output and renderers
 
 `src/output/` is a pure presentation layer over a finished `ScanResult`. `src/render.ts` is the
 package `"./render"` export and re-exposes `renderHtmlReport` plus the scoring functions.
@@ -679,7 +632,7 @@ buttons. This is why the docs never claim a default report sends nothing externa
 
 ---
 
-## 16. Core plumbing, persistence, and determinism
+## 15. Core plumbing, persistence, and determinism
 
 `src/core/` is the spine. Discovery is gitignore-aware (honoring `.gitignore` and
 `.vibedriftignore`), skips heavy directories and any dotfile directory, caps at 5000 files and 1MB
@@ -711,7 +664,7 @@ do not vary by host locale.
 
 ---
 
-## 17. Auth and telemetry
+## 16. Auth and telemetry
 
 `src/auth/` implements an RFC-8628-style device authorization flow: `vibedrift login` starts the
 flow, opens the verification URL in a browser, and polls the token endpoint (with backoff on 429)
@@ -735,7 +688,7 @@ this plainly.
 
 ---
 
-## 18. The hosted API seam and the open-core boundary
+## 17. The hosted API seam and the open-core boundary
 
 This repository is the **open client**. The hosted service that the deep scan talks to is a separate
 product and is not in this repo. The boundary is verifiable: there is no embedding generation, no
@@ -760,7 +713,7 @@ The endpoints the client calls:
 | `POST /v1/scans/log` | Sanitized scan result for the dashboard |
 | `POST /v1/beacon/scan`, `POST /v1/beacon/report-open` | Anonymous telemetry |
 | `POST /v1/vote` | Finding thumbs up/down from the HTML report |
-| `/auth/*`, `/account/*` | Device auth, validation, usage, credits, Stripe portal |
+| `/auth/*`, `/account/*` | Device auth, validation, usage, and the billing portal |
 
 The embedding and clustering constants (UniXcoder, DBSCAN `eps=0.30`, cosine duplicate threshold
 0.85, intent-mismatch threshold 0.30) are documented in `docs/algorithms.md` for completeness but
@@ -770,7 +723,7 @@ bundled into the shipped CLI.
 
 ---
 
-## 19. Build, packaging, and distribution
+## 18. Build, packaging, and distribution
 
 `tsup` bundles four entry points to ESM under `dist/`:
 
@@ -790,7 +743,7 @@ Claude agent, measuring drift introduced) and is intentionally not part of CI or
 
 ---
 
-## 20. Extending VibeDrift
+## 19. Extending VibeDrift
 
 | To add | Do this |
 |--------|---------|
@@ -806,7 +759,7 @@ Claude agent, measuring drift introduced) and is intentionally not part of CI or
 
 ---
 
-## 21. Constants reference
+## 20. Constants reference
 
 The numbers that govern behavior, with their source files. `docs/algorithms.md` is the canonical
 audit for the similarity and vote constants.
@@ -871,7 +824,7 @@ audit for the similarity and vote constants.
 
 ---
 
-## 22. Sharp edges worth knowing
+## 21. Sharp edges worth knowing
 
 These are the facts that surprise people reading the code for the first time.
 
@@ -894,7 +847,7 @@ These are the facts that surprise people reading the code for the first time.
 - **A default scan and a generated report do make network calls** (the beacon, the daily update
   check, the report-open beacon, the vote pixel). Honest disclosure is the posture; `--local-only`
   is the way to a fully offline run.
-- **Counts in prose drift.** Some inline comments and a couple of doc lines say "12 analyzers / 8
-  detectors" or "26 security patterns"; the registries (`src/analyzers/index.ts`,
-  `src/drift/index.ts`) and the tables in this document are ground truth: 13 analyzers, 14 detectors
-  across 13 categories, 24 security rules.
+- **The registries are the source of truth for counts.** `src/analyzers/index.ts` and
+  `src/drift/index.ts` define exactly what runs: 13 analyzers, 14 detectors across 13 categories, and
+  24 security rules. Treat those files and the tables above as authoritative over any count that
+  appears in passing prose.
