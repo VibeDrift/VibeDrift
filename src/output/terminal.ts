@@ -543,6 +543,45 @@ function renderScoreSection(result: ScanResult): string[] {
   return lines;
 }
 
+function renderCoherenceReport(result: ScanResult): string[] {
+  const c = result.coherenceReport;
+  if (!c) return [];
+
+  const sevColor: Record<string, (s: string) => string> = {
+    critical: chalk.red.bold,
+    high: chalk.red,
+    medium: chalk.yellow,
+    low: chalk.dim,
+  };
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("── Coherence Audit (AI-Powered) ───────────────────"));
+  const gradeStr = c.coherenceGrade ? `${c.coherenceGrade} (${c.coherenceScore}/100)` : `${c.coherenceScore}/100`;
+  lines.push(`  ${chalk.bold("Coherence:")} ${chalk.cyan(gradeStr)} — graded against this codebase's own patterns`);
+  if (c.verdict) lines.push(chalk.dim(`  ${c.verdict}`));
+  lines.push("");
+
+  if (c.rankedIssues.length > 0) {
+    for (const issue of c.rankedIssues.slice(0, 6)) {
+      const color = sevColor[issue.severity] ?? chalk.yellow;
+      lines.push(`  ${color(`${issue.rank}. [${issue.severity.toUpperCase()}]`)} ${chalk.bold(issue.title)}`);
+      if (issue.pattern) lines.push(chalk.dim(`     breaks pattern: ${issue.pattern}`));
+      if (issue.locations.length > 0) lines.push(chalk.dim(`     at: ${issue.locations.slice(0, 3).join(", ")}`));
+      if (issue.why) lines.push(chalk.dim(`     why: ${issue.why.slice(0, 160)}`));
+      if (issue.fix) lines.push(chalk.green(`     → ${issue.fix.slice(0, 200)}`));
+      lines.push("");
+    }
+  }
+
+  if (c.strengths.length > 0) {
+    lines.push(chalk.dim("  Already coherent:"));
+    for (const s of c.strengths.slice(0, 3)) lines.push(chalk.dim(`    ✓ ${s}`));
+    lines.push("");
+  }
+
+  return lines;
+}
+
 export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolean }): string {
   if (opts?.brief) {
     return renderBriefOutput(result);
@@ -556,6 +595,9 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
     ...renderFindingsList(result),
     ...renderHygienePane(result),
   ];
+
+  // Coherence report \u2014 the deep-scan hero (paid). Leads the deep section.
+  lines.push(...renderCoherenceReport(result));
 
   // Deep insights
   if (result.deepInsights.length > 0) {
