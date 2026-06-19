@@ -55,19 +55,22 @@ export async function buildEmbeddingIndex(
     const byId = new Map(vectors.map((v) => [v.id, v.vector]));
 
     const entries: EmbeddingEntry[] = [];
-    for (const fn of fns) {
+    fns.forEach((fn, i) => {
       const id = `${fn.relativePath}::${fn.name}`;
       const vector = byId.get(id);
-      if (!vector) continue;
+      if (!vector) return;
       entries.push({
         id,
         relativePath: fn.relativePath,
         name: fn.name,
         line: fn.line,
         contentHash: contentHash(fn.rawBody),
+        // Store the same truncated body that was embedded, so a borderline match
+        // can be re-sent to the cloud for an LLM verdict without re-extraction.
+        body: payloads[i].body ?? "",
         vector,
       });
-    }
+    });
     if (entries.length === 0) return null;
 
     const index: EmbeddingIndex = {

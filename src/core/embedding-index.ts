@@ -24,7 +24,10 @@ function indexDir(): string {
 }
 // Bump when the entry shape or vector semantics change, to invalidate all
 // cached indexes at once (mirrors BASELINE_VERSION in core/baseline.ts).
-export const EMBEDDING_INDEX_VERSION = 1;
+// v2: entries now carry the (truncated) function body so a borderline embedding
+// match can be sent to the cloud for a Claude confirm/reject verdict without
+// re-walking the repo. Old v1 indexes (no body) are dropped + rebuilt on load.
+export const EMBEDDING_INDEX_VERSION = 2;
 
 export interface EmbeddingEntry {
   id: string; // `${relativePath}::${name}`
@@ -32,6 +35,7 @@ export interface EmbeddingEntry {
   name: string;
   line: number;
   contentHash: string; // sha256(body)[:16] — staleness/dedupe of a single function
+  body: string; // truncated to the same MAX_LINES the server embeds (for borderline LLM validation)
   vector: number[];
 }
 
@@ -49,6 +53,7 @@ export interface EmbeddingMatch {
   name: string;
   line: number;
   similarity: number;
+  body?: string; // present when the index stores bodies (v2+); used for borderline LLM validation
 }
 
 function indexPath(rootDir: string): string {
@@ -118,6 +123,7 @@ export function findSimilarByEmbedding(
         name: e.name,
         line: e.line,
         similarity: Number(sim.toFixed(3)),
+        body: e.body,
       });
     }
   }

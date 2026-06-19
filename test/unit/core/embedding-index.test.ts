@@ -14,15 +14,15 @@ import {
 
 function idx(rootDir: string): EmbeddingIndex {
   return {
-    version: 1,
+    version: 2,
     rootDir,
     baselineKey: "bk-1",
     dim: 3,
     builtAt: 0,
     entries: [
-      { id: "a.ts::formatMoney", relativePath: "a.ts", name: "formatMoney", line: 1, contentHash: "h1", vector: [1, 0, 0] },
-      { id: "b.ts::addNumbers", relativePath: "b.ts", name: "addNumbers", line: 1, contentHash: "h2", vector: [0, 1, 0] },
-      { id: "c.ts::nearTwin", relativePath: "c.ts", name: "nearTwin", line: 1, contentHash: "h3", vector: [0.9, 0.1, 0] },
+      { id: "a.ts::formatMoney", relativePath: "a.ts", name: "formatMoney", line: 1, contentHash: "h1", body: "function formatMoney(n){ return '$'+n; }", vector: [1, 0, 0] },
+      { id: "b.ts::addNumbers", relativePath: "b.ts", name: "addNumbers", line: 1, contentHash: "h2", body: "function addNumbers(a,b){ return a+b; }", vector: [0, 1, 0] },
+      { id: "c.ts::nearTwin", relativePath: "c.ts", name: "nearTwin", line: 1, contentHash: "h3", body: "function nearTwin(n){ return `$${n}`; }", vector: [0.9, 0.1, 0] },
     ],
   };
 }
@@ -53,6 +53,11 @@ describe("findSimilarByEmbedding", () => {
   it("respects the cap", () => {
     const m = findSimilarByEmbedding([1, 0, 0], idx("/r"), { threshold: 0, cap: 1 });
     expect(m).toHaveLength(1);
+  });
+
+  it("carries the stored body on each match (so borderline matches can be LLM-validated)", () => {
+    const m = findSimilarByEmbedding([1, 0, 0], idx("/r"), { threshold: 0.8, cap: 10 });
+    expect(m[0].body).toContain("formatMoney");
   });
 });
 

@@ -41,9 +41,13 @@ describe("buildEmbeddingIndex", () => {
     expect(index!.builtAt).toBe(123);
     expect(index!.dim).toBe(3);
     expect(index!.entries.some((e) => e.name === "formatMoney")).toBe(true);
+    // v2: each entry stores its (truncated) body for borderline LLM validation
+    const fm = index!.entries.find((e) => e.name === "formatMoney");
+    expect(fm!.body).toContain("cents/100"); // the extracted body (sans signature)
     // round-trips through the local store
     const loaded = await loadEmbeddingIndex(repo);
     expect(loaded?.entries.length).toBe(index!.entries.length);
+    expect(loaded!.version).toBe(2);
   });
 
   it("returns null (no index) when the embed call yields nothing", async () => {
