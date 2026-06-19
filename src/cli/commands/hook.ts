@@ -11,6 +11,8 @@ import { promisify } from "node:util";
 import { writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
+import { readConfig } from "../../auth/config.js";
+import { isPaidPlan } from "../../auth/plan.js";
 
 const exec = promisify(execFile);
 
@@ -57,6 +59,18 @@ export async function runHook(action: string, opts: HookOptions = {}, cwd: strin
   }
 
   if (action === "install") {
+    // Installing the score-gating pre-push hook is a Pro/Scale feature (drift
+    // enforcement in your own git workflow). uninstall/status stay open so a
+    // downgraded user can always remove it. Cached-plan check — works offline.
+    if (!isPaidPlan((await readConfig()).plan)) {
+      console.error(chalk.red("\nThe VibeDrift pre-push hook is a Pro/Scale feature.\n"));
+      console.error(chalk.dim("It blocks a push whose Vibe Drift Score is below your threshold —"));
+      console.error(chalk.dim("drift enforcement, in your own git workflow."));
+      console.error("");
+      console.error(`  ${chalk.yellow("Upgrade:")} ${chalk.bold("vibedrift upgrade")}`);
+      console.error("");
+      process.exit(1);
+    }
     const threshold = opts.threshold ?? DEFAULT_THRESHOLD;
     if (existsSync(hookPath)) {
       const existing = readFileSync(hookPath, "utf8");

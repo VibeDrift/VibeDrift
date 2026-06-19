@@ -34,6 +34,8 @@ import { join, relative, resolve } from "path";
 import chalk from "chalk";
 import { runScan } from "./scan.js";
 import { resolveToken } from "../../auth/resolver.js";
+import { readConfig } from "../../auth/config.js";
+import { isPaidPlan } from "../../auth/plan.js";
 import type { ScanOptions } from "../../core/types.js";
 
 /** Ignore list — we don't want to fire rescans for editor tempfiles,
@@ -121,6 +123,21 @@ export async function runWatch(
     console.error("");
     console.error(chalk.dim("  Or if you just need a one-time scan without account:"));
     console.error(chalk.dim("    vibedrift ."));
+    console.error("");
+    process.exit(1);
+  }
+
+  // Continuous watch is a Pro/Scale feature (it re-scans on every change and
+  // keeps the .vibedrift/ agent context fresh all session). Free runs one-shot
+  // scans on demand. Cached-plan check — works offline.
+  if (!isPaidPlan((await readConfig()).plan)) {
+    console.error(chalk.red("\nvibedrift watch is a Pro/Scale feature.\n"));
+    console.error(chalk.dim("Continuous drift watch re-scans on every file change and keeps"));
+    console.error(chalk.dim(".vibedrift/ context fresh for your AI agent the whole session."));
+    console.error("");
+    console.error(`  ${chalk.yellow("Upgrade:")} ${chalk.bold("vibedrift upgrade")}`);
+    console.error("");
+    console.error(chalk.dim("  Free: run a one-shot scan any time with  vibedrift ."));
     console.error("");
     process.exit(1);
   }
