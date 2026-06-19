@@ -27,6 +27,21 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # Dogfooding gate: VibeDrift scans itself and fails the build if the repo's
+  # own Vibe Drift Score drops below 75. Local-only, so no auth or network.
+  drift-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: VibeDrift self-scan (fail under 75)
+        run: node dist/cli/index.js . --local-only --no-cache --format terminal --fail-on-score 75
+
   # Structural guard: fail the build if a credential is ever committed.
   secret-scan:
     runs-on: ubuntu-latest
