@@ -1,127 +1,27 @@
 /**
- * The deep-scan nudge — "push, don't pull".
+ * MCP-side finalize: wrap a tool's finalized result into the wire envelope.
  *
- * A coding agent calls VibeDrift's local tools while it works. When a lot has
- * changed since the user's last AI deep scan, the next write-time tool result
- * carries a `nudge` the agent relays as a yes/no offer ("run a deep scan?").
- * MCP is request/response — the server cannot push — so the nudge PIGGYBACKS on
- * a call the agent already makes. On yes, the agent re-runs the check with
- * `deep: true`; an empty deep budget routes to the upgrade / credit-pack fork
- * (handled by the deep path's own degrade message).
- *
- * `decideNudge` is pure and fully testable. `maybeNudge` / `finalizeMcpResult`
- * are the thin stateful glue the tool handlers call.
+ * The nudge DECISION and the `lastDeepScanAt` reset are channel-neutral and live
+ * in src/tools-core (decideNudge / maybeNudge / finalizeResult). This file is the
+ * thin MCP adapter: it runs the core finalize, then serializes via toToolResult.
+ * decideNudge / maybeNudge / NudgeState are re-exported so existing importers of
+ * "../nudge.js" keep working.
  */
-import { resolveToken } from "../auth/resolver.js";
-import { readConfig, patchConfig } from "../auth/config.js";
-import { formatTimeSince } from "../core/time-format.js";
-import { toToolResult, type NudgeHint, type StructuredBase, type ToolResult } from "./envelope.js";
+import { toToolResult, type ToolResult } from "./envelope.js";
+import { finalizeResult } from "../tools-core/finalize.js";
+import type { StructuredBase } from "../tools-core/result.js";
 
-const DAY = 24 * 60 * 60 * 1000;
-
-/** Quiet for a day after a nudge so it reads as an FYI, not a paywall. */
-const COOLDOWN_MS = 1 * DAY;
-/** Only speak up once the agent is actually working this session. */
-const MIN_SESSION_CALLS = 8;
-/** A deep scan older than this is "stale" enough to offer a fresh one. */
-const STALE_MS = 3 * DAY;
-
-export interface NudgeState {
-  /** Logged in? The nudge leads to a deep scan, which needs auth. */
-  signedIn: boolean;
-  /** Write-time tool calls so far in THIS server session (in-memory). */
-  callsThisSession: number;
-  /** ISO of the last successful deep scan, or undefined if never. */
-  lastDeepScanAt?: string;
-  /** ISO of the last time we nudged (cooldown), or undefined. */
-  lastNudgedAt?: string;
-  nowMs: number;
-}
-
-const ACTION =
-  "If the user says yes, re-run this check with `deep: true` for an AI-validated pass " +
-  "(a fraction of a deep-scan credit). If the deep budget is empty, the result will " +
-  "explain how to upgrade or buy a credit pack.";
-
-/** Pure: decide whether to surface a deep-scan nudge for the given state. */
-export function decideNudge(s: NudgeState): NudgeHint | null {
-  if (!s.signedIn) return null;
-  if (s.callsThisSession < MIN_SESSION_CALLS) return null;
-
-  if (s.lastNudgedAt) {
-    const sinceNudge = s.nowMs - Date.parse(s.lastNudgedAt);
-    if (Number.isFinite(sinceNudge) && sinceNudge < COOLDOWN_MS) return null;
-  }
-
-  if (!s.lastDeepScanAt) {
-    return {
-      type: "deep_scan",
-      reason: "never_deep_scanned",
-      message:
-        "FYI: you have not run an AI deep scan on this repo yet. A deep scan catches " +
-        "intent mismatches and semantic duplicates the local checks can only guess at. " +
-        "Want to run one?",
-      action: ACTION,
-    };
-  }
-
-  const sinceDeep = s.nowMs - Date.parse(s.lastDeepScanAt);
-  if (Number.isFinite(sinceDeep) && sinceDeep >= STALE_MS) {
-    return {
-      type: "deep_scan",
-      reason: "stale_deep_scan",
-      message:
-        `FYI: your last AI deep scan was ${formatTimeSince(s.lastDeepScanAt, s.nowMs)} and the ` +
-        "code has moved since. A fresh deep scan would re-check intent and duplicates across " +
-        "what changed. Want to run one?",
-      action: ACTION,
-    };
-  }
-
-  return null;
-}
-
-// In-memory, per-server-session activity counter. Resets when the MCP process
-// restarts (a new editor session) — intentional: "active this session".
-let callsThisSession = 0;
-
-/** Test-only: reset the in-memory session counter. */
-export function _resetSession(): void {
-  callsThisSession = 0;
-}
-
-/**
- * Increment the session activity counter, then decide + (if firing) persist the
- * cooldown. Reads token + config locally (no network). Returns `{ nudge }` to
- * spread into a tool's structured result, or `{}`.
- */
-export async function maybeNudge(): Promise<{ nudge?: NudgeHint }> {
-  callsThisSession += 1;
-  const [tok, config] = await Promise.all([resolveToken(), readConfig()]);
-  const hint = decideNudge({
-    signedIn: !!tok?.token,
-    callsThisSession,
-    lastDeepScanAt: config.lastDeepScanAt,
-    lastNudgedAt: config.lastNudgedAt,
-    nowMs: Date.now(),
-  });
-  if (!hint) return {};
-  await patchConfig({ lastNudgedAt: new Date().toISOString() });
-  return { nudge: hint };
-}
+export { decideNudge, maybeNudge, _resetSession } from "../tools-core/nudge.js";
+export type { NudgeState } from "../tools-core/nudge.js";
 
 /**
  * Finalize an MCP tool's structured result into the wire envelope. A successful
- * in-loop deep check resets the nudge clock (`lastDeepScanAt`); when
- * `opts.nudge` is set, a deep-scan nudge may be attached (gated + cooled).
+ * in-loop deep check resets the nudge clock; when `opts.nudge` is set, a
+ * deep-scan nudge may be attached (gated + cooled). See src/tools-core/nudge.ts.
  */
 export async function finalizeMcpResult<T extends StructuredBase & { deep?: { degraded: boolean } }>(
   out: T,
   opts: { nudge: boolean },
 ): Promise<ToolResult> {
-  if (out.deep && !out.deep.degraded) {
-    await patchConfig({ lastDeepScanAt: new Date().toISOString() });
-  }
-  const extra = opts.nudge ? await maybeNudge() : {};
-  return toToolResult({ ...out, ...extra });
+  return toToolResult(await finalizeResult(out, opts));
 }

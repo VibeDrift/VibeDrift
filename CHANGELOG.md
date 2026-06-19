@@ -4,6 +4,25 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## 0.10.0 — 2026-06-18
+
+### Added
+
+- **Tools API (`@vibedrift/cli/tools`).** The five in-loop checks are now a plain
+  import as well as an MCP server. Same engine, plain async functions, your code
+  stays local. See `docs/tools-api.md`.
+- **Agent Skill.** A self-contained skill at `skills/vibedrift/` runs the same
+  checks from the command line, so an agent gets drift prevention with or without
+  an MCP server.
+- **`vibedrift hook`.** Install a git pre-push hook that blocks a push whose Vibe
+  Drift Score is below a threshold. Bypass once with `git push --no-verify`.
+
+### Changed
+
+- The tool logic now lives in a transport-neutral core (`src/tools-core`) with the
+  MCP server as a thin adapter over it. No behavior change: the MCP tools and their
+  results are identical. A guard test keeps the core free of transport imports.
+
 ## 0.9.7 — 2026-06-17
 
 ### Fixed

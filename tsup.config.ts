@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/cli/index.ts", "src/render.ts", "src/mcp/server.ts"],
+  entry: ["src/cli/index.ts", "src/render.ts", "src/mcp/server.ts", "src/tools-core/index.ts"],
   format: ["esm"],
   target: "node18",
   outDir: "dist",

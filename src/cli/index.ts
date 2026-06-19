@@ -19,6 +19,7 @@ import { runBilling } from "./commands/billing.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runFeedback } from "./commands/feedback.js";
 import { runWatch } from "./commands/watch.js";
+import { runHook } from "./commands/hook.js";
 import { getVersion } from "../core/version.js";
 
 const VERSION = getVersion();
@@ -307,6 +308,20 @@ program
   });
 
 program
+  .command("hook")
+  .description("Manage a git pre-push hook that blocks pushes below a drift-score threshold")
+  .argument("<action>", "install | uninstall | status")
+  .option(
+    "--threshold <n>",
+    "Vibe Drift Score below which a push is blocked (default 70)",
+    parseScoreThreshold,
+  )
+  .option("--force", "replace an existing pre-push hook that VibeDrift did not create")
+  .action(async (action: string, options) => {
+    await runHook(action, { threshold: options.threshold, force: options.force });
+  });
+
+program
   .command("mcp")
   .description("Run the MCP server (stdio) — lets AI agents query drift in-loop")
   .action(async () => {
@@ -341,6 +356,7 @@ Examples:
   $ vibedrift feedback                 open an interactive feedback prompt
   $ vibedrift feedback "..."           send inline feedback in one shot
   $ vibedrift mcp                      run the MCP server (for Claude Code / Cursor)
+  $ vibedrift hook install             block pushes below the drift-score threshold
 
 Environment:
   VIBEDRIFT_TOKEN     bearer token (overrides ~/.vibedrift/config.json)

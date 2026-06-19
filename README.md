@@ -29,6 +29,7 @@ Open source (MIT) and fully local, so your code never leaves your machine. An op
 - [MCP Server](#mcp-server)
   - [Deep mode (in-loop AI checks)](#deep-mode-in-loop-ai-checks)
   - [Install in any MCP client](#install-in-any-mcp-client)
+- [Without MCP](#without-mcp)
 - [CI Integration](#ci-integration)
 - [Privacy & Telemetry](#privacy--telemetry)
 - [Usage Reference](#usage-reference)
@@ -189,6 +190,15 @@ The command never changes between clients — only where you paste it does.
 
 If a tool returns `no_baseline`, run `vibedrift` once in that repo to build it. If a `deep: true` check returns `status: "degraded"`, the local result still comes back.
 
+## Without MCP
+
+Not every agent speaks MCP, and you may not want it to. The same five tools are also a plain import and an Agent Skill, over the same engine:
+
+- **Import them** — `import { validateChange, findSimilarFunction } from "@vibedrift/cli/tools"`. Plain async functions, same verdicts, your code stays local. See [docs/tools-api.md](./docs/tools-api.md).
+- **Agent Skill** — a self-contained skill at [`skills/vibedrift/`](./skills/vibedrift/SKILL.md) drives the same checks from the command line, so an agent gets drift *prevention* with or without an MCP server.
+
+MCP, the import, and the skill are three thin adapters over one engine; pick whichever your stack uses.
+
 ## CI Integration
 
 A GitHub Action runs VibeDrift on pull requests, posts a score-delta comment, and can fail the check:
@@ -241,6 +251,8 @@ Commands:
   update               Update the CLI to the latest version
   feedback [message]   Send feedback, bug reports, or feature requests
   telemetry <action>   Enable or disable anonymous scan telemetry
+  hook <action>        Install/remove a git pre-push hook that gates on the drift score
+  mcp                  Run the MCP server (for Claude Code / Cursor)
 
 Scan options:
   --format <type>       html (default), terminal, json, csv, docx

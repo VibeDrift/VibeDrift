@@ -1,6 +1,6 @@
 {
   "name": "@vibedrift/cli",
-  "version": "0.9.7",
+  "version": "0.10.0",
   "description": "Ship agentic. Stay coherent. Self-checking code integrity for AI coding agents, in the loop via MCP.",
   "type": "module",
   "bin": {
@@ -9,11 +9,13 @@
   "main": "./dist/cli/index.js",
   "exports": {
     ".": "./dist/cli/index.js",
-    "./render": "./dist/render.js"
+    "./render": "./dist/render.js",
+    "./tools": "./dist/tools-core/index.js"
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "skills"
   ],
   "scripts": {
     "build": "tsup",
