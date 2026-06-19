@@ -83,11 +83,13 @@ export async function deepAnalyze(
       }),
     };
   } catch (e) {
-    return { degraded: true, reason: classify(e), ...empty };
+    return { degraded: true, reason: classifyDegradeReason(e), ...empty };
   }
 }
 
-function classify(e: unknown): DegradeReason {
+/** Map a thrown API error to a DegradeReason (402→quota, 429→rate_limited,
+ *  abort/timeout→timeout, else network). Shared with the local-index path. */
+export function classifyDegradeReason(e: unknown): DegradeReason {
   const msg = String((e as Error)?.message ?? e).toLowerCase();
   if (msg.includes("402")) return "quota";
   if (msg.includes("429")) return "rate_limited";

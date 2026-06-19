@@ -9,9 +9,11 @@ vi.mock("../../../../src/mcp/deep-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../src/mcp/deep-client.js")>();
   return { ...actual, deepAnalyze: vi.fn() };
 });
+vi.mock("../../../../src/mcp/deep-index.js", () => ({ deepDuplicatesViaIndex: vi.fn() }));
 
 import { validateChange, run } from "../../../../src/mcp/tools/validate-change.js";
 import { deepAnalyze } from "../../../../src/mcp/deep-client.js";
+import { deepDuplicatesViaIndex } from "../../../../src/mcp/deep-index.js";
 import { buildSignature } from "../../../../src/codedna/minhash.js";
 import { buildBaseline, writeBaseline, type RepoDriftBaseline } from "../../../../src/core/baseline.js";
 import { __clearBaselineCache } from "../../../../src/mcp/baseline-provider.js";
@@ -211,7 +213,13 @@ describe("validate_change (integration)", () => {
     dom = built.perCategoryVote.async_patterns?.dominantPattern;
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
-  beforeEach(() => __clearBaselineCache());
+  beforeEach(() => {
+    __clearBaselineCache();
+    (deepAnalyze as ReturnType<typeof vi.fn>).mockClear();
+    // Default: index unavailable → fall back to candidate-feeding so the existing
+    // deepAnalyze-based assertions still exercise that path.
+    (deepDuplicatesViaIndex as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+  });
 
   it("detects an async conflict for a .then() change against an async/await repo", async () => {
     expect(dom, "fixture should establish an async/await dominant").toBe("async/await");
@@ -248,6 +256,19 @@ describe("validate_change (integration)", () => {
     expect(sentFns[0].file).toBe("feature.ts");
     expect(sentFns.slice(1).every((f: { file: string }) => f.file !== "feature.ts")).toBe(true);
     expect(sentQueryId).toBe(sentFns[0].id);
+  });
+
+  it("deep:true uses the local embedding index when present (skips candidate-feeding)", async () => {
+    (deepDuplicatesViaIndex as ReturnType<typeof vi.fn>).mockResolvedValue({
+      degraded: false,
+      intentMismatches: [],
+      duplicates: [{ kind: "duplicate", detail: "feature.ts::g ≈ a.ts::twin", confidence: 0.93, verdict: "semantic_duplicate" }],
+    });
+    const out = await run({ rootDir: repo, targetPath: join(repo, "feature.ts"), body: AWAIT_BODY, deep: true });
+    expect(out.deep?.duplicates).toHaveLength(1);
+    expect(out.ok).toBe(false);
+    expect(out.status).toBe("partial");
+    expect(deepAnalyze).not.toHaveBeenCalled(); // index path served it; no fallback
   });
 
   it("deep:true degrades gracefully (status=degraded) without throwing on quota", async () => {

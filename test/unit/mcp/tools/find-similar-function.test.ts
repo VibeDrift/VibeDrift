@@ -7,11 +7,13 @@ vi.mock("../../../../src/mcp/deep-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../src/mcp/deep-client.js")>();
   return { ...actual, deepAnalyze: vi.fn() };
 });
+vi.mock("../../../../src/mcp/deep-index.js", () => ({ deepDuplicatesViaIndex: vi.fn() }));
 
 import { findSimilarToBody } from "../../../../src/codedna/find-similar-to-body.js";
 import { buildSignature } from "../../../../src/codedna/minhash.js";
 import { run } from "../../../../src/mcp/tools/find-similar-function.js";
 import { deepAnalyze } from "../../../../src/mcp/deep-client.js";
+import { deepDuplicatesViaIndex } from "../../../../src/mcp/deep-index.js";
 import { buildBaseline, writeBaseline } from "../../../../src/core/baseline.js";
 import { __clearBaselineCache } from "../../../../src/mcp/baseline-provider.js";
 
@@ -63,7 +65,13 @@ describe("find_similar_function (integration)", () => {
     await writeBaseline(await buildBaseline(repo));
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
-  beforeEach(() => __clearBaselineCache());
+  beforeEach(() => {
+    __clearBaselineCache();
+    (deepAnalyze as ReturnType<typeof vi.fn>).mockClear();
+    // Default: index path unavailable → tools fall back to candidate-feeding,
+    // so the existing deepAnalyze-based assertions still exercise that path.
+    (deepDuplicatesViaIndex as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+  });
 
   it("finds the existing near-duplicate for a new function body", async () => {
     const out = await run({
@@ -102,6 +110,19 @@ describe("find_similar_function (integration)", () => {
     expect(sentFns.length).toBeGreaterThan(1);
     expect(sentFns[0].id).toBe("query::totallyUnrelated");
     expect(sentQueryId).toBe("query::totallyUnrelated");
+  });
+
+  it("deep:true uses the local embedding index when present (skips candidate-feeding)", async () => {
+    (deepDuplicatesViaIndex as ReturnType<typeof vi.fn>).mockResolvedValue({
+      degraded: false,
+      intentMismatches: [],
+      duplicates: [{ kind: "duplicate", detail: "query::q ≈ a.ts::twin", confidence: 0.93, verdict: "semantic_duplicate" }],
+    });
+    const out = await run({ rootDir: repo, body: "function q(){ return 1; }", deep: true });
+    expect(out.deep?.duplicates).toHaveLength(1);
+    expect(out.found).toBe(true);
+    expect(out.status).toBe("partial");
+    expect(deepAnalyze).not.toHaveBeenCalled(); // index path served it; no fallback
   });
 
   it("deep:true degrades on rate_limit without throwing", async () => {
