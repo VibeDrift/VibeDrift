@@ -10,8 +10,8 @@
  * When finding.metadata carries dominantPattern + dominantFiles, the
  * prompt names the peer baseline and lists reference files. For findings
  * without that metadata, it falls back to message + file/line + evidence.
- * When opts.richProse is provided, a "How the peers do this" section is
- * inserted between "What's drifting" and "What to do".
+ * When opts.richProse is provided (deep-tier actionable fix synthesis), a
+ * "How to fix this" section is inserted between "What's drifting" and "What to do".
  */
 
 import type { Finding } from "../core/types.js";
@@ -193,7 +193,7 @@ export function buildFixPromptMarkdown(
   const richSection: string[] = [];
   const prose = meta.fixPromptProse ?? ctx.richProse;
   if (prose) {
-    richSection.push("", "### How the peers do this", "", prose.trim());
+    richSection.push("", "### How to fix this", "", prose.trim());
   }
 
   const actionHeading = mode === "legacy" ? "### Migration plan (not urgent)" : "### What to do";

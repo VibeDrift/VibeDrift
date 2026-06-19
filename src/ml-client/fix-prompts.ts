@@ -1,11 +1,11 @@
 /**
  * Deep-scan-tier rich fix prompt synthesis.
  *
- * Takes the top-N findings by consistency impact, pulls snippets from each
- * finding's dominant-pattern reference files, and sends them in a batched
- * call to the VibeDrift API's /v1/fix-prompts endpoint. The API returns
- * AI-synthesized prose describing how the peers implement the dominant
- * pattern. That prose is attached to `finding.metadata.fixPromptProse` so
+ * Takes the top-N findings by consistency impact, pulls the drifting code plus
+ * snippets from each finding's dominant-pattern reference files, and sends them
+ * in a batched call to the VibeDrift API's /v1/fix-prompts endpoint. The API
+ * returns an AI-synthesized, ACTIONABLE fix grounded in the drifting code and
+ * the peers. That prose is attached to `finding.metadata.fixPromptProse` so
  * the HTML + terminal + context-md renderers can pick it up via the shared
  * fix-prompt template.
  *
@@ -31,6 +31,9 @@ interface FixPromptRequestItem {
   message: string;
   file: string;
   dominant_pattern: string;
+  // The drifting code itself, so the API can synthesize an ACTIONABLE fix (not
+  // just describe the peers). Extracted from the finding's location.
+  deviating_snippet: string;
   reference_files: RefFileSnippet[];
 }
 
@@ -54,6 +57,17 @@ function extractSnippet(content: string, dominantPattern: string): string {
     }
   }
   return lines.slice(0, MAX_SNIPPET_LINES).join("\n");
+}
+
+/** Extract a window of the file centered on a line (1-based), for the drifting
+ *  snippet. Returns the whole file when it's already short. */
+function extractAroundLine(content: string, line: number): string {
+  const lines = content.split("\n");
+  if (lines.length <= MAX_SNIPPET_LINES) return content;
+  const idx = Math.max(0, line - 1);
+  const start = Math.max(0, idx - Math.floor(MAX_SNIPPET_LINES / 3));
+  const end = Math.min(lines.length, start + MAX_SNIPPET_LINES);
+  return lines.slice(start, end).join("\n");
 }
 
 function buildRequestItems(
@@ -80,12 +94,24 @@ function buildRequestItems(
     if (refs.length === 0) continue;
 
     const firstLoc = finding.locations[0];
+    // The drifting code to fix: prefer the finding's own evidence snippet, else
+    // a window of the deviating file around the location.
+    let deviatingSnippet = firstLoc?.snippet ?? "";
+    if (!deviatingSnippet && firstLoc) {
+      const devFile = fileByPath.get(firstLoc.file);
+      if (devFile) {
+        deviatingSnippet = firstLoc.line
+          ? extractAroundLine(devFile.content, firstLoc.line)
+          : extractSnippet(devFile.content, meta.dominantPattern ?? "");
+      }
+    }
     items.push({
       finding_id: findingKey(finding),
       category: finding.analyzerId,
       message: finding.message.replace(/^DRIFT:\s*/, "").slice(0, 400),
       file: firstLoc?.file ?? "",
       dominant_pattern: meta.dominantPattern ?? "",
+      deviating_snippet: deviatingSnippet,
       reference_files: refs,
     });
   }
