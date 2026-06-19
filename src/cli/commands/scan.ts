@@ -872,6 +872,24 @@ export async function runScan(
     }
   }
 
+  // Coherence report — the deep-scan hero. PAID-ONLY, and only on a deep scan
+  // (it synthesizes the deep findings + drift into a ranked audit). The server
+  // route is require_paid; this client-side gate avoids a guaranteed 402 round
+  // trip for free plans. Best-effort: a null report just renders nothing.
+  if (options.deep && bearerToken && networkEnabled && paid) {
+    try {
+      const targetUrl = apiUrl ?? (await resolveApiUrl(options.apiUrl));
+      const { fetchCoherenceReport } = await import("../../ml-client/coherence.js");
+      const report = await fetchCoherenceReport(result, targetUrl, bearerToken);
+      if (report) result.coherenceReport = report;
+      if (options.verbose && report) {
+        console.error(`[coherence] grade ${report.coherenceGrade}, ${report.rankedIssues.length} ranked issues`);
+      }
+    } catch (err: any) {
+      if (options.verbose) console.error(`[coherence] skipped: ${err.message ?? err}`);
+    }
+  }
+
   // Anonymous scan beacon — fires on every scan unless telemetry is
   // disabled or --local-only is set. Best-effort, never delays the scan.
   if (networkEnabled) {

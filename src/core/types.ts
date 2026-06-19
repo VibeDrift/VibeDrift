@@ -111,6 +111,29 @@ export interface CargoToml {
   dependencies: Record<string, string>;
 }
 
+/**
+ * The deep-scan tier's hero deliverable, synthesized server-side by
+ * /v1/coherence (paid-only). A ranked audit of how internally consistent the
+ * codebase is against ITS OWN dominant patterns — not external best-practice.
+ */
+export interface CoherenceIssue {
+  rank: number;
+  title: string;
+  severity: "critical" | "high" | "medium" | "low";
+  pattern: string; // the repo's own pattern this issue breaks
+  locations: string[];
+  why: string;
+  fix: string;
+}
+
+export interface CoherenceReport {
+  coherenceGrade: string; // A–F
+  coherenceScore: number; // 0–100
+  verdict: string;
+  rankedIssues: CoherenceIssue[];
+  strengths: string[];
+}
+
 export interface ScanResult {
   context: AnalysisContext;
   findings: Finding[];
@@ -156,6 +179,8 @@ export interface ScanResult {
   perFileScores: Map<string, PerFileScore>;
   codeDnaResult?: any; // CodeDnaResult from ../codedna/types
   aiSummary?: { summary: string; highlights: string[] };
+  /** Deep-scan hero report (paid-only; null for free/local scans). */
+  coherenceReport?: CoherenceReport;
   /**
    * Stable identifier of the scoring math used to produce these scores.
    * Cross-version deltas are refused at the engine layer — when this differs

@@ -488,6 +488,50 @@ function buildAiSummaryWidget(result: ScanResult): string {
 </section>`;
 }
 
+function buildCoherenceReportWidget(result: ScanResult): string {
+  const c = result.coherenceReport;
+  if (!c) return "";
+
+  const sevColor: Record<string, string> = {
+    critical: "#ff4d4d", high: "#ff8a3d", medium: "#ffd000", low: "var(--text-tertiary)",
+  };
+
+  const issues = (c.rankedIssues ?? []).slice(0, 8).map((i) => {
+    const color = sevColor[i.severity] ?? "#ffd000";
+    const locs = i.locations.length
+      ? `<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">at ${esc(i.locations.slice(0, 4).join(", "))}</div>`
+      : "";
+    const pattern = i.pattern ? `<span style="color:var(--text-tertiary)"> · breaks: ${esc(i.pattern)}</span>` : "";
+    const why = i.why ? `<div style="font-size:13px;color:var(--text-secondary);margin-top:6px">${esc(i.why)}</div>` : "";
+    const fix = i.fix ? `<div style="font-size:13px;color:#3ddc84;margin-top:6px">→ ${esc(i.fix)}</div>` : "";
+    return `<li style="margin:0 0 16px 0;padding-left:14px;border-left:3px solid ${color}">
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary)">
+        <span style="color:${color};text-transform:uppercase;font-size:11px;letter-spacing:.5px">${esc(i.severity)}</span>
+        &nbsp;${esc(i.title)}${pattern}
+      </div>${locs}${why}${fix}
+    </li>`;
+  }).join("");
+
+  const strengths = (c.strengths ?? []).slice(0, 3)
+    .map((s) => `<li style="margin:4px 0;font-size:13px;color:var(--text-secondary)">✓ ${esc(s)}</li>`).join("");
+
+  const gradeStr = c.coherenceGrade ? `${esc(c.coherenceGrade)} · ${c.coherenceScore}/100` : `${c.coherenceScore}/100`;
+
+  return `<section class="section" style="margin-bottom:32px">
+  <div style="background:rgba(0,200,255,0.03);border:1px solid var(--border);border-radius:0;padding:24px 28px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <span style="font-size:16px">&#129518;</span>
+      <span class="label" style="margin-bottom:0">COHERENCE AUDIT</span>
+      <span style="margin-left:auto;font-size:13px;font-weight:700;color:var(--accent,#00c8ff)">${gradeStr}</span>
+    </div>
+    ${c.verdict ? `<p style="font-size:15px;color:var(--text-primary);line-height:1.7;margin:0 0 16px">${esc(c.verdict)}</p>` : ""}
+    ${issues ? `<ul style="list-style:none;padding:0;margin:0">${issues}</ul>` : ""}
+    ${strengths ? `<div style="margin-top:14px"><div style="font-size:11px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Already coherent</div><ul style="list-style:none;padding:0;margin:0">${strengths}</ul></div>` : ""}
+    <div style="margin-top:12px;font-size:10px;color:var(--text-tertiary)">Graded against this codebase's own patterns · VibeDrift deep scan</div>
+  </div>
+</section>`;
+}
+
 function getDriftCats(result: ScanResult) {
   const ds = result.driftScores ?? {};
   return [
@@ -2118,6 +2162,8 @@ ${buildPatternConsensus(result)}
 </section>
 
 ${buildAiSummaryWidget(result)}
+
+${buildCoherenceReportWidget(result)}
 
 ${buildScoreSection(result)}
 
