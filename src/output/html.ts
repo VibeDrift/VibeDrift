@@ -1307,9 +1307,27 @@ function buildEmbeddedData(result: ScanResult): string {
   return JSON.stringify(data);
 }
 
-function buildEmbeddedPrompts(result: ScanResult): string {
-  const ctx = buildFixPromptContext(result);
+// Copied to the clipboard when a FREE user clicks a "Copy AI Prompt" button.
+// Fix prompts are a paid feature, so the report source never carries the real
+// prompt markdown for a free plan — only this upsell.
+const FIX_PROMPT_UPSELL =
+  "VibeDrift fix prompts are a Pro/Scale feature. Your findings, scores, and dominant patterns are free on every plan; the copy-ready, peer-grounded fix for each one is part of the paid deep scan. Run `vibedrift upgrade` to unlock.";
+
+export function buildEmbeddedPrompts(result: ScanResult, isPaid: boolean): string {
   const map: Record<string, string> = {};
+  if (!isPaid) {
+    // Paid-only: emit the SAME keys so the copy buttons still resolve, but every
+    // value is the upsell — no fix-prompt markdown reaches a free report's source.
+    for (const f of result.findings) {
+      map[findingKey(f)] = FIX_PROMPT_UPSELL;
+      for (const filePath of f.metadata?.legacyFiles ?? []) {
+        map[`${findingKey(f)}-legacy-${filePath}`] = FIX_PROMPT_UPSELL;
+      }
+    }
+    map.__full_fix_plan__ = FIX_PROMPT_UPSELL;
+    return JSON.stringify(map).replace(/<\//g, "<\\/");
+  }
+  const ctx = buildFixPromptContext(result);
   for (const f of result.findings) {
     // Standard drift fix prompt (default mode)
     map[findingKey(f)] = buildFixPromptMarkdown(f, ctx);
@@ -1771,7 +1789,7 @@ export function renderHtmlReport(
   result: ScanResult,
   mode: "summary" | "detailed" = "summary",
   urls: { detailedUrl?: string; summaryUrl?: string } = {},
-  opts: { scanId?: string; beaconApiUrl?: string } = {},
+  opts: { scanId?: string; beaconApiUrl?: string; isPaid?: boolean } = {},
 ): string {
   const projectName = result.context.rootDir.split("/").pop() ?? "project";
   const { compositeScore, maxCompositeScore } = result;
@@ -2134,7 +2152,7 @@ ${buildFooter(result)}
 
 <script>
 window.__VIBEDRIFT_DATA = ${buildEmbeddedData(result)};
-window.__VIBEDRIFT_PROMPTS = ${buildEmbeddedPrompts(result)};
+window.__VIBEDRIFT_PROMPTS = ${buildEmbeddedPrompts(result, opts.isPaid ?? false)};
 ${opts.scanId ? `
 // Report-open beacon — fires once when the report loads in a browser.
 (function() {

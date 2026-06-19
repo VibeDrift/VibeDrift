@@ -9,7 +9,7 @@
 import { mkdir, writeFile, readFile } from "fs/promises";
 import { join } from "path";
 import type { ScanResult, Finding, DriftFindingReport } from "../core/types.js";
-import { buildFullFixPlanMarkdown, findingKey, buildFixPromptMarkdown } from "./fix-prompt.js";
+import { buildFullFixPlanMarkdown, findingKey, buildFixPromptMarkdown, buildUpsellBlock } from "./fix-prompt.js";
 import { getVersion } from "../core/version.js";
 import { relativeTime } from "./history-diff.js";
 import { formatCount } from "./format.js";
@@ -37,7 +37,7 @@ function humanize(cat: string): string {
   return cat.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function buildContextMarkdown(result: ScanResult, projectName: string): string {
+export function buildContextMarkdown(result: ScanResult, projectName: string, isPaid: boolean = false): string {
   const lines: string[] = [];
   const pct = result.maxCompositeScore > 0
     ? (result.compositeScore / result.maxCompositeScore) * 100
@@ -117,7 +117,12 @@ export function buildContextMarkdown(result: ScanResult, projectName: string): s
 
   lines.push("## If you're an AI agent working on this codebase");
   lines.push("");
-  lines.push("When modifying files here, match the dominant patterns listed above. Re-run `npx @vibedrift/cli` after your changes to verify the drift has closed and the consistency score has improved. The per-finding fix prompts in `.vibedrift/fix-plan.md` give you copy-ready context for each open drift item.");
+  lines.push(
+    "When modifying files here, match the dominant patterns listed above. Re-run `npx @vibedrift/cli` after your changes to verify the drift has closed and the consistency score has improved." +
+      (isPaid
+        ? " The per-finding fix prompts in `.vibedrift/fix-plan.md` give you copy-ready context for each open drift item."
+        : " Per-finding copy-ready fix prompts are a Pro/Scale feature — run `vibedrift upgrade` to generate `.vibedrift/fix-plan.md` for each open drift item."),
+  );
   lines.push("");
 
   lines.push("---");
@@ -181,6 +186,7 @@ export async function writeContextFiles(
   rootDir: string,
   result: ScanResult,
   projectName: string,
+  isPaid: boolean = false,
 ): Promise<{ written: string[]; note: string | null }> {
   const outDir = join(rootDir, OUT_DIR);
   await mkdir(outDir, { recursive: true });
@@ -192,14 +198,22 @@ export async function writeContextFiles(
     fileCount: result.context.files.length,
   };
 
-  const contextMd = buildContextMarkdown(result, projectName);
-  const fixPlanMd = top.length > 0
-    ? buildFullFixPlanMarkdown(top, ctx)
-    : "# VibeDrift Fix Plan\n\nNo drift findings with measurable impact — the codebase is well-aligned.\n";
+  // Fix prompts are a paid feature. Free plans get context.md + patterns.json in
+  // full (score + dominant patterns + open drift), but fix-plan.md / fix-prompts.md
+  // carry an upsell instead of the copy-ready fixes.
+  const contextMd = buildContextMarkdown(result, projectName, isPaid);
   const patternsJson = buildPatternsJson(result);
-  const perFindingBlocks = top
-    .map((f, i) => `<!-- finding ${i + 1}: ${findingKey(f)} -->\n${buildFixPromptMarkdown(f, ctx)}`)
-    .join("\n\n---\n\n");
+  const upsell = buildUpsellBlock(projectName);
+  const fixPlanMd = !isPaid
+    ? upsell
+    : top.length > 0
+      ? buildFullFixPlanMarkdown(top, ctx)
+      : "# VibeDrift Fix Plan\n\nNo drift findings with measurable impact — the codebase is well-aligned.\n";
+  const perFindingBlocks = !isPaid
+    ? upsell
+    : top
+        .map((f, i) => `<!-- finding ${i + 1}: ${findingKey(f)} -->\n${buildFixPromptMarkdown(f, ctx)}`)
+        .join("\n\n---\n\n");
 
   await Promise.all([
     writeFile(join(outDir, "context.md"), contextMd),

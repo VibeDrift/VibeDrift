@@ -449,13 +449,14 @@ async function writeContextIfRequested(
   result: ScanResult,
   options: ScanOptions,
   rootDir: string,
+  paid: boolean,
 ): Promise<void> {
   if (!options.writeContext) return;
   const { writeContextFiles } = await import("../../output/context-md.js");
   const { basename } = await import("path");
   const projectName = options.projectName ?? basename(rootDir);
   try {
-    const { written, note } = await writeContextFiles(rootDir, result, projectName);
+    const { written, note } = await writeContextFiles(rootDir, result, projectName, paid);
     console.log("");
     console.log(chalk.green(`  ✓ Wrote ${written.length} files to .vibedrift/`));
     for (const f of written) {
@@ -480,6 +481,7 @@ async function logAndRender(
   apiUrl: string | undefined,
   rootDir: string,
   codeDnaResult: any,
+  paid: boolean,
 ): Promise<void> {
   const { findings: allFindings, compositeScore, maxCompositeScore, scanTimeMs } = result;
 
@@ -607,11 +609,11 @@ async function logAndRender(
     console.log(chalk.dim("  ─────────────────────────────────────────────────────────────"));
     console.log("");
     console.log(`  ${chalk.yellow("→")} Track this score over time: ${chalk.underline.cyan("https://vibedrift.ai/login")} ${chalk.dim("(free, 30s)")}`);
-    console.log(`    ${chalk.dim("HTML report · score history · copy-paste AI fix prompts")}`);
+    console.log(`    ${chalk.dim("HTML report · score history · AI fix prompts (Pro)")}`);
     for (const line of renderStarCta()) console.log(line);
     console.log("");
   } else {
-    await renderToFormat(result, format, options);
+    await renderToFormat(result, format, options, paid);
   }
 
   // Fail on score threshold
@@ -624,11 +626,12 @@ async function renderToFormat(
   result: ScanResult,
   format: string,
   options: ScanOptions,
+  paid: boolean,
 ): Promise<void> {
   if (format === "html") {
     const scanId = (result as any).__scanId as string | undefined;
     const beaconApiUrl = (result as any).__apiUrl as string | undefined;
-    const beaconOpts = scanId ? { scanId, beaconApiUrl } : {};
+    const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
     const summaryHtml = renderHtmlReport(result, "summary", {}, beaconOpts);
     const detailedHtml = renderHtmlReport(result, "detailed", {}, beaconOpts);
     const outputPath = options.output ?? "vibedrift-report.html";
@@ -844,8 +847,19 @@ export async function runScan(
   // null and skip rendering.
   result.updateCheck = await updateCheckPromise;
 
-  // Rich fix-prompt prose synthesis. Runs when logged in AND network is on.
-  if (bearerToken && networkEnabled) {
+  // Fix prompts are a paid feature (Pro/Scale). Resolve the plan from cached
+  // config and gate every fix-prompt surface on it; the /v1/fix-prompts route is
+  // the authoritative server backstop. Defaults to free-gating on any error, and
+  // works offline / --local-only (cached plan, no network call).
+  let paid = false;
+  try {
+    const { readConfig } = await import("../../auth/config.js");
+    const { isPaidPlan } = await import("../../auth/plan.js");
+    paid = isPaidPlan((await readConfig()).plan);
+  } catch { /* default: free-gated */ }
+
+  // Rich fix-prompt prose synthesis. PAID-ONLY; runs when logged in AND network is on.
+  if (bearerToken && networkEnabled && paid) {
     try {
       const { synthesizeFixPrompts } = await import("../../ml-client/fix-prompts.js");
       await synthesizeFixPrompts(result.findings, result.context, {
@@ -916,7 +930,7 @@ export async function runScan(
     result.scoringVersion,
   );
 
-  await writeContextIfRequested(result, options, rootDir);
+  await writeContextIfRequested(result, options, rootDir, paid);
 
-  await logAndRender(result, options, bearerToken, apiUrl, rootDir, pipeline.codeDnaResult);
+  await logAndRender(result, options, bearerToken, apiUrl, rootDir, pipeline.codeDnaResult, paid);
 }
