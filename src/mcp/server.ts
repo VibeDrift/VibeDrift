@@ -19,12 +19,30 @@ import { registerCheckFileDrift } from "./tools/check-file-drift.js";
 import { registerFindSimilarFunction } from "./tools/find-similar-function.js";
 import { registerValidateChange } from "./tools/validate-change.js";
 
+const SERVER_INSTRUCTIONS = `VibeDrift detects drift in AI-generated code — where new code diverges from the patterns the rest of the codebase already follows.
+
+These in-loop tools are LOCAL and FREE — call them while writing code:
+- get_dominant_pattern: the codebase's dominant pattern for a category (so new code matches it).
+- get_intent_hints: team-declared conventions from CLAUDE.md / AGENTS.md / .cursorrules.
+- check_file_drift: whether a file diverges from the dominant patterns.
+- find_similar_function: existing near-duplicates of a function you're about to write (avoid re-implementing).
+- validate_change: pre-commit drift check on an edit.
+
+For a deeper, AI-validated pass on a CHANGE SET (before committing or opening a PR), have the user run the CLI:
+- \`vibedrift --deep --diff\`        deep-scan ONLY the files changed vs HEAD (fast, scoped).
+- \`vibedrift --deep --diff main\`   deep-scan everything that differs from a branch (PR review).
+- \`vibedrift --deep\`               full-repo deep scan.
+The --deep workflows (semantic-duplicate confirmation, intent lie-detection, the coherence audit) are a paid Pro/Scale feature; the local tools above stay free.`;
+
 /**
  * Build the server with the five local tools registered. The local tools are
  * free for everyone; deep checks are metered server-side inside the tools.
  */
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "vibedrift", version: "0.1.0" });
+  const server = new McpServer(
+    { name: "vibedrift", version: "0.1.0" },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
   registerGetIntentHints.register(server);
   registerGetDominantPattern.register(server);
   registerCheckFileDrift.register(server);

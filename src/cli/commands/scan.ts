@@ -127,6 +127,33 @@ async function discoverAndFilterFiles(
     }
   }
 
+  // --diff: scope the scan to files changed in git. Most valuable with --deep
+  // (deep-scan only what you changed). Falls back to a full scan, with a notice,
+  // when the dir isn't a git repo so the flag never silently scans nothing.
+  if (options.diff) {
+    const ref = typeof options.diff === "string" ? options.diff : undefined;
+    const { getChangedFiles } = await import("../../core/git-metadata.js");
+    const changed = await getChangedFiles(rootDir, ref);
+    if (changed === null) {
+      if (isTerminal) {
+        console.warn(chalk.yellow(`Warning: --diff needs a git repository; scanning all files instead.`));
+      }
+    } else {
+      const before = ctx.files.length;
+      const changedSet = new Set(changed);
+      ctx.files = ctx.files.filter((f) => changedSet.has(f.relativePath));
+      ctx.totalLines = ctx.files.reduce((sum: number, f: SourceFile) => sum + f.lineCount, 0);
+      if (options.verbose) {
+        console.error(chalk.dim(`[diff] ${before} → ${ctx.files.length} changed file(s)${ref ? ` vs ${ref}` : ""}`));
+      }
+      if (ctx.files.length === 0) {
+        if (spinner) spinner.stop();
+        console.log(`No changed source files${ref ? ` vs ${ref}` : ""} to analyze.`);
+        process.exit(0);
+      }
+    }
+  }
+
   const discoveryMs = Date.now() - t0;
 
   // Report discovery warnings

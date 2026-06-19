@@ -51,6 +51,41 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
   return stdout;
 }
 
+/**
+ * Files changed relative to `ref` (default HEAD), as paths relative to
+ * `rootDir`, plus untracked files. Powers `--diff` — scoping a (deep) scan to
+ * just what you changed.
+ *
+ *   - ref omitted → uncommitted changes (staged + unstaged) vs HEAD
+ *   - ref = "main" → everything in the working tree that differs from main
+ *     (committed-on-branch AND uncommitted), the natural "review my branch" set
+ *
+ * `git diff --name-only <ref>` already spans staged+unstaged vs the ref;
+ * untracked files (newly written, not yet added) are unioned in separately.
+ * Returns null when this isn't a git repo / git is unavailable, so callers can
+ * fall back to a full scan rather than scanning nothing.
+ */
+export async function getChangedFiles(rootDir: string, ref?: string): Promise<string[] | null> {
+  const base = ref && ref.trim() ? ref.trim() : "HEAD";
+  try {
+    const out: string[] = [];
+    // --relative makes paths relative to cwd (rootDir), matching SourceFile.relativePath
+    // even when scanning a subdirectory of a larger repo.
+    const diff = await runGit(rootDir, ["diff", "--name-only", "--relative", base]);
+    out.push(...diff.split("\n"));
+    try {
+      const untracked = await runGit(rootDir, ["ls-files", "--others", "--exclude-standard"]);
+      out.push(...untracked.split("\n"));
+    } catch {
+      // ls-files failure is non-fatal — we still have the tracked diff.
+    }
+    const unique = [...new Set(out.map((l) => l.trim()).filter(Boolean))];
+    return unique;
+  } catch {
+    return null; // not a git repo, bad ref, or git missing
+  }
+}
+
 async function resolveHead(rootDir: string): Promise<string | null> {
   try {
     const head = await runGit(rootDir, ["rev-parse", "HEAD"]);

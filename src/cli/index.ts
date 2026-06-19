@@ -99,6 +99,10 @@ program
     collect,
     [],
   )
+  .option(
+    "--diff [ref]",
+    "scope the scan to files changed in git (default: uncommitted vs HEAD; pass a ref like `main` to scan a whole branch). Pair with --deep to deep-scan only what you changed (Pro/Scale).",
+  )
   // Maintenance
   .option(
     "--update",
@@ -170,6 +174,8 @@ program
       // or "use the default behavior" (diff when history exists).
       compare: options.compare,
       since: options.since,
+      // --diff with no value → true (uncommitted vs HEAD); --diff main → "main".
+      diff: options.diff,
     });
   });
 

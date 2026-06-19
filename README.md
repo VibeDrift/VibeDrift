@@ -130,17 +130,21 @@ The Vibe Drift Score counts **all** cross-file drift signals — semantic duplic
 
 VibeDrift's local analysis is free and offline. An optional **deep scan** adds cloud-powered analysis that local static analysis can't do:
 
-- **Semantic duplicates** via code embeddings + cosine similarity
-- **Intent mismatches** — functions whose name doesn't match their behavior
+- **Semantic duplicates** via code embeddings + cosine similarity, **LLM-confirmed** (borderline matches are validated by Claude, not shipped on a raw score)
+- **Intent lie-detection** — functions whose name lies about their behavior, only surfaced when Claude confirms the lie
 - **Anomaly detection** via clustering on function embeddings
-- **Surgical LLM validation** — medium-confidence ML findings are reviewed by an LLM
+- **Coherence report** — a ranked audit grading your codebase against *its own* dominant patterns, with a concrete fix per issue
 
 ```bash
-vibedrift login          # one-time browser sign-in
-vibedrift . --deep       # run a deep scan
+vibedrift login              # one-time browser sign-in
+vibedrift . --deep           # full-repo deep scan
+vibedrift . --deep --diff    # deep-scan ONLY your uncommitted changes (fast PR-gate)
+vibedrift . --deep --diff main   # deep-scan everything that differs from `main`
 ```
 
-Deep scan sends function snippets (not full files) to the hosted VibeDrift service, which processes them in memory and does not store them. It requires a free account. See [vibedrift.ai](https://vibedrift.ai) for what the hosted service includes.
+`--diff` scopes the scan to files changed in git (uncommitted vs HEAD by default, or vs a ref/branch you name). Paired with `--deep` it's the fast pre-commit / pre-PR flow — you only spend a deep scan on what you actually changed. `--diff` also works on its own for a quick local scoped scan.
+
+Deep scan sends function snippets (not full files) to the hosted VibeDrift service, which processes them in memory and does not store them. The deep workflows (LLM-confirmed duplicates, intent lie-detection, the coherence report, and `--deep --diff`) are a **paid Pro/Scale** feature; free accounts get 3 deep scans/month to try them. See [vibedrift.ai](https://vibedrift.ai) for plans.
 
 ## MCP Server
 
@@ -159,6 +163,8 @@ The five local tools are **free for everyone** — they run on your machine and 
 `validate_change` and `find_similar_function` accept an opt-in **`deep: true`** that runs VibeDrift's deep scan on the single function being checked (intent-mismatch detection + LLM-validated semantic duplicates, the same engine as `vibedrift . --deep`). The agent catches a misleading name or a semantic clone *before the code lands*, not in a later review.
 
 Deep mode sends **only that one function** to the hosted service; the five tools above stay 100% local. It requires sign-in and degrades gracefully: if you're offline it returns `status: "degraded"` with the local result intact, so it never errors the agent.
+
+For a broader pass over everything an agent just changed, the MCP server's instructions point it at `vibedrift --deep --diff` (deep-scan the change set before committing / opening a PR) — so an agent can recommend or run the scoped deep review at the right moment. The `--deep` workflows are Pro/Scale.
 
 ```bash
 vibedrift login        # optional — enables deep: true
@@ -270,6 +276,9 @@ Scan options:
   --private             Anonymize project name (uses privXXXXXXXXXXXX)
   --include <pattern>   Only scan files matching this glob (repeatable)
   --exclude <pattern>   Exclude files matching this glob (repeatable)
+  --diff [ref]          Scope the scan to files changed in git (default: uncommitted
+                        vs HEAD; pass a ref like `main` for a whole branch). Pair with
+                        --deep to deep-scan only what you changed (Pro/Scale).
   --verbose             Show timing breakdown and analyzer details
 
 Watch options:

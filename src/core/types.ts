@@ -337,4 +337,10 @@ export interface ScanOptions {
   compare?: boolean;
   /** Diff against a specific saved scan id (overrides default --compare target). */
   since?: string;
+  /**
+   * Scope the scan to files changed in git. `true` = uncommitted changes vs
+   * HEAD; a string = changed vs that ref/branch (e.g. "main"). Most valuable
+   * with --deep: deep-scan only what you changed (a paid, fast PR-gate flow).
+   */
+  diff?: string | boolean;
 }
