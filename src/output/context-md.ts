@@ -121,7 +121,7 @@ export function buildContextMarkdown(result: ScanResult, projectName: string, is
     "When modifying files here, match the dominant patterns listed above. Re-run `npx @vibedrift/cli` after your changes to verify the drift has closed and the consistency score has improved." +
       (isPaid
         ? " The per-finding fix prompts in `.vibedrift/fix-plan.md` give you copy-ready context for each open drift item."
-        : " Per-finding copy-ready fix prompts are a Pro/Scale feature — run `vibedrift upgrade` to generate `.vibedrift/fix-plan.md` for each open drift item."),
+        : " Per-finding copy-ready fix prompts are a Pro feature — run `vibedrift upgrade` to generate `.vibedrift/fix-plan.md` for each open drift item."),
   );
   lines.push("");
 

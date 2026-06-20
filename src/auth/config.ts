@@ -21,8 +21,8 @@ export interface VibeDriftConfig {
   /** Email of the authenticated user (display only). */
   email?: string;
 
-  /** "free" | "pro" | "scale" — last known plan, refreshed on each login. */
-  plan?: "free" | "pro" | "scale";
+  /** "free" | "pro" | "enterprise" — last known plan, refreshed on each login. */
+  plan?: "free" | "pro" | "enterprise";
 
   /** ISO-8601 timestamp the token expires (server-side enforcement is authoritative). */
   expiresAt?: string;

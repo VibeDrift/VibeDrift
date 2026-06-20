@@ -127,11 +127,11 @@ export async function runWatch(
     process.exit(1);
   }
 
-  // Continuous watch is a Pro/Scale feature (it re-scans on every change and
+  // Continuous watch is a Pro feature (it re-scans on every change and
   // keeps the .vibedrift/ agent context fresh all session). Free runs one-shot
   // scans on demand. Cached-plan check — works offline.
   if (!isPaidPlan((await readConfig()).plan)) {
-    console.error(chalk.red("\nvibedrift watch is a Pro/Scale feature.\n"));
+    console.error(chalk.red("\nvibedrift watch is a Pro feature.\n"));
     console.error(chalk.dim("Continuous drift watch re-scans on every file change and keeps"));
     console.error(chalk.dim(".vibedrift/ context fresh for your AI agent the whole session."));
     console.error("");

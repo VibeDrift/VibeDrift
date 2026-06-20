@@ -25,7 +25,7 @@ describe("buildEmbeddedPrompts — paid gate", () => {
     const values = Object.values(map);
     expect(values.length).toBeGreaterThan(0);
     for (const v of values) {
-      expect(v).toMatch(/Pro\/Scale feature/);
+      expect(v).toMatch(/Pro feature/);
       expect(v).toContain("vibedrift upgrade");
       expect(v).not.toContain("## VibeDrift"); // no real prompt header leaks
       expect(v).not.toContain("What's drifting"); // no real prompt body leaks

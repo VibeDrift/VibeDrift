@@ -246,7 +246,7 @@ export function referralFooter(projectName?: string): string {
 }
 
 /**
- * Shared upsell shown to FREE users in place of fix prompts (a Pro/Scale
+ * Shared upsell shown to FREE users in place of fix prompts (a Pro
  * feature). Used by every gated surface so the copy is identical. The findings,
  * scores, and dominant patterns remain free; only the copy-ready fix is paid.
  */
@@ -254,7 +254,7 @@ export function buildUpsellBlock(projectName?: string): string {
   return [
     "# VibeDrift Fix Plan",
     "",
-    "Per-finding AI fix prompts are a **Pro/Scale** feature. The findings, scores, and dominant patterns are yours on every plan; the copy-ready, peer-grounded fix for each open drift is part of the paid deep scan.",
+    "Per-finding AI fix prompts are a **Pro** feature. The findings, scores, and dominant patterns are yours on every plan; the copy-ready, peer-grounded fix for each open drift is part of the paid deep scan.",
     "",
     "Run `vibedrift upgrade`, then re-run with the same flags to generate a fix for each finding.",
     "",

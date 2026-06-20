@@ -32,7 +32,7 @@ For a deeper, AI-validated pass on a CHANGE SET (before committing or opening a 
 - \`vibedrift --deep --diff\`        deep-scan ONLY the files changed vs HEAD (fast, scoped).
 - \`vibedrift --deep --diff main\`   deep-scan everything that differs from a branch (PR review).
 - \`vibedrift --deep\`               full-repo deep scan.
-The --deep workflows (semantic-duplicate confirmation, intent lie-detection, the coherence audit) are a paid Pro/Scale feature; the local tools above stay free.`;
+The --deep workflows (semantic-duplicate confirmation, intent lie-detection, the coherence audit) are a paid Pro feature; the local tools above stay free.`;
 
 /**
  * Build the server with the five local tools registered. The local tools are

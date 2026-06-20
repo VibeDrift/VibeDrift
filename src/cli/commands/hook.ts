@@ -59,11 +59,11 @@ export async function runHook(action: string, opts: HookOptions = {}, cwd: strin
   }
 
   if (action === "install") {
-    // Installing the score-gating pre-push hook is a Pro/Scale feature (drift
+    // Installing the score-gating pre-push hook is a Pro feature (drift
     // enforcement in your own git workflow). uninstall/status stay open so a
     // downgraded user can always remove it. Cached-plan check — works offline.
     if (!isPaidPlan((await readConfig()).plan)) {
-      console.error(chalk.red("\nThe VibeDrift pre-push hook is a Pro/Scale feature.\n"));
+      console.error(chalk.red("\nThe VibeDrift pre-push hook is a Pro feature.\n"));
       console.error(chalk.dim("It blocks a push whose Vibe Drift Score is below your threshold —"));
       console.error(chalk.dim("drift enforcement, in your own git workflow."));
       console.error("");

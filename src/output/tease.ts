@@ -147,7 +147,7 @@ export function generateTeaseMessages(
   }
 
   if (messages.length > 0) {
-    messages.push(`Sign in with \`vibedrift login\` (free, 10s) and run \`vibedrift --deep\` — 3 free scans/month.`);
+    messages.push(`Sign in with \`vibedrift login\` (free, 10s) and run \`vibedrift --deep\`. 1 free deep scan/month.`);
   }
 
   return messages;

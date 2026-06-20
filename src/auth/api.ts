@@ -23,7 +23,7 @@ export interface DevicePollSuccess {
   status: "authorized";
   access_token: string;
   email: string;
-  plan: "free" | "pro" | "scale";
+  plan: "free" | "pro" | "enterprise";
   expires_at: string;
 }
 
@@ -41,14 +41,14 @@ export type DevicePollResponse = DevicePollSuccess | DevicePollPending | DeviceP
 export interface ValidateResponse {
   valid: boolean;
   email?: string;
-  plan?: "free" | "pro" | "scale";
+  plan?: "free" | "pro" | "enterprise";
   expires_at?: string;
 }
 
 export interface UsageResponse {
   user: {
     email: string;
-    plan: "free" | "pro" | "scale";
+    plan: "free" | "pro" | "enterprise";
   };
   current_period: {
     start: string;
@@ -79,7 +79,7 @@ export interface FeedbackResponse {
 }
 
 export interface CreditsResponse {
-  plan: "free" | "pro" | "scale";
+  plan: "free" | "pro" | "enterprise";
   unlimited: boolean;
   available_total: number;
   available_welcome: number;

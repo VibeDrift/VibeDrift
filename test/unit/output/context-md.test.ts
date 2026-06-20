@@ -30,7 +30,7 @@ describe("buildContextMarkdown referral link", () => {
   it("points to fix-plan.md when paid, and to upgrade when free", () => {
     expect(buildContextMarkdown(minimalResult(), "acme-app", true)).toContain(".vibedrift/fix-plan.md`");
     const free = buildContextMarkdown(minimalResult(), "acme-app", false);
-    expect(free).toMatch(/Pro\/Scale feature/);
+    expect(free).toMatch(/Pro feature/);
     expect(free).toContain("vibedrift upgrade");
   });
 });
@@ -51,8 +51,8 @@ describe("writeContextFiles — fix prompts are paid", () => {
     expect(written).toContain(".vibedrift/patterns.json");
     const fixPlan = readFileSync(join(dir, ".vibedrift", "fix-plan.md"), "utf8");
     const fixPrompts = readFileSync(join(dir, ".vibedrift", "fix-prompts.md"), "utf8");
-    expect(fixPlan).toMatch(/Pro\/Scale/);
-    expect(fixPrompts).toMatch(/Pro\/Scale/);
+    expect(fixPlan).toMatch(/Pro/);
+    expect(fixPrompts).toMatch(/Pro/);
     // context.md is full content, not an upsell stub
     expect(readFileSync(join(dir, ".vibedrift", "context.md"), "utf8")).toContain("Vibe Drift Score");
   });
@@ -61,7 +61,7 @@ describe("writeContextFiles — fix prompts are paid", () => {
     const dir = tmp();
     await writeContextFiles(dir, minimalResult(), "acme-app", true);
     const fixPlan = readFileSync(join(dir, ".vibedrift", "fix-plan.md"), "utf8");
-    expect(fixPlan).not.toMatch(/Pro\/Scale/);
+    expect(fixPlan).not.toMatch(/Pro/);
     expect(fixPlan).toContain("well-aligned");
   });
 });

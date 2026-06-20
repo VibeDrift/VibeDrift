@@ -110,7 +110,7 @@ export async function runLogin(options: LoginOptions = {}): Promise<void> {
 }
 
 async function handleLoginSuccess(
-  result: { access_token: string; email: string; plan: "free" | "pro" | "scale"; expires_at: string },
+  result: { access_token: string; email: string; plan: "free" | "pro" | "enterprise"; expires_at: string },
   options: LoginOptions,
 ): Promise<void> {
   await patchConfig({
@@ -135,7 +135,7 @@ async function handleLoginSuccess(
     });
     if (credits.has_free_deep_scan && !credits.unlimited) {
       console.log(
-        chalk.bgYellow.black.bold("  🎁 3 FREE deep scans every month with your account  "),
+        chalk.bgYellow.black.bold("  🎁 1 FREE deep scan every month with your account  "),
       );
       console.log("");
       console.log(

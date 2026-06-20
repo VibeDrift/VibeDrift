@@ -101,7 +101,7 @@ program
   )
   .option(
     "--diff [ref]",
-    "scope the scan to files changed in git (default: uncommitted vs HEAD; pass a ref like `main` to scan a whole branch). Pair with --deep to deep-scan only what you changed (Pro/Scale).",
+    "scope the scan to files changed in git (default: uncommitted vs HEAD; pass a ref like `main` to scan a whole branch). Pair with --deep to deep-scan only what you changed (Pro).",
   )
   // Maintenance
   .option(

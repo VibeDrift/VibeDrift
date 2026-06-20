@@ -622,7 +622,7 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
     }
     lines.push("");
     lines.push(chalk.bgYellow.black.bold(`  \uD83D\uDD0D  ${teaseCount} additional AI findings available with deep scan  `));
-    lines.push(chalk.yellow(`    Run ${chalk.bold("vibedrift . --deep")} to reveal them. 3 free scans/month.`));
+    lines.push(chalk.yellow(`    Run ${chalk.bold("vibedrift . --deep")} to reveal them. 1 free deep scan/month.`));
     lines.push("");
   }
 

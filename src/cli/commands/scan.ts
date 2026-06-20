@@ -47,7 +47,7 @@ async function resolveAuthAndBanner(
       console.error("");
       console.error(chalk.red("  ✗ Deep scans require a VibeDrift account."));
       console.error("");
-      console.error(chalk.bgYellow.black.bold("    🎁  Free accounts get 3 deep scans per month.    "));
+      console.error(chalk.bgYellow.black.bold("    🎁  Free accounts get 1 deep scan per month.    "));
       console.error("");
       console.error("    Run " + chalk.bold("vibedrift login") + " to sign in and claim it.");
       console.error("    Or set " + chalk.bold("VIBEDRIFT_TOKEN") + " in your environment for CI.");
@@ -86,8 +86,8 @@ async function resolveAuthAndBanner(
         const credits = await fetchCredits(bearerToken, { apiUrl });
         if (credits.has_free_deep_scan && !credits.unlimited) {
           console.log("");
-          console.log(chalk.bgYellow.black.bold("  🎁  3 FREE DEEP SCANS EVERY MONTH  "));
-          console.log(chalk.yellow("    Run with --deep to use AI-powered analysis (3 free per month)."));
+          console.log(chalk.bgYellow.black.bold("  🎁  1 FREE DEEP SCAN EVERY MONTH  "));
+          console.log(chalk.yellow("    Run with --deep to use AI-powered analysis (1 free per month)."));
           console.log("");
         }
       } catch {
@@ -874,7 +874,7 @@ export async function runScan(
   // null and skip rendering.
   result.updateCheck = await updateCheckPromise;
 
-  // Fix prompts are a paid feature (Pro/Scale). Resolve the plan from cached
+  // Fix prompts are a paid feature (Pro). Resolve the plan from cached
   // config and gate every fix-prompt surface on it; the /v1/fix-prompts route is
   // the authoritative server backstop. Defaults to free-gating on any error, and
   // works offline / --local-only (cached plan, no network call).

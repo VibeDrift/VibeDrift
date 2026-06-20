@@ -1178,7 +1178,7 @@ function buildLockedDeepSection(result: ScanResult): string {
   ${lockedCards}
   <div style="margin-top:16px;text-align:center;padding:20px;background:var(--bg-surface);border:1px dashed var(--border)">
     <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:6px">Unlock AI Analysis</div>
-    <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Run <code style="color:var(--accent-yellow);background:var(--bg-code);padding:2px 6px">vibedrift . --deep</code> to reveal these findings. 3 free deep scans/month.</div>
+    <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">Run <code style="color:var(--accent-yellow);background:var(--bg-code);padding:2px 6px">vibedrift . --deep</code> to reveal these findings. 1 free deep scan/month.</div>
     <div style="font-size:12px;color:var(--text-tertiary)">Not signed in? Run <code style="color:var(--accent-yellow)">vibedrift login</code> first &mdash; no card required.</div>
   </div>
 </section>`;
@@ -1355,7 +1355,7 @@ function buildEmbeddedData(result: ScanResult): string {
 // Fix prompts are a paid feature, so the report source never carries the real
 // prompt markdown for a free plan — only this upsell.
 const FIX_PROMPT_UPSELL =
-  "VibeDrift fix prompts are a Pro/Scale feature. Your findings, scores, and dominant patterns are free on every plan; the copy-ready, peer-grounded fix for each one is part of the paid deep scan. Run `vibedrift upgrade` to unlock.";
+  "VibeDrift fix prompts are a Pro feature. Your findings, scores, and dominant patterns are free on every plan; the copy-ready, peer-grounded fix for each one is part of the paid deep scan. Run `vibedrift upgrade` to unlock.";
 
 export function buildEmbeddedPrompts(result: ScanResult, isPaid: boolean): string {
   const map: Record<string, string> = {};

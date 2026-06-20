@@ -6,8 +6,8 @@
  * client gates the local fix-prompt surfaces on this; the `/v1/fix-prompts` route
  * is the authoritative server-side backstop (require_paid).
  */
-export type Plan = "free" | "pro" | "scale";
+export type Plan = "free" | "pro" | "enterprise";
 
 export function isPaidPlan(plan?: Plan | null): boolean {
-  return plan === "pro" || plan === "scale";
+  return plan === "pro" || plan === "enterprise";
 }
