@@ -683,6 +683,10 @@ export function renderJsonOutput(result: ScanResult): string {
       maxHygieneScore: result.maxHygieneScore,
       findings: result.findings,
       deepInsights: result.deepInsights,
+      // The deep-scan coherence audit (AI-powered) — included so --json / CI /
+      // analytics consumers can read the same hero report the terminal and HTML
+      // render. Undefined on free or non-deep scans.
+      coherenceReport: result.coherenceReport,
       perFileScores: Object.fromEntries(result.perFileScores),
     },
     null,
