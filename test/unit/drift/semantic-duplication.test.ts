@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { semanticDuplication } from "../../../src/drift/semantic-duplication.js";
+import { driftFindingToFinding } from "../../../src/drift/index.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 
 function mkCtx(files: DriftFile[]): DriftContext {
@@ -42,5 +43,66 @@ describe("semantic-duplication detector", () => {
       file("src/c.ts", `export function c() { return Math.sqrt(42); }`),
     ];
     expect(semanticDuplication.detect(mkCtx(files))).toHaveLength(0);
+  });
+
+  it("marks every finding countBased so the engine size-normalizes it (no driftSignal)", () => {
+    const body = `
+      const id = args.id;
+      const row = await repo.findById(id);
+      if (!row) throw new NotFoundError();
+      return row;
+    `;
+    const files = [
+      file("src/handlers/getUser.ts", `export async function getUser(args) {${body}}`),
+      file("src/handlers/getOrder.ts", `export async function getOrder(args) {${body}}`),
+      file("src/handlers/getAccount.ts", `export async function getAccount(args) {${body}}`),
+    ];
+    const findings = semanticDuplication.detect(mkCtx(files));
+    expect(findings.length).toBeGreaterThan(0);
+    for (const f of findings) {
+      expect(f.countBased).toBe(true);
+    }
+    const wired = findings.map(driftFindingToFinding);
+    for (const f of wired) {
+      expect(f.driftSignal).toBeUndefined();
+    }
+  });
+
+  it("grades a near-identical body copied across 3+ files in one directory as error", () => {
+    // Identical body, 3 cross-file copies in the same directory → maxSim≈1.0
+    // AND a 3-member cluster → error.
+    const body = `
+      const id = args.id;
+      const row = await repo.findById(id);
+      if (!row) throw new NotFoundError();
+      return row;
+    `;
+    const files = [
+      file("src/handlers/getUser.ts", `export async function getUser(args) {${body}}`),
+      file("src/handlers/getOrder.ts", `export async function getOrder(args) {${body}}`),
+      file("src/handlers/getAccount.ts", `export async function getAccount(args) {${body}}`),
+    ];
+    const findings = semanticDuplication.detect(mkCtx(files));
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.some((f) => f.severity === "error")).toBe(true);
+  });
+
+  it("does not grade an isolated 2-file duplicate pair as error", () => {
+    const body = `
+      const id = args.id;
+      const row = await repo.findById(id);
+      if (!row) throw new NotFoundError();
+      return row;
+    `;
+    const files = [
+      file("src/handlers/getUser.ts", `export async function getUser(args) {${body}}`),
+      file("src/services/getOrder.ts", `export async function getOrder(args) {${body}}`),
+    ];
+    const findings = semanticDuplication.detect(mkCtx(files));
+    expect(findings.length).toBeGreaterThan(0);
+    for (const f of findings) {
+      // 2-file clusters across directories must not reach the error ceiling.
+      expect(f.severity).not.toBe("error");
+    }
   });
 });

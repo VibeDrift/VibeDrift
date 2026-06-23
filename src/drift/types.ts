@@ -118,6 +118,16 @@ export interface DriftFinding {
   dominantCount: number;
   totalRelevantFiles: number;
   consistencyScore: number; // 0-100: (dominant/total)*100
+  /**
+   * True for detectors that measure a COUNT phenomenon (duplicate pairs, dead
+   * exports) rather than a dominance vote. These have no real
+   * dominantCount/totalRelevantFiles peer ratio, so the scoring engine must
+   * NOT treat `consistencyScore` as a deviation rate. When set, the engine
+   * routes the finding through its count-based density branch (size-normalized
+   * per KLOC) instead of the dominance branch. `consistencyScore` may still be
+   * carried for the report bars, but it does not drive the composite.
+   */
+  countBased?: boolean;
   deviatingFiles: DeviatingFile[];
   /**
    * Up to 3 files that exemplify the dominant pattern — used by fix-prompt

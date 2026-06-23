@@ -180,9 +180,17 @@ export function fingerprintFindings(groups: SemanticDuplicateGroup[]): Finding[]
       snippet: f.name + "()",
     }));
 
+    // Grade severity by blast radius (duplicate-group size). An exact clone's
+    // damage scales with how many call sites diverge from a single source of
+    // truth: 2 sites is info-grade noise, >=5 sites is error-grade structural
+    // redundancy. Confidence stays 1.0 — an exact normalized-hash match is
+    // certain regardless of group size.
+    const n = group.functions.length;
+    const severity: Finding["severity"] = n >= 5 ? "error" : n >= 3 ? "warning" : "info";
+
     const finding: Finding = {
       analyzerId: "codedna-fingerprint",
-      severity: "error" as const,
+      severity,
       confidence: 1.0,
       message: `Exact semantic duplicate: ${namesDisplay} have identical normalized bodies across ${total} files`,
       locations,

@@ -17,7 +17,7 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile, Evidence } from "./types.js";
-import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, pickIntentHint } from "./utils.js";
+import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, noConventionFinding, pickIntentHint } from "./utils.js";
 import { asyncCounts, classifyAsyncStyle, ASYNC_STYLE_NAMES as STYLE_NAMES, type AsyncStyle } from "./async-style.js";
 
 interface FileAsyncProfile {
@@ -77,26 +77,23 @@ export const asyncConsistency: DriftDetector = {
       patterns: [{ pattern: p.style, evidence: p.evidence }],
     }));
 
-    // Entropy gate: if the whole project's async style is too uniform to
-    // declare a winner, emit a single info finding instead of per-deviator
-    // noise. (L1.5-A1)
+    // Entropy gate (L1.5-A1). High entropy = no dominant async convention. For a
+    // self-consistency score that is the FLOOR of consistency, so emit one
+    // category-level "no convention" finding whose deviation IS the entropy
+    // (guarded by a minimum sample so a tiny split reads as insufficient data,
+    // not chaos).
     const projectDist = buildPatternDistribution(profiles);
     const gate = entropyGate(projectDist);
     if (gate.decision === "no_convention") {
-      return [{
+      return noConventionFinding({
         detector: "async_patterns",
         subCategory: "async_style",
         driftCategory: "async_patterns",
-        severity: "info",
-        confidence: gate.confidence,
-        finding: `No dominant async style across the project (entropy-normalized ${gate.normalizedEntropy.toFixed(2)}). Pick one of async/await or .then() chains and standardize.`,
-        dominantPattern: "no convention",
-        dominantCount: 0,
-        totalRelevantFiles: profiles.length,
-        consistencyScore: Math.round((1 - gate.normalizedEntropy) * 100),
-        deviatingFiles: [],
-        recommendation: "Project has no established async convention. Choose async/await (recommended for new code) and migrate existing .then() chains.",
-      }];
+        axisLabel: "async style",
+        totalFiles: profiles.length,
+        gate,
+        recommendation: "Standardize on async/await (or .then chains) across the codebase and align files to it.",
+      });
     }
 
     const votes = buildDirectoryScopedVote(profiles, STYLE_NAMES, {

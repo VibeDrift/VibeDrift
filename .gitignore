@@ -21,3 +21,6 @@ vibedrift-*.html
 # Calibration / eval run outputs (generated)
 test/calibration/reports/pr-*.json
 eval/reports/
+
+# Score-discrimination harness clone cache (cloned upstream repos)
+eval/discrimination/.cache/

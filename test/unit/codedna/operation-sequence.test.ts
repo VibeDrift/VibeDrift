@@ -2,8 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   extractOperationSequences,
   findSequenceSimilarities,
+  sequenceFindings,
 } from "../../../src/codedna/operation-sequence.js";
-import type { ExtractedFunction, OperationSequence } from "../../../src/codedna/types.js";
+import type {
+  ExtractedFunction,
+  OperationSequence,
+  SequenceSimilarity,
+} from "../../../src/codedna/types.js";
 
 function mkFn(partial: Partial<ExtractedFunction>): ExtractedFunction {
   return {
@@ -123,5 +128,37 @@ describe("findSequenceSimilarities", () => {
       expect(sims[0].similarity).toBeGreaterThanOrEqual(0);
       expect(sims[0].similarity).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe("sequenceFindings — severity graded by match strength", () => {
+  function mkSim(partial: Partial<SequenceSimilarity>): SequenceSimilarity {
+    return {
+      functionA: { file: "a", relativePath: "a", name: "a", line: 1 },
+      functionB: { file: "b", relativePath: "b", name: "b", line: 1 },
+      similarity: partial.similarity ?? 0.8,
+      lcsLength: partial.lcsLength ?? 3,
+      maxLength: partial.maxLength ?? 5,
+    };
+  }
+
+  it("a strong, long match (sim>=0.92 && lcs>=6) grades warning", () => {
+    const f = sequenceFindings([mkSim({ similarity: 0.95, lcsLength: 8 })])[0];
+    expect(f.severity).toBe("warning");
+  });
+
+  it("a borderline-similarity match grades info even with a long LCS", () => {
+    const f = sequenceFindings([mkSim({ similarity: 0.85, lcsLength: 8 })])[0];
+    expect(f.severity).toBe("info");
+  });
+
+  it("a short match grades info even at high similarity", () => {
+    const f = sequenceFindings([mkSim({ similarity: 0.95, lcsLength: 4 })])[0];
+    expect(f.severity).toBe("info");
+  });
+
+  it("keeps the existing graded confidence (min(similarity, 0.95))", () => {
+    expect(sequenceFindings([mkSim({ similarity: 0.83 })])[0].confidence).toBeCloseTo(0.83);
+    expect(sequenceFindings([mkSim({ similarity: 0.99 })])[0].confidence).toBeCloseTo(0.95);
   });
 });

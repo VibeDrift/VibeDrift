@@ -28,14 +28,55 @@ import {
  *   v3 — Phase 0:   all 14 drift detectors wired into the composite (was 3),
  *                   single scoring engine (dual-engine collapse). The number
  *                   changes meaningfully, so this is a real methodology bump.
+ *   v4 — decompressed scoring: dominance-ratio magnitude weighting, no per-analyzer cap, no sqrt-LOC dampener, multiplicative/geometric-mean composite; real 0–100 range.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v3";
+export const SCORING_VERSION = "v4";
 
-const SEVERITY_WEIGHTS = { error: 3, warning: 1.5, info: 0.5 };
+/**
+ * Decompressed scoring (v4) constants — detector-level damage model.
+ *
+ * Category health is a noisy-OR over the DETECTORS that fired (not a sum over
+ * findings), so a category's score reflects HOW MANY distinct patterns drift
+ * and HOW BADLY, never the raw finding count (which scales with codebase size).
+ */
+/** Damage ceiling a detector contributes at full severity, before deviation. */
+const SEVERITY_DAMAGE = { error: 0.7, warning: 0.4, info: 0.12 };
+/** A single detector can never remove more than this share of a category. */
+const MAX_DETECTOR_DAMAGE = 0.85;
+/** Findings-per-KLOC at which a count-based detector reaches ~63% of its deviation ceiling. */
+const COUNT_DENSITY_SCALE = 2.0;
+/** A flagged-but-near-consistent dominance finding still registers this faintly. */
+const DEVIATION_FLOOR = 0.05;
+/**
+ * Dominance-vote sample size at which a finding earns full damage weight. Below
+ * it, damage is scaled down: a 70% majority over 4 files is weaker statistical
+ * evidence of drift than the same share over 40. n-awareness lives here (as a
+ * damage weight) rather than as a vote-level cutoff, so it can't fight temporal
+ * weighting or explicit threshold overrides. Count-based detectors carry no
+ * dominance sample and are unaffected.
+ */
+const SAMPLE_FULL_CONFIDENCE = 8;
+/** Keeps one fully-collapsed category from hard-zeroing the geometric-mean composite. */
+const HEALTH_FLOOR = 0.02;
+
+/**
+ * Surface-specific drift categories: they only have analyzable input when the
+ * repo exercises that surface (security routes/auth; comment/intent signal).
+ * With zero findings we cannot distinguish "clean" from "no surface", so on the
+ * drift track an empty one is treated as NOT-MEASURED (excluded from the
+ * composite) rather than credited a free 20/20 that would mask drift in the
+ * categories we did measure. architecturalConsistency and redundancy always
+ * have input from code, so they stay measured-clean (20) when empty.
+ * (True surface coverage detection per detector is a future refinement.)
+ */
+const SURFACE_SPECIFIC_DRIFT_CATEGORIES = new Set<ScoringCategory>([
+  "securityPosture",
+  "intentClarity",
+]);
 
 const ENTRY_POINT_PATTERNS = [
   /index\.[jt]sx?$/, /main\.[jt]s$/, /app\.[jt]sx?$/, /server\.[jt]s$/,
@@ -52,62 +93,139 @@ function computeFileImportanceWeight(filePath: string): number {
   return 1.0;
 }
 
-function computeCorrelationAmplifier(findings: Finding[]): Map<string, number> {
-  const fileAnalyzers = new Map<string, Set<string>>();
+/**
+ * Decompressed scoring (v4) — per-category health via a detector-level
+ * noisy-OR. The score has a real 0–100 range and drops sharply on drifting
+ * code, but does NOT scale with raw finding count (which scales with codebase
+ * size). Findings are grouped by detector; each detector contributes ONE
+ * bounded `damage` term; health is the product of `(1 - damage)`:
+ *
+ *   damage_d = min(MAX_DETECTOR_DAMAGE, severity_d × confidence_d × importance_d × deviation_d)
+ *   health   = Π_d (1 - damage_d)          score = maxScore × health
+ *
+ * where, per detector d (over the findings it produced in this category):
+ *   - severity_d   = SEVERITY_DAMAGE[worst severity in the group]
+ *   - confidence_d = mean confidence in the group
+ *   - importance_d = max file-importance over the group (entry points weigh more)
+ *   - deviation_d  = dominance detectors (driftSignal): worst deviation fraction
+ *                    (1 - consistencyScore/100) across the group, floored at
+ *                    DEVIATION_FLOOR — a RATE, already size-normalized.
+ *                  = count-based detectors (codedna / ml / hygiene): a saturating
+ *                    density 1 - e^(-(count/KLOC)/COUNT_DENSITY_SCALE), so a
+ *                    high-volume detector scales with codebase size, never the
+ *                    raw count, and alone can never exceed MAX_DETECTOR_DAMAGE.
+ *
+ * No per-analyzer cap, no sqrt-LOC dampener, no count-sensitivity: 30 modest
+ * findings from one detector damage a category exactly as much as that
+ * detector's worst single deviation warrants.
+ */
+
+/** Worst (max) severity damage across a detector group's findings. */
+function groupSeverityDamage(findings: Finding[]): number {
+  let worst = 0;
+  for (const f of findings) worst = Math.max(worst, SEVERITY_DAMAGE[f.severity]);
+  return worst;
+}
+
+/** Mean confidence across a detector group's findings (default 1.0). */
+function groupConfidence(findings: Finding[]): number {
+  if (findings.length === 0) return 1.0;
+  let sum = 0;
+  for (const f of findings) sum += f.confidence ?? 1.0;
+  return sum / findings.length;
+}
+
+/** Max file-importance across a detector group's findings' locations (1.0–1.5). */
+function groupImportance(findings: Finding[]): number {
+  let imp = 1.0;
   for (const f of findings) {
     for (const loc of f.locations) {
-      if (!loc.file) continue;
-      if (!fileAnalyzers.has(loc.file)) fileAnalyzers.set(loc.file, new Set());
-      fileAnalyzers.get(loc.file)!.add(f.analyzerId);
+      if (loc.file) imp = Math.max(imp, computeFileImportanceWeight(loc.file));
     }
   }
-
-  const amplifiers = new Map<string, number>();
-  for (const [file, analyzers] of fileAnalyzers) {
-    const count = analyzers.size;
-    amplifiers.set(file, count >= 4 ? 1.5 : count >= 3 ? 1.3 : 1.0);
-  }
-  return amplifiers;
+  return imp;
 }
 
 /**
- * Scoring philosophy: the score should HURT when there are real issues.
- *
- * Formula per category (0-20):
- *   1. Sum weighted severity of all findings (error=3, warning=1.5, info=0.5)
- *      × confidence × file importance × correlation amplifier
- *   2. Apply mild project-size adjustment (sqrt scale, not linear divide)
- *   3. Map through exponential decay: score = maxScore × e^(-k × adjustedWeight)
- *      where k is tuned so that ~10 weighted points = ~50% score
- *
- * This means:
- *   - 0 findings → 20/20
- *   - 2-3 warnings → ~17/20
- *   - 5 warnings → ~14/20
- *   - 10 warnings or 3 errors → ~10/20
- *   - 20+ weighted points → <5/20
+ * Representative deviation for a detector group:
+ *  - dominance (every finding carries driftSignal): the worst deviation
+ *    fraction in the group (already a size-normalized rate), floored.
+ *  - count-based: a saturating density of finding count per KLOC, so volume
+ *    scales with codebase size rather than raw count.
  */
-/**
- * k for the exponential decay: 15 weighted points = 50% score.
- * Exposed at module scope so `estimateScoreAfterFixes` stays in sync.
- */
-const K_DECAY = Math.LN2 / 15;
-
-function perFindingRawWeight(
-  f: Finding,
-  correlationAmplifiers: Map<string, number>,
+function groupDeviation(
+  findings: Finding[],
+  useDriftMagnitude: boolean,
+  klocCount: number,
 ): number {
-  const base = SEVERITY_WEIGHTS[f.severity];
-  const confidence = f.confidence ?? 1.0;
-  let fileWeight = 1.0;
-  let corrWeight = 1.0;
-  for (const loc of f.locations) {
-    if (loc.file) {
-      fileWeight = Math.max(fileWeight, computeFileImportanceWeight(loc.file));
-      corrWeight = Math.max(corrWeight, correlationAmplifiers.get(loc.file) ?? 1.0);
+  const isDominance = useDriftMagnitude && findings.every((f) => f.driftSignal);
+  if (isDominance) {
+    let worst = 0;
+    for (const f of findings) {
+      worst = Math.max(worst, 1 - (f.driftSignal!.consistencyScore ?? 100) / 100);
     }
+    // A genuinely-consistent finding (consistencyScore 100 → deviation 0) is NOT
+    // drift and must contribute zero damage — do not floor it. The DEVIATION_FLOOR
+    // only applies once there is some real deviation to register faintly.
+    if (worst <= 0) return 0;
+    return Math.max(DEVIATION_FLOOR, Math.min(1, worst));
   }
-  return base * confidence * fileWeight * corrWeight;
+  const density = findings.length / klocCount;
+  return 1 - Math.exp(-density / COUNT_DENSITY_SCALE);
+}
+
+/**
+ * Sample-size confidence for a dominance group: full weight once the dominance
+ * vote saw at least SAMPLE_FULL_CONFIDENCE relevant files, scaled down below
+ * that. Count-based findings carry no dominance sample (no driftSignal), so
+ * they return a neutral 1.0 and are unaffected.
+ */
+function groupSampleConfidence(findings: Finding[]): number {
+  let maxN = 0;
+  for (const f of findings) {
+    if (f.driftSignal) maxN = Math.max(maxN, f.driftSignal.totalRelevantFiles);
+  }
+  if (maxN <= 0) return 1;
+  return Math.min(1, maxN / SAMPLE_FULL_CONFIDENCE);
+}
+
+/** Bounded per-detector damage term for the category noisy-OR. */
+function detectorDamage(
+  findings: Finding[],
+  useDriftMagnitude: boolean,
+  klocCount: number,
+): number {
+  const damage =
+    groupSeverityDamage(findings) *
+    groupConfidence(findings) *
+    groupImportance(findings) *
+    groupDeviation(findings, useDriftMagnitude, klocCount) *
+    groupSampleConfidence(findings);
+  return Math.min(MAX_DETECTOR_DAMAGE, Math.max(0, damage));
+}
+
+/**
+ * Category health as the noisy-OR over the detectors that fired:
+ * `health = Π_d (1 - damage_d)`, on a 0–1 scale. Grouping by detector means
+ * a category's score depends on how many distinct patterns drift and how
+ * badly — not on the raw number of findings (which scales with codebase size).
+ */
+export function categoryHealth(
+  findings: Finding[],
+  useDriftMagnitude: boolean,
+  klocCount: number,
+): number {
+  const byDetector = new Map<string, Finding[]>();
+  for (const f of findings) {
+    const g = byDetector.get(f.analyzerId);
+    if (g) g.push(f);
+    else byDetector.set(f.analyzerId, [f]);
+  }
+  let survival = 1;
+  for (const [, group] of byDetector) {
+    survival *= 1 - detectorDamage(group, useDriftMagnitude, klocCount);
+  }
+  return Math.max(0, Math.min(1, survival));
 }
 
 function computeCategoryScore(
@@ -115,75 +233,38 @@ function computeCategoryScore(
   maxScore: number,
   totalLines: number,
   applicable: boolean,
-  correlationAmplifiers: Map<string, number>,
   mutateImpact: boolean,
+  useDriftMagnitude: boolean,
+  treatEmptyAsNotMeasured: boolean,
 ): CategoryScore {
   if (!applicable) {
     return { score: 0, maxScore, locked: false, findingCount: 0, applicable: false };
   }
 
   if (findings.length === 0) {
+    // A surface-specific category with no findings is "not measured" (no
+    // evidence of the surface), not "perfectly clean" — exclude it from the
+    // composite rather than crediting a free maxScore.
+    if (treatEmptyAsNotMeasured) {
+      return { score: 0, maxScore, locked: false, findingCount: 0, applicable: false };
+    }
     return { score: maxScore, maxScore, locked: false, findingCount: 0, applicable: true };
   }
 
-  // First pass: per-finding raw weight, grouped by analyzer.
-  // Grouping lets us apply a per-analyzer cap below so one noisy detector
-  // (e.g. `complexity` with 80+ findings on a mid-size codebase) can't
-  // single-handedly crash its category score past the exponential-decay tail.
-  const perFinding: number[] = new Array(findings.length);
-  const weightByAnalyzer = new Map<string, number>();
-  for (let i = 0; i < findings.length; i++) {
-    const w = perFindingRawWeight(findings[i], correlationAmplifiers);
-    perFinding[i] = w;
-    const id = findings[i].analyzerId;
-    weightByAnalyzer.set(id, (weightByAnalyzer.get(id) ?? 0) + w);
-  }
+  const klocCount = Math.max(1, totalLines / 1000);
+  const health = categoryHealth(findings, useDriftMagnitude, klocCount);
+  const score = Math.round(maxScore * health * 10) / 10;
 
-  // Per-analyzer cap: any single analyzer can contribute at most
-  // `maxScore × 0.6` raw weight to its category. For a 20-point category
-  // this is 12 — enough to drop the category to ~35% on its own, but not
-  // enough to annihilate it. Previous cap (maxScore / 2) was slightly too
-  // forgiving: a dominating analyzer like `complexity` with 80+ findings
-  // would leave the category at 50% health even when it clearly warranted
-  // a worse grade. 0.6 tightens the forgiveness without returning to the
-  // pre-fix collapse behavior.
-  const PER_ANALYZER_CAP = maxScore * 0.6;
-  let rawWeight = 0;
-  const analyzerScaleFactors = new Map<string, number>();
-  for (const [id, total] of weightByAnalyzer) {
-    const capped = Math.min(total, PER_ANALYZER_CAP);
-    rawWeight += capped;
-    analyzerScaleFactors.set(id, total > 0 ? capped / total : 1);
-  }
-
-  // Project-size adjustment: larger projects tolerate more raw weight.
-  // sqrt scale, so a 4K-line project gets 2x tolerance, 20K+ gets 4.5x.
-  // Ceiling set to 4.5 — enough to avoid the old clamp-at-3 collapse on
-  // large codebases, not so much that "drift is normal at scale" becomes
-  // the implicit message.
-  const sizeFactor = totalLines > 500 ? Math.sqrt(totalLines / 1000) : 1.0;
-  const clampedSizeFactor = Math.max(0.5, Math.min(4.5, sizeFactor));
-  const adjustedWeight = rawWeight / clampedSizeFactor;
-
-  // Exponential decay: score = max × e^(-k × weight). k is module-level.
-  const factor = Math.exp(-K_DECAY * adjustedWeight);
-  const score = Math.round(maxScore * factor * 10) / 10;
-
-  // Second pass: attribute marginal score-gain-if-resolved to each finding.
-  // ∂score/∂rawWeight = -maxScore × k × factor / sizeFactor, so the magnitude
-  // of score recovery from removing δw of raw weight is:
-  //   impact ≈ maxScore × k × factor × δw / sizeFactor
-  // This is a first-order linearization — accurate for a single finding,
-  // slightly over-estimates for multi-finding removals (sub-additive).
+  // Marginal consistencyImpact: the score gain from removing finding i alone.
+  // Exact — recompute category health with that finding removed and diff.
+  // O(n²) per category, but findings-per-category is small.
   if (mutateImpact) {
     for (let i = 0; i < findings.length; i++) {
-      // Scale each finding's marginal impact by its analyzer's capped share:
-      // if an analyzer's total raw weight was capped, its findings had their
-      // contribution proportionally reduced, and resolving one of them only
-      // recovers the scaled fraction.
-      const scale = analyzerScaleFactors.get(findings[i].analyzerId) ?? 1;
-      const impact = maxScore * K_DECAY * factor * perFinding[i] * scale / clampedSizeFactor;
-      findings[i].consistencyImpact = Math.round(impact * 100) / 100;
+      const without = findings.slice(0, i).concat(findings.slice(i + 1));
+      const healthWithout =
+        without.length === 0 ? 1 : categoryHealth(without, useDriftMagnitude, klocCount);
+      const impact = maxScore * (healthWithout - health);
+      findings[i].consistencyImpact = Math.round(Math.max(0, impact) * 100) / 100;
     }
   }
 
@@ -215,7 +296,6 @@ function computeScoresForKind(
   findings: Finding[],
   totalLines: number,
   projectLanguages: SupportedLanguage[],
-  correlationAmplifiers: Map<string, number>,
   kind: AnalyzerKind,
   mutateImpact: boolean,
   previousScores: CategoryScores | undefined,
@@ -244,8 +324,9 @@ function computeScoresForKind(
       config.maxScore,
       totalLines,
       applicable,
-      correlationAmplifiers,
       mutateImpact,
+      kind === "drift",
+      kind === "drift" && SURFACE_SPECIFIC_DRIFT_CATEGORIES.has(cat),
     );
 
     // Delta is only meaningful when the previous scores were computed under
@@ -264,50 +345,36 @@ function computeScoresForKind(
 
   const scores = categoryScores as unknown as CategoryScores;
 
-  let compositeScore = 0;
-  let maxCompositeScore = 0;
+  // Composite is the GEOMETRIC MEAN of per-category health (score/maxScore)
+  // over applicable categories, scaled to /100. Multiplicative (not additive)
+  // so one fully-collapsed category drags the headline down hard — there is no
+  // additive floor near 75 anymore. Each category's health is floored at
+  // HEALTH_FLOOR so a single zero category can't hard-zero the whole composite
+  // (it still collapses it, but the other categories remain legible).
+  //
+  // Computed via logs for numerical stability:
+  //   composite = 100 × exp( (Σ ln(max(HEALTH_FLOOR, health))) / appCount )
+  let logSum = 0;
+  let appCount = 0;
   for (const cat of ALL_CATEGORIES) {
     const s = scores[cat];
-    if (s.applicable) {
-      compositeScore += s.score;
-      maxCompositeScore += s.maxScore;
-    }
+    if (!s.applicable) continue;
+    appCount++;
+    const health = s.maxScore > 0 ? s.score / s.maxScore : 0;
+    const clamped = Math.max(0, Math.min(1, health));
+    logSum += Math.log(Math.max(HEALTH_FLOOR, clamped));
   }
 
-  // Drag penalty is drift-identity-specific: architectural and redundancy
-  // are the load-bearing drift categories. Hygiene has no equivalent
-  // load-bearing notion — every hygiene category is equally "generic
-  // codebase hygiene" — so drag only applies to drift.
-  if (kind === "drift") {
-    const DRAG_CATEGORIES: ScoringCategory[] = ["architecturalConsistency", "redundancy"];
-    const DRAG_THRESHOLD = 0.50; // below 50% health triggers drag
-    const DRAG_MAX_PENALTY = 0.10; // up to 10% composite penalty per category
-
-    for (const cat of DRAG_CATEGORIES) {
-      const s = scores[cat];
-      if (!s.applicable || s.maxScore === 0) continue;
-      const healthPct = s.score / s.maxScore;
-      if (healthPct < DRAG_THRESHOLD) {
-        const penaltyFraction = (DRAG_THRESHOLD - healthPct) / DRAG_THRESHOLD;
-        const penalty = DRAG_MAX_PENALTY * penaltyFraction * maxCompositeScore;
-        compositeScore -= penalty;
-      }
-    }
+  let compositeScore: number;
+  if (appCount === 0) {
+    compositeScore = 100;
+  } else {
+    compositeScore = 100 * Math.exp(logSum / appCount);
   }
+  compositeScore = Math.max(0, Math.min(100, Math.round(compositeScore * 10) / 10));
 
-  compositeScore = Math.max(0, Math.round(compositeScore * 10) / 10);
-
-  // Normalize the composite to a 0-100 scale for presentation. Internal
-  // scoring math uses 4 applicable drift categories × 20 = 80 (or 5 × 20
-  // = 100 for hygiene). Users expect "score out of 100" by convention,
-  // so we collapse both tracks onto /100 here. Per-category scores stay
-  // /20 (the bars under the hero) — only the headline is normalized.
-  // Grades read from the percentage anyway (A ≥ 90, B ≥ 75, …) so they
-  // come out identical to the pre-normalization values.
-  if (maxCompositeScore > 0 && maxCompositeScore !== 100) {
-    compositeScore = Math.round((compositeScore / maxCompositeScore) * 1000) / 10;
-    maxCompositeScore = 100;
-  }
+  // Composite is always on a /100 scale (geometric mean of healths × 100).
+  const maxCompositeScore = 100;
 
   return { scores, compositeScore, maxCompositeScore };
 }
@@ -360,20 +427,12 @@ export function computeScores(
     ? [...ctx.languageBreakdown.keys()]
     : ["javascript", "typescript"];
 
-  // Correlation amplifier uses the full finding set regardless of kind —
-  // if a file has both a drift finding and a hygiene finding, the file is
-  // genuinely "hot" and each finding gets a bump. This is a deliberate
-  // cross-kind signal: multiple independent flags on the same file is a
-  // real correlation whether the flags are drift or hygiene.
-  const correlationAmplifiers = computeCorrelationAmplifier(findings);
-
   // Drift track: populates consistencyImpact on drift findings when
   // mutateImpact is true. Composite is the Vibe Drift Score.
   const drift = computeScoresForKind(
     findings,
     totalLines,
     projectLanguages,
-    correlationAmplifiers,
     "drift",
     mutateImpact,
     previousScores,
@@ -386,7 +445,6 @@ export function computeScores(
     findings,
     totalLines,
     projectLanguages,
-    correlationAmplifiers,
     "hygiene",
     false,
     options.previousHygieneScores,
@@ -469,13 +527,27 @@ function computePerFileScores(
 
   for (const [, entry] of perFile) {
     if (entry.findings.length === 0) continue;
-    let penalty = 0;
+    // Per-file score uses the same detector-level noisy-OR as the category
+    // score, scoped to this file's findings: health = Π over detectors of
+    // (1 - damage). The file appears in each detector's findings, so it IS the
+    // deviator on that axis — its per-detector deviation is full (1.0), bounded
+    // by MAX_DETECTOR_DAMAGE so one finding can't zero the file. This keeps
+    // per-file scores on the same 0-100 scale and meaning as the headline.
+    const byDetector = new Map<string, Finding[]>();
     for (const f of entry.findings) {
-      penalty += SEVERITY_WEIGHTS[f.severity] * (f.confidence ?? 1.0);
+      const g = byDetector.get(f.analyzerId);
+      if (g) g.push(f);
+      else byDetector.set(f.analyzerId, [f]);
     }
-    // Exponential decay per file too
-    const k = Math.LN2 / 5; // 5 weighted points = 50 score
-    entry.score = Math.max(0, Math.round(100 * Math.exp(-k * penalty)));
+    let survival = 1;
+    for (const [, group] of byDetector) {
+      const damage = Math.min(
+        MAX_DETECTOR_DAMAGE,
+        groupSeverityDamage(group) * groupConfidence(group) * groupImportance(group),
+      );
+      survival *= 1 - damage;
+    }
+    entry.score = Math.max(0, Math.round(100 * survival));
   }
 
   return perFile;

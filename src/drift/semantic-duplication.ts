@@ -125,6 +125,41 @@ export const semanticDuplication: DriftDetector = {
     const pairs = dedupePairs(findDuplicatePairs(indexed));
     if (pairs.length === 0) return [];
 
+    // Union-find over duplicate functions → connected duplicate groups. The
+    // largest group (cluster) a function belongs to is its blast radius: a body
+    // copied across many files is a much stronger drift signal than an isolated
+    // pair. Keyed by file:name so the same logical function is one node.
+    const fnKey = (f: ExtractedFunction): string => `${f.file}::${f.name}::${f.line}`;
+    const parent = new Map<string, string>();
+    const find = (x: string): string => {
+      let root = x;
+      while (parent.get(root) !== root) root = parent.get(root)!;
+      // Path compression.
+      let cur = x;
+      while (parent.get(cur) !== root) {
+        const next = parent.get(cur)!;
+        parent.set(cur, root);
+        cur = next;
+      }
+      return root;
+    };
+    const union = (a: string, b: string): void => {
+      if (!parent.has(a)) parent.set(a, a);
+      if (!parent.has(b)) parent.set(b, b);
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    for (const p of pairs) {
+      union(fnKey(p.a.fn), fnKey(p.b.fn));
+    }
+    const clusterSize = new Map<string, number>();
+    for (const node of parent.keys()) {
+      const root = find(node);
+      clusterSize.set(root, (clusterSize.get(root) ?? 0) + 1);
+    }
+    const sizeOf = (f: ExtractedFunction): number => clusterSize.get(find(fnKey(f))) ?? 1;
+
     // Group pairs by directory — the directory that owns the higher-numbered
     // duplicate is where we attribute the drift.
     const byDir = new Map<string, DuplicatePair[]>();
@@ -163,17 +198,47 @@ export const semanticDuplication: DriftDetector = {
       }
       if (deviating.length === 0) continue;
 
+      // Grade severity by DUPLICATE STRENGTH, not file count: the strongest
+      // similarity in the directory (maxSim) and the largest duplicate cluster
+      // any of its functions belongs to (clusterSize). A near-identical body
+      // repeated 3+ times is a confident error; barely-over-threshold isolated
+      // pairs register only faintly.
+      let maxSim = 0;
+      let clusterSize = 0;
+      for (const p of dirPairs) {
+        if (p.similarity > maxSim) maxSim = p.similarity;
+        for (const fn of [p.a.fn, p.b.fn]) {
+          if (directoryOf(fn.file) !== dir) continue;
+          const sz = sizeOf(fn);
+          if (sz > clusterSize) clusterSize = sz;
+        }
+      }
+      let severity: DriftFinding["severity"];
+      if (maxSim >= 0.95 && clusterSize >= 3) severity = "error";
+      else if (maxSim >= 0.85 || clusterSize >= 3) severity = "warning";
+      else severity = "info";
+
+      // Semantic duplication is a COUNT phenomenon, not a dominance vote. Mark
+      // it countBased so the scoring engine size-normalizes it per KLOC
+      // (driftSignal is dropped by driftFindingToFinding) instead of reading a
+      // fabricated consistencyScore as a deviation rate. consistencyScore is
+      // kept only as a report value: the share of the dir's duplicate files
+      // that remain on a unique body is not measurable here, so we report the
+      // strongest match found as the inverse consistency.
+      const consistencyScore = Math.round((1 - maxSim) * 100);
+
       findings.push({
         detector: "semantic-duplication",
         subCategory: "function_body",
         driftCategory: "semantic_duplication",
-        severity: deviating.length >= 5 ? "error" : "warning",
+        severity,
         confidence: 0.85,
+        countBased: true,
         finding: `${dir}/: ${dirPairs.length} pair(s) of semantically duplicate functions detected (MinHash + LCS verified)`,
         dominantPattern: "unique function bodies",
         dominantCount: 0,
         totalRelevantFiles: deviating.length,
-        consistencyScore: Math.max(0, 100 - dirPairs.length * 10),
+        consistencyScore,
         deviatingFiles: deviating.slice(0, 10),
         // Semantic-duplication's "dominant" is "unique function bodies" —
         // an abstract property, not a set of reference files. Leave empty.

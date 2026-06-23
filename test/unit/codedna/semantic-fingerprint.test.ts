@@ -259,15 +259,22 @@ describe("fingerprintFindings — payload caps for huge duplicate groups", () =>
     expect(f.metadata?.truncatedLocations).toBe(80);
   });
 
-  it("scoring inputs (severity, confidence) are unchanged regardless of group size", () => {
-    // Critical correctness test: scoring uses severity × confidence per
-    // FINDING. Capping locations / message must not change either.
+  it("confidence is always 1.0 regardless of group size (exact hash match is certain)", () => {
     const small = fingerprintFindings([bigGroup(3)])[0];
     const huge = fingerprintFindings([bigGroup(120)])[0];
-    expect(small.severity).toBe("error");
-    expect(huge.severity).toBe("error");
     expect(small.confidence).toBe(1.0);
     expect(huge.confidence).toBe(1.0);
+  });
+
+  it("severity is graded by blast radius: info for 2-member, warning for 3-4, error for >=5", () => {
+    // Severity now scales with duplicate-group size so a 2-site exact dup
+    // (the common case on a normal repo) is info, not error. Only genuinely
+    // widespread copy-paste (>=5 sites) reaches the error ceiling.
+    expect(fingerprintFindings([bigGroup(2)])[0].severity).toBe("info");
+    expect(fingerprintFindings([bigGroup(3)])[0].severity).toBe("warning");
+    expect(fingerprintFindings([bigGroup(4)])[0].severity).toBe("warning");
+    expect(fingerprintFindings([bigGroup(5)])[0].severity).toBe("error");
+    expect(fingerprintFindings([bigGroup(120)])[0].severity).toBe("error");
   });
 
   it("payload size of a 200-member group finding stays under 4KB", () => {

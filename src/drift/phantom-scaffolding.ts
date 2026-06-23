@@ -115,12 +115,21 @@ export const phantomScaffolding: DriftDetector = {
     }
     const routedHandlers = new Set(allRoutes.map((r) => r.handlerName));
 
-    // Find phantom exports: CRUD-like name + zero incoming imports + not routed
+    // Find phantom exports: CRUD-like name + zero incoming imports + not routed.
+    // We also tally the TOTAL CRUD-like export population per directory (the
+    // candidates we judge) so severity can be graded by the directory's dead
+    // SHARE rather than the raw phantom count.
     interface Phantom { file: string; line: number; name: string; }
     const phantoms: Phantom[] = [];
+    const crudByDir = new Map<string, number>();
     for (const exports of graph.exportsByFile.values()) {
       for (const ex of exports) {
         if (!isCrudLike(ex.name)) continue;
+        // Count every CRUD-like export as part of the directory population —
+        // routed/wired ones are the "dominant" wired-up pattern phantoms deviate from.
+        const exDir = directoryOf(ex.file);
+        crudByDir.set(exDir, (crudByDir.get(exDir) ?? 0) + 1);
+
         if (routedHandlers.has(ex.name)) continue;
 
         const incoming = graph.incomingCount.get(ex.file) ?? 0;
@@ -169,17 +178,43 @@ export const phantomScaffolding: DriftDetector = {
         });
       }
 
+      // Phantom scaffolding is a COUNT phenomenon, not a dominance vote. We
+      // mark the finding countBased so the scoring engine size-normalizes it
+      // per KLOC (driftSignal is dropped by driftFindingToFinding) instead of
+      // reading consistencyScore as a deviation rate.
+      //
+      // Severity is graded by the directory's DEAD SHARE — the fraction of its
+      // CRUD-like exports that are phantom — when that population is known.
+      // This keeps a maintained repo with scattered single phantoms at
+      // info/warning rather than crossing an absolute-count error threshold.
+      const totalCrud = crudByDir.get(dir) ?? 0;
+      const wiredUp = Math.max(0, totalCrud - dirPhantoms.length);
+      let severity: DriftFinding["severity"];
+      if (totalCrud > 0) {
+        const deadShare = dirPhantoms.length / totalCrud;
+        severity = deadShare >= 0.5 ? "error" : deadShare >= 0.2 ? "warning" : "info";
+      } else {
+        // Population unknown — grade gently off count, decoupled from the old
+        // >=5 error threshold so big maintained repos don't saturate to error.
+        severity =
+          dirPhantoms.length >= 8 ? "error" : dirPhantoms.length >= 3 ? "warning" : "info";
+      }
+      // consistencyScore no longer drives the composite (countBased drops
+      // driftSignal); it is a real report fraction when the population is known.
+      const consistencyScore = totalCrud > 0 ? Math.round((wiredUp / totalCrud) * 100) : 100;
+
       findings.push({
         detector: "phantom-scaffolding",
         subCategory: "unrouted_handler",
         driftCategory: "phantom_scaffolding",
-        severity: dirPhantoms.length >= 5 ? "error" : "warning",
+        severity,
         confidence: 0.8,
+        countBased: true,
         finding: `${dir}/: ${dirPhantoms.length} phantom export(s) — CRUD-named functions never imported and never routed`,
         dominantPattern: "wired-up exports",
-        dominantCount: 0,
-        totalRelevantFiles: byFile.size,
-        consistencyScore: Math.max(0, 100 - dirPhantoms.length * 10),
+        dominantCount: wiredUp,
+        totalRelevantFiles: totalCrud > 0 ? totalCrud : byFile.size,
+        consistencyScore,
         deviatingFiles: deviating.slice(0, 10),
         // Phantom-scaffolding's "dominant" pattern is "wired-up exports" —
         // an abstract concept, not a set of specific files. No meaningful

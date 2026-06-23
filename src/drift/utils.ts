@@ -26,7 +26,7 @@
  */
 
 import { getLineNumber } from "../utils/text.js";
-import type { DeviatingFile, DriftContext, Evidence } from "./types.js";
+import type { DeviatingFile, DriftCategory, DriftContext, DriftFinding, Evidence } from "./types.js";
 
 export function getLineContent(content: string, lineNum: number): string {
   return (content.split("\n")[lineNum - 1] ?? "").trim();
@@ -185,6 +185,54 @@ export function entropyGate(
     normalizedEntropy,
   };
 }
+
+/** Minimum files exhibiting an axis before "no dominant pattern" counts as
+ * genuine chaos rather than insufficient data (a 1-vs-1 split is not drift). */
+const MIN_NO_CONVENTION_FILES = 5;
+
+/**
+ * Build a single category-level "no convention" drift finding for an axis that
+ * has NO dominant pattern (entropy gate decided `no_convention`).
+ *
+ * For a self-consistency score, "no dominant pattern" is the FLOOR of
+ * consistency, not the absence of a signal — a codebase whose async/import/
+ * export style is evenly split has drifted maximally on that axis. So we emit
+ * one category-level finding whose deviation IS the normalized entropy
+ * (`consistencyScore = (1 - H) * 100` → engine deviation = H). We name no
+ * specific deviating files (there is no majority to deviate from), and severity
+ * scales with how chaotic the split is. Returns [] when the sample is too small
+ * to distinguish chaos from sparse data.
+ */
+export function noConventionFinding(opts: {
+  detector: string;
+  subCategory: string;
+  driftCategory: DriftCategory;
+  axisLabel: string;
+  totalFiles: number;
+  gate: EntropyGateResult;
+  recommendation: string;
+}): DriftFinding[] {
+  const { detector, subCategory, driftCategory, axisLabel, totalFiles, gate, recommendation } = opts;
+  if (totalFiles < MIN_NO_CONVENTION_FILES) return [];
+  return [
+    {
+      detector,
+      subCategory,
+      driftCategory,
+      severity: gate.normalizedEntropy >= 0.95 ? "warning" : "info",
+      confidence: gate.confidence,
+      finding: `No dominant ${axisLabel} across ${totalFiles} files — patterns are mixed with no convention`,
+      dominantPattern: "no dominant convention",
+      dominantCount: 0,
+      totalRelevantFiles: totalFiles,
+      consistencyScore: Math.round((1 - gate.normalizedEntropy) * 100),
+      deviatingFiles: [],
+      dominantFiles: [],
+      recommendation,
+    },
+  ];
+}
+
 
 // ─── Temporal weighting ─────────────────────────────────────────────
 
@@ -597,6 +645,9 @@ export function buildDirectoryScopedVote<T extends string>(
     // pushed a minority into dominance) or disagrees (divergence
     // should be reported). Skip the dominance threshold in that case.
     // Without a seed, require the usual strong-majority threshold.
+    // (n-awareness is applied as a sample-confidence damage weight in the
+    // scoring engine, not as a vote-level cutoff — a hard cutoff here would
+    // fight temporal weighting and explicit threshold overrides.)
     if (seededPattern === undefined && dominantShare < dominanceThreshold) continue;
 
     const deviators = collectDeviatingFiles(distribution, dom.dominant, group, patternNames);

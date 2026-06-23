@@ -5,16 +5,19 @@ import type { Finding } from "../../../src/core/types.js";
 describe("scoring engine", () => {
   it("gives max score with no findings", () => {
     const { scores, compositeScore, maxCompositeScore } = computeScores([], 1000);
+    // Core categories always have input from code → measured-clean at 20 when empty.
     expect(scores.architecturalConsistency.score).toBe(20);
     expect(scores.redundancy.score).toBe(20);
     // dependencyHealth has ONLY hygiene analyzers now — when measured on the
-    // drift track, it has no applicable analyzers and reports score: 0,
-    // applicable: false. It is excluded from the drift composite entirely.
+    // drift track, it has no applicable analyzers and reports applicable: false.
     expect(scores.dependencyHealth.applicable).toBe(false);
-    expect(scores.securityPosture.score).toBe(20);
-    expect(scores.intentClarity.score).toBe(20);
-    // Drift composite excludes dependencyHealth (hygiene-only), so 4 × 20 = 80
-    // raw — then normalized to /100 for presentation. Perfect = 100/100.
+    // Surface-specific categories with no findings are NOT-MEASURED (no evidence
+    // of a security surface / intent signal), so they are excluded from the
+    // composite rather than credited a free 20/20.
+    expect(scores.securityPosture.applicable).toBe(false);
+    expect(scores.intentClarity.applicable).toBe(false);
+    // Composite is the geometric mean of the MEASURED categories' health × 100.
+    // With arch and redundancy at full health and the rest excluded, it is 100.
     expect(compositeScore).toBe(100);
     expect(maxCompositeScore).toBe(100);
   });
@@ -42,12 +45,29 @@ describe("scoring engine", () => {
     expect(scores.architecturalConsistency.score).toBeLessThan(20);
   });
 
-  it("all applicable drift categories are unlocked", () => {
-    const { scores } = computeScores([], 1000);
-    expect(scores.securityPosture.locked).toBe(false);
-    expect(scores.intentClarity.locked).toBe(false);
-    expect(scores.securityPosture.applicable).toBe(true);
-    expect(scores.intentClarity.applicable).toBe(true);
+  it("surface-specific categories are not-measured when empty, measured+unlocked when they fire", () => {
+    // With no findings, security/intent have no surface evidence → not-measured.
+    const empty = computeScores([], 1000);
+    expect(empty.scores.securityPosture.applicable).toBe(false);
+    expect(empty.scores.intentClarity.applicable).toBe(false);
+
+    // A security drift finding means the surface exists → measured + unlocked.
+    const withSecurity = computeScores(
+      [
+        {
+          analyzerId: "drift-security_posture",
+          severity: "warning",
+          confidence: 0.9,
+          message: "auth inconsistency",
+          locations: [{ file: "src/routes/a.ts", line: 1 }],
+          tags: ["drift"],
+          driftSignal: { consistencyScore: 60, dominantCount: 6, totalRelevantFiles: 10 },
+        },
+      ],
+      1000,
+    );
+    expect(withSecurity.scores.securityPosture.applicable).toBe(true);
+    expect(withSecurity.scores.securityPosture.locked).toBe(false);
   });
 
   describe("drift vs hygiene separation", () => {
@@ -140,13 +160,13 @@ describe("scoring engine", () => {
       expect(hygieneScores.dependencyHealth.score).toBeLessThan(20);
     });
 
-    it("max drift composite is /100 (4 × 20 = 80 internal, normalized)", () => {
+    it("max drift composite is /100 (geometric mean of category healths × 100)", () => {
       const { maxCompositeScore, maxHygieneScore } = computeScores([], 1000);
-      // Drift internal max is 80 (4 applicable categories × 20). The engine
-      // normalizes to 100 at the boundary so the headline displays /100,
-      // matching user expectations from every other code-quality tool.
+      // The composite is the geometric mean of per-category health (score /
+      // maxScore) scaled to /100, so the headline is always out of 100
+      // regardless of how many categories are applicable on this track.
       expect(maxCompositeScore).toBe(100);
-      // Hygiene covers all 5 categories — already /100 internally.
+      // Hygiene composite is on the same /100 scale.
       expect(maxHygieneScore).toBe(100);
     });
   });

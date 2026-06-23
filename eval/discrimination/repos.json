@@ -1,0 +1,37 @@
+[
+  {
+    "label": "clean-lib (fixture)",
+    "kind": "clean",
+    "source": { "path": "fixtures/clean-lib" }
+  },
+  {
+    "label": "sindresorhus/ky",
+    "kind": "clean",
+    "source": { "git": "https://github.com/sindresorhus/ky" }
+  },
+  {
+    "label": "sindresorhus/p-map",
+    "kind": "clean",
+    "source": { "git": "https://github.com/sindresorhus/p-map" }
+  },
+  {
+    "label": "sindresorhus/p-queue",
+    "kind": "clean",
+    "source": { "git": "https://github.com/sindresorhus/p-queue" }
+  },
+  {
+    "label": "vibe-drift (self)",
+    "kind": "mid",
+    "source": { "path": "/Users/samiahmadkhan/workspace/Vibestack/vibe-drift" }
+  },
+  {
+    "label": "messy-saas (fixture)",
+    "kind": "messy",
+    "source": { "path": "fixtures/messy-saas" }
+  },
+  {
+    "label": "nestjs-microservices-starter (real)",
+    "kind": "messy",
+    "source": { "git": "https://github.com/LucasAnd1/nestjs-microservices-starter-template" }
+  }
+]

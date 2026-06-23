@@ -1,0 +1,12 @@
+{
+  "name": "clean-lib",
+  "version": "1.0.0",
+  "description": "Pristine, internally consistent TypeScript library fixture for score discrimination.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "license": "MIT"
+}

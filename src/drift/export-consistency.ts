@@ -17,7 +17,7 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile, Evidence } from "./types.js";
-import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, pickIntentHint } from "./utils.js";
+import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, noConventionFinding, pickIntentHint } from "./utils.js";
 
 type ExportStyle = "default_export" | "named_only";
 
@@ -85,24 +85,23 @@ export const exportConsistency: DriftDetector = {
       patterns: [{ pattern: p.style, evidence: p.evidence }],
     }));
 
-    // Project-level entropy gate (L1.5-A1)
+    // Project-level entropy gate (L1.5-A1). When entropy is high there is NO
+    // dominant pattern — for a self-consistency score that is the FLOOR of
+    // consistency, so we emit one category-level "no convention" finding whose
+    // deviation IS the entropy (see noConventionFinding), guarded by a minimum
+    // sample so a tiny split reads as insufficient data, not chaos.
     const projectDist = buildPatternDistribution(profiles);
     const gate = entropyGate(projectDist);
     if (gate.decision === "no_convention") {
-      return [{
+      return noConventionFinding({
         detector: "export_style",
         subCategory: "export_style",
         driftCategory: "export_style",
-        severity: "info",
-        confidence: gate.confidence,
-        finding: `No dominant export style (entropy-normalized ${gate.normalizedEntropy.toFixed(2)}). Pick default or named-only and standardize.`,
-        dominantPattern: "no convention",
-        dominantCount: 0,
-        totalRelevantFiles: profiles.length,
-        consistencyScore: Math.round((1 - gate.normalizedEntropy) * 100),
-        deviatingFiles: [],
-        recommendation: "Project has no established export convention. Named exports enable tree-shaking; default exports simplify imports — pick one.",
-      }];
+        axisLabel: "export style",
+        totalFiles: profiles.length,
+        gate,
+        recommendation: "Establish a single export convention (prefer named exports for tree-shaking) and align files to it.",
+      });
     }
 
     const votes = buildDirectoryScopedVote(profiles, STYLE_NAMES, {

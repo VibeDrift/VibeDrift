@@ -1,6 +1,7 @@
 import type { AnalysisContext, Finding } from "../core/types.js";
 import type { DriftContext, DriftFinding, DriftDetector, DriftCategory } from "./types.js";
 import { DRIFT_WEIGHTS } from "./types.js";
+import { categoryHealth } from "../scoring/engine.js";
 import { architecturalContradiction } from "./architectural-contradiction.js";
 import { conventionOscillation } from "./convention-oscillation.js";
 import { securityConsistency } from "./security-consistency.js";
@@ -97,16 +98,18 @@ export function runDriftDetection(ctx: AnalysisContext): {
   // code does Y." Uses the hint collection from AnalysisContext.
   const allDrift = enrichWithIntentDivergence(driftCtx, pivotEnriched);
 
-  // Compute drift-specific scores
-  const driftScores = computeDriftScores(allDrift);
-
-  // Convert to standard Finding format for the existing pipeline
+  // Convert to standard Finding format FIRST, so the per-category report bars
+  // are computed from the SAME detector-level health the scoring engine uses
+  // (a faithful decomposition of the composite, not a second formula).
   const findings = allDrift.map(driftFindingToFinding);
+
+  // Per-category report bars — the 13-category breakdown for HTML/CSV/DOCX exports.
+  const driftScores = computeDriftScores(findings, ctx.totalLines);
 
   return { findings, driftFindings: allDrift, driftScores };
 }
 
-function computeDriftScores(findings: DriftFinding[]): DriftScores {
+function computeDriftScores(findings: Finding[], totalLines: number): DriftScores {
   const categories: DriftCategory[] = [
     "architectural_consistency",
     "security_posture",
@@ -123,46 +126,27 @@ function computeDriftScores(findings: DriftFinding[]): DriftScores {
     "test_structure_consistency",
   ];
 
+  const klocCount = Math.max(1, totalLines / 1000);
   const scores: Record<string, { score: number; maxScore: number; findings: number }> = {};
 
   for (const cat of categories) {
-    const catFindings = findings.filter((f) => f.driftCategory === cat);
     const weight = DRIFT_WEIGHTS[cat];
-
-    if (catFindings.length === 0) {
-      scores[cat] = { score: weight, maxScore: weight, findings: 0 };
-      continue;
-    }
-
-    // Use consistency scores from findings
-    // Average consistency score of all findings in this category
-    const avgConsistency = catFindings.reduce((sum, f) => sum + f.consistencyScore, 0) / catFindings.length;
-
-    // Scale: consistency 100% = full score, consistency 50% = half score
-    // But also penalize by severity: errors reduce score more
-    let severityPenalty = 0;
-    for (const f of catFindings) {
-      if (f.severity === "error") severityPenalty += 3;
-      else if (f.severity === "warning") severityPenalty += 1.5;
-      else severityPenalty += 0.5;
-    }
-
-    // Base score from consistency, reduced by severity penalty
-    const rawScore = (avgConsistency / 100) * weight;
-    const penalty = Math.min(rawScore, severityPenalty * (weight / 20));
-    const score = Math.max(0, Math.round((rawScore - penalty) * 10) / 10);
-
-    scores[cat] = { score, maxScore: weight, findings: catFindings.length };
+    // Each per-category bar is computed with the SAME detector-level noisy-OR
+    // health the scoring engine uses for the composite (categoryHealth). A
+    // drift category maps to one detector (`drift-<cat>`), so its bar is that
+    // detector's health × its display weight — a faithful decomposition of the
+    // composite (the 5-bucket health is the product of its detectors' (1-damage),
+    // and each bar shows one of those (1-damage) components). No second formula.
+    const catFindings = findings.filter((f) => f.analyzerId === `drift-${cat}`);
+    const health = categoryHealth(catFindings, true, klocCount);
+    scores[cat] = {
+      score: Math.round(weight * health * 10) / 10,
+      maxScore: weight,
+      findings: catFindings.length,
+    };
   }
 
-  // Dual-engine collapse (Phase 0): the composite/grade are NOT computed
-  // here anymore. The previous linear `(avgConsistency/100)*weight − penalty`
-  // formula was a SECOND scoring engine that disagreed with the authoritative
-  // decay-based engine in src/scoring/engine.ts. There is now exactly one
-  // composite — the engine's `compositeScore`, which scores every drift-kind
-  // finding (these detectors + Code DNA + ML) through one formula. This object
-  // is purely the per-drift-category breakdown for report bars.
-  // The loop above populates every DriftCategory key, so the cast is safe.
+  // The loop populates every DriftCategory key, so the cast is safe.
   return scores as unknown as DriftScores;
 }
 
@@ -241,6 +225,24 @@ export function driftFindingToFinding(d: DriftFinding): Finding {
     severity: d.severity,
     confidence: d.confidence,
     message: `DRIFT: ${d.finding}`,
+    // Carry the dominance ratio so the scoring engine can weight by HOW
+    // inconsistent this category is (deviation fraction = 1 - consistencyScore/100),
+    // not merely whether this detector fired. Previously dropped here (the
+    // single most drift-relevant computed quantity never reached scoring).
+    //
+    // EXCEPT for count-based detectors (phantom scaffolding, semantic duplication):
+    // they have no real dominance ratio, so we omit driftSignal and let the engine
+    // size-normalize them through its count-based density branch instead of reading
+    // a fabricated consistencyScore as a deviation rate.
+    ...(d.countBased
+      ? {}
+      : {
+          driftSignal: {
+            consistencyScore: d.consistencyScore,
+            dominantCount: d.dominantCount,
+            totalRelevantFiles: d.totalRelevantFiles,
+          },
+        }),
     locations: d.deviatingFiles.slice(0, 15).map((df) => ({
       file: df.path,
       line: df.evidence[0]?.line,

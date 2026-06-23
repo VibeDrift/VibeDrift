@@ -32,4 +32,37 @@ describe("export-consistency detector", () => {
     );
     expect(exportConsistency.detect(mkCtx(files))).toHaveLength(0);
   });
+
+  it("emits one entropy-based 'no convention' finding when there is no export convention", () => {
+    // 50/50 split of default vs named across many files → entropy gate returns
+    // no_convention. For a self-consistency score, having NO dominant pattern is
+    // the floor of consistency, so the detector emits ONE category-level finding
+    // whose deviation IS the entropy (consistencyScore low → high deviation),
+    // naming no specific deviating files.
+    const files: DriftFile[] = [];
+    for (let i = 0; i < 6; i++) {
+      files.push(file(`src/named${i}.ts`, `export const v${i} = 1;\nexport function f${i}() {}\n`));
+    }
+    for (let i = 0; i < 6; i++) {
+      files.push(file(`src/def${i}.ts`, `function thing${i}() {}\nexport default thing${i};\n`));
+    }
+    const findings = exportConsistency.detect(mkCtx(files));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].dominantPattern).toBe("no dominant convention");
+    expect(findings[0].deviatingFiles).toHaveLength(0);
+    // perfect 50/50 split → normalized entropy 1.0 → consistencyScore 0 → max deviation
+    expect(findings[0].consistencyScore).toBe(0);
+    expect(findings[0].severity).toBe("warning");
+  });
+
+  it("emits no 'no convention' finding when the sample is too small to distinguish chaos from sparse data", () => {
+    // 1-vs-1 split: high entropy but below the minimum sample — insufficient
+    // data, not chaos, so no finding.
+    const files: DriftFile[] = [
+      file("src/a.ts", `export const a = 1;\n`),
+      file("src/b.ts", `function t() {}\nexport default t;\n`),
+      file("src/c.ts", `export const c = 1;\n`),
+    ];
+    expect(exportConsistency.detect(mkCtx(files))).toHaveLength(0);
+  });
 });

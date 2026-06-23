@@ -15,7 +15,7 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile, Evidence } from "./types.js";
-import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, pickIntentHint } from "./utils.js";
+import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, noConventionFinding, pickIntentHint } from "./utils.js";
 
 type ImportPathStyle = "relative" | "alias";
 
@@ -100,24 +100,23 @@ export const importConsistency: DriftDetector = {
       patterns: [{ pattern: p.pathStyle!, evidence: p.evidence }],
     }));
 
-    // Project-level entropy gate (L1.5-A1)
+    // Entropy gate (L1.5-A1). High entropy = no dominant import-path convention.
+    // For a self-consistency score that is the FLOOR of consistency, so emit one
+    // category-level "no convention" finding whose deviation IS the entropy
+    // (guarded by a minimum sample so a tiny split reads as insufficient data,
+    // not chaos).
     const projectDist = buildPatternDistribution(profiles);
     const gate = entropyGate(projectDist);
     if (gate.decision === "no_convention") {
-      return [{
+      return noConventionFinding({
         detector: "import_style",
         subCategory: "path_style",
         driftCategory: "import_style",
-        severity: "info",
-        confidence: gate.confidence,
-        finding: `No dominant import path style (entropy-normalized ${gate.normalizedEntropy.toFixed(2)}). Pick relative or alias and standardize.`,
-        dominantPattern: "no convention",
-        dominantCount: 0,
-        totalRelevantFiles: profiles.length,
-        consistencyScore: Math.round((1 - gate.normalizedEntropy) * 100),
-        deviatingFiles: [],
-        recommendation: "Project has no established import path convention. Pick path aliases (@/lib) or relative paths and migrate.",
-      }];
+        axisLabel: "import path style",
+        totalFiles: profiles.length,
+        gate,
+        recommendation: "Establish a single import-path convention (alias or relative) and align files to it.",
+      });
     }
 
     const votes = buildDirectoryScopedVote(profiles, PATH_STYLE_NAMES, {

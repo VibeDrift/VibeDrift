@@ -268,15 +268,23 @@ export function findSequenceSimilarities(
 }
 
 export function sequenceFindings(similarities: SequenceSimilarity[]): Finding[] {
-  return similarities.map((sim) => ({
-    analyzerId: "codedna-opseq",
-    severity: "warning" as const,
-    confidence: Math.min(sim.similarity, 0.95),
-    message: `Near-duplicate operation sequence: ${sim.functionA.name}() and ${sim.functionB.name}() share ${Math.round(sim.similarity * 100)}% of their operation flow`,
-    locations: [
-      { file: sim.functionA.relativePath, line: sim.functionA.line, snippet: sim.functionA.name + "()" },
-      { file: sim.functionB.relativePath, line: sim.functionB.line, snippet: sim.functionB.name + "()" },
-    ],
-    tags: ["codedna", "duplicate", "opseq"],
-  }));
+  return similarities.map((sim) => {
+    // Grade severity by match strength: a long, high-LCS sequence echo is a
+    // genuine drift signal (warning); a short or borderline-similarity match
+    // is likely incidental and registers only faintly (info). Confidence
+    // stays graded by similarity as before.
+    const strong = sim.similarity >= 0.92 && sim.lcsLength >= 6;
+    const severity: Finding["severity"] = strong ? "warning" : "info";
+    return {
+      analyzerId: "codedna-opseq",
+      severity,
+      confidence: Math.min(sim.similarity, 0.95),
+      message: `Near-duplicate operation sequence: ${sim.functionA.name}() and ${sim.functionB.name}() share ${Math.round(sim.similarity * 100)}% of their operation flow`,
+      locations: [
+        { file: sim.functionA.relativePath, line: sim.functionA.line, snippet: sim.functionA.name + "()" },
+        { file: sim.functionB.relativePath, line: sim.functionB.line, snippet: sim.functionB.name + "()" },
+      ],
+      tags: ["codedna", "duplicate", "opseq"],
+    };
+  });
 }

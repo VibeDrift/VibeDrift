@@ -257,6 +257,24 @@ export interface Finding {
    */
   consistencyImpact?: number;
   /**
+   * Drift signal carried over from the originating DriftFinding so the
+   * scoring engine can weight a finding by HOW inconsistent its category
+   * is (the dominance ratio) rather than merely whether a detector fired.
+   * The deviation fraction (`1 - consistencyScore/100`) is the share of
+   * relevant files that drift from the dominant pattern. Absent on
+   * non-drift (static-analyzer) findings. Populated by
+   * `driftFindingToFinding`; consumed by the scoring engine's per-finding
+   * magnitude weight.
+   */
+  driftSignal?: {
+    /** 0-100: (dominantCount / totalRelevantFiles) * 100. */
+    consistencyScore: number;
+    /** Number of files matching the dominant pattern. */
+    dominantCount: number;
+    /** Total files relevant to this drift category. */
+    totalRelevantFiles: number;
+  };
+  /**
    * Structured context that downstream renderers (HTML, terminal, fix-
    * prompt template) use to build the Copy-as-AI-context block and
    * reference the peer baseline this finding deviates from. Populated
