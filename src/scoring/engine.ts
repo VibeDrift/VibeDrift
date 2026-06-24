@@ -39,7 +39,7 @@ import {
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v4";
+export const SCORING_VERSION = "v5";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
@@ -118,6 +118,26 @@ const DEVIATION_FLOOR = 0.05;
 const SAMPLE_FULL_CONFIDENCE = 8;
 /** Keeps one fully-collapsed category from hard-zeroing the geometric-mean composite. */
 const HEALTH_FLOOR = 0.02;
+
+/**
+ * Evidence-weighted credit for a category with NO findings. "No drift found" is
+ * only strong evidence of cleanliness when there was enough code to find drift
+ * in: 50 lines with zero findings says little; 8k lines with zero says a lot.
+ * Without this weighting, every category in a tiny repo returns maxScore and the
+ * composite floats to ~100 purely because the repo is SMALL — a size confound,
+ * not a quality signal (measured: <20-function repos median 100, >500 median 82).
+ * A no-finding category earns NO_FINDING_PRIOR of maxScore at zero evidence and
+ * rises toward full credit as LOC saturates EVIDENCE_SCALE_LINES, so a tiny clean
+ * repo lands near the population mean ("we can't confirm clean") instead of a
+ * free perfect score.
+ */
+// Prior = the elite-corpus mean health (~0.80): a no-finding repo with thin
+// evidence regresses toward the POPULATION MEAN ("typical"), not below it, so a
+// small clean repo lands near the average rather than either a free 100 (the
+// old bug) or an over-corrected penalty beneath larger repos. Refined against
+// the full corpus in Wave 2 Step 4.
+const NO_FINDING_PRIOR = 0.8;
+const EVIDENCE_SCALE_LINES = 2500;
 
 /**
  * Surface-specific drift categories: they only have analyzable input when the
@@ -304,7 +324,14 @@ function computeCategoryScore(
     if (treatEmptyAsNotMeasured) {
       return { score: 0, maxScore, locked: false, findingCount: 0, applicable: false };
     }
-    return { score: maxScore, maxScore, locked: false, findingCount: 0, applicable: true };
+    // Evidence-weighted clean credit (see NO_FINDING_PRIOR): "no drift found"
+    // regresses toward the population prior when there was little code to find
+    // drift in, so a tiny repo no longer earns a free maxScore it lacked the
+    // evidence to justify. Large clean repos (high LOC) still earn ~maxScore.
+    const evidence = 1 - Math.exp(-Math.max(0, totalLines) / EVIDENCE_SCALE_LINES);
+    const frac = NO_FINDING_PRIOR + (1 - NO_FINDING_PRIOR) * evidence;
+    const score = Math.round(maxScore * frac * 10) / 10;
+    return { score, maxScore, locked: false, findingCount: 0, applicable: true };
   }
 
   const klocCount = Math.max(1, totalLines / 1000);

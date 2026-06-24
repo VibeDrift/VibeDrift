@@ -150,16 +150,20 @@ describe("scoring decompression (v4)", () => {
     expect(compositeScore).toBeLessThan(75);
   });
 
-  it("LOC-invariant: same drift density at 2k vs 40k lines scores within +/-3 points", () => {
-    // Drift magnitudes are rate-normalized (deviation fraction), so the drift
-    // composite must not depend on repo size — the sqrt-LOC dampener is gone.
+  it("LOC-invariant: a finding-bearing drift category scores identically at 2k vs 40k lines", () => {
+    // Drift magnitudes are rate-normalized (deviation fraction), so a category
+    // that HAS findings does not depend on repo size — the sqrt-LOC dampener is
+    // gone. (The overall composite now carries a small, bounded size term from
+    // evidence-weighting of NO-finding categories — thin evidence regresses
+    // toward the prior — so we assert the invariance on the finding-bearing
+    // category, which is exactly what density-normalization guarantees.)
     const findings = (): Finding[] => [
       mkDrift("drift-architectural_consistency", "error", 50, "src/a.ts"),
       mkDrift("drift-naming_conventions", "error", 50, "src/b.ts"),
     ];
-    const small = computeScores(findings(), 2000, makeCtx(2000)).compositeScore;
-    const large = computeScores(findings(), 40000, makeCtx(40000)).compositeScore;
-    expect(Math.abs(small - large)).toBeLessThanOrEqual(3);
+    const small = computeScores(findings(), 2000, makeCtx(2000)).scores.architecturalConsistency.score;
+    const large = computeScores(findings(), 40000, makeCtx(40000)).scores.architecturalConsistency.score;
+    expect(small).toBe(large);
   });
 
   it("per-file score uses the v4 noisy-OR: deviator files score below clean, errors below warnings", () => {

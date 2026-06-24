@@ -25,7 +25,11 @@ export function deduplicateFindingsAcrossLayers(findings: Finding[]): Finding[] 
     }
   }
 
-  if (duplicateFindings.length === 0) return findings;
+  // Return a COPY, never the input array itself: callers replace their list in
+  // place via `allFindings.length = 0; allFindings.push(...deduped)`, and if we
+  // returned the same reference that clear would empty the array before the
+  // re-push — silently dropping every finding (composite then floats to ~100).
+  if (duplicateFindings.length === 0) return [...findings];
 
   // Group duplicate findings by the set of files they involve
   const byFilePair = new Map<string, Finding[]>();

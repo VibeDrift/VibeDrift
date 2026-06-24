@@ -3,9 +3,13 @@ import { computeScores, estimateScoreAfterFixes } from "../../../src/scoring/eng
 import type { Finding } from "../../../src/core/types.js";
 
 describe("scoring engine", () => {
-  it("gives max score with no findings", () => {
-    const { scores, compositeScore, maxCompositeScore } = computeScores([], 1000);
-    // Core categories always have input from code → measured-clean at 20 when empty.
+  it("gives max score with no findings (ample evidence)", () => {
+    // No findings + AMPLE evidence (high LOC): "no drift found across a lot of
+    // code" is strong evidence of cleanliness, so core categories reach max.
+    // A thin-evidence repo regresses toward the prior — see the evidence-
+    // weighting test below.
+    const { scores, compositeScore, maxCompositeScore } = computeScores([], 30000);
+    // Core categories always have input from code → measured-clean at 20 when empty (given evidence).
     expect(scores.architecturalConsistency.score).toBe(20);
     expect(scores.redundancy.score).toBe(20);
     // dependencyHealth has ONLY hygiene analyzers now — when measured on the
@@ -20,6 +24,21 @@ describe("scoring engine", () => {
     // With arch and redundancy at full health and the rest excluded, it is 100.
     expect(compositeScore).toBe(100);
     expect(maxCompositeScore).toBe(100);
+  });
+
+  it("evidence-weights no-finding categories: a tiny repo does not earn a free 100", () => {
+    // The size-bias fix: "no drift found" is only strong evidence of cleanliness
+    // when there was enough code to find drift in. A tiny repo with no findings
+    // regresses toward the population prior instead of a free max score, while a
+    // large repo with no findings still earns ~max. Score must rise with evidence.
+    const tiny = computeScores([], 300).compositeScore;
+    const small = computeScores([], 2000).compositeScore;
+    const large = computeScores([], 30000).compositeScore;
+    expect(tiny).toBeLessThan(100);          // no free perfect score on thin evidence
+    expect(tiny).toBeGreaterThan(50);        // regresses toward the prior, not to zero
+    expect(small).toBeGreaterThan(tiny);     // more evidence → higher clean credit
+    expect(large).toBeGreaterThan(small);
+    expect(large).toBe(100);                 // ample evidence → full clean credit
   });
 
   it("reduces score with findings", () => {
@@ -94,9 +113,11 @@ describe("scoring engine", () => {
         mk("error-handling"),
         mk("duplicates"),
       ];
+      // Ample LOC so no-finding drift categories saturate to max (evidence-
+      // weighting is tested separately) — isolates the drift/hygiene split.
       const { compositeScore, maxCompositeScore, hygieneScore, maxHygieneScore } = computeScores(
         findings,
-        1000,
+        30000,
       );
       // Drift composite: pristine — no drift findings fired.
       expect(compositeScore).toBe(maxCompositeScore);
@@ -114,9 +135,11 @@ describe("scoring engine", () => {
         mk("codedna-fingerprint"),
         mk("ml-anomaly"),
       ];
+      // Ample LOC so no-finding hygiene categories saturate to max (evidence-
+      // weighting is tested separately) — isolates the drift/hygiene split.
       const { compositeScore, maxCompositeScore, hygieneScore, maxHygieneScore } = computeScores(
         findings,
-        1000,
+        30000,
       );
       // Drift composite: hurt.
       expect(compositeScore).toBeLessThan(maxCompositeScore);

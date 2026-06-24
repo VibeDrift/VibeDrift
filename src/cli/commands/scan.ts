@@ -8,6 +8,7 @@ import { parseFiles } from "../../utils/ast.js";
 import { createAnalyzerRegistry } from "../../analyzers/index.js";
 import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
 import { computeScores, SCORING_VERSION } from "../../scoring/engine.js";
+import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages } from "../../output/tease.js";
 import { renderTerminalOutput, renderJsonOutput, renderStarCta } from "../../output/terminal.js";
 import { renderHtmlReport } from "../../output/html.js";
@@ -277,6 +278,7 @@ async function runDeepAnalysis(
   spinner: ReturnType<typeof ora> | null,
 ): Promise<{ timings: Record<string, number> }> {
   const { allFindings, ctx, codeDnaResult, driftResult } = pipeline;
+  debug("deep", "entry: Layer 1 findings =", allFindings.length);
   const timings: Record<string, number> = {};
 
   // Run AI deep analysis (Layer 2) — opt-in with --deep
@@ -320,9 +322,11 @@ async function runDeepAnalysis(
   if (options.verbose && dedupedFindings.length < dedupedCount) {
     console.error(`[dedup] Removed ${dedupedCount - dedupedFindings.length} cross-layer duplicate findings`);
   }
+  debug("deep", "after ML merge =", allFindings.length, "→ deduped =", dedupedFindings.length);
   // Replace allFindings with deduplicated version
   allFindings.length = 0;
   allFindings.push(...dedupedFindings);
+  debug("deep", "findings handed to scoring =", allFindings.length);
 
   // mlMediumConfidence now holds only the findings the server-side Claude
   // validation left UNRESOLVED (uncertain, or beyond the per-scan validation
@@ -352,6 +356,7 @@ async function buildScanResult(
   spinner: ReturnType<typeof ora> | null,
 ): Promise<ScanResult> {
   const { ctx, allFindings, driftResult, codeDnaResult } = pipeline;
+  debug("scan", "scoring", allFindings.length, "findings over", ctx.totalLines, "lines");
   const rootDir = ctx.rootDir;
 
   // Load previous scores for delta (both drift and hygiene tracks) + the
@@ -817,6 +822,9 @@ export async function runScan(
   // --local-only gates ALL network calls: auth banner, deep analysis,
   // scan log, fix-prompt synthesis, and the anonymous beacon. The user
   // gets a fully local scan with zero egress.
+  // --verbose implies debug logging (env VIBEDRIFT_DEBUG enables it independently).
+  if (options.verbose) setDebugEnabled(true);
+
   const networkEnabled = !options.localOnly;
   const { bearerToken, apiUrl } = networkEnabled
     ? await resolveAuthAndBanner(options)

@@ -25,7 +25,9 @@ describe("scoring version stamping", () => {
 describe("scoring version delta gating", () => {
   it("computes a numeric delta when the previous version matches the current", () => {
     const prev = mkPrev(15);
-    const result = computeScores([], 1000, undefined, prev, {
+    // Ample LOC so no-finding categories saturate to 20 (evidence-weighting is
+    // tested in engine.test); isolates the version-gated delta computation.
+    const result = computeScores([], 30000, undefined, prev, {
       previousScoringVersion: SCORING_VERSION,
     });
     // pristine current scan = 20/20 on every applicable category; prev was 15; delta should be +5

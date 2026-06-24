@@ -20,9 +20,9 @@
     "source": { "git": "https://github.com/sindresorhus/p-queue" }
   },
   {
-    "label": "vibe-drift (self)",
+    "label": "expressjs/express",
     "kind": "mid",
-    "source": { "path": "/Users/samiahmadkhan/workspace/Vibestack/vibe-drift" }
+    "source": { "git": "https://github.com/expressjs/express" }
   },
   {
     "label": "messy-saas (fixture)",

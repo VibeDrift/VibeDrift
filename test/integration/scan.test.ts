@@ -34,12 +34,16 @@ describe("integration: full scan pipeline", () => {
     expect(compositeScore).toBeLessThan(100);
   });
 
-  it("scans clean JS/TS project with high drift score", async () => {
-    // Drift composite max is /100 (the engine normalizes 4 × 20 = 80 raw to
-    // a percentage at the boundary). A clean project should score ≥ 90.
+  it("scans clean JS/TS project at/above the population mean (no drift drag)", async () => {
+    // This fixture is intentionally tiny (~18 LOC). Under evidence-weighting,
+    // "no drift found" in so little code is weak evidence of cleanliness, so the
+    // score regresses toward the population mean (~80) rather than a free 90+ —
+    // a large clean project still earns ~100 (see the engine unit tests). What
+    // matters here: a clean project carries NO drift drag, so it sits at the
+    // evidence-weighted ceiling for its size, well above a drift-laden project.
     const { compositeScore, maxCompositeScore } = await scanFixture("clean-project");
     expect(maxCompositeScore).toBe(100);
-    expect(compositeScore).toBeGreaterThanOrEqual(90);
+    expect(compositeScore).toBeGreaterThanOrEqual(78);
   });
 
   it("handles empty project gracefully", async () => {
