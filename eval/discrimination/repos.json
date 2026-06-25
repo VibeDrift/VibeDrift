@@ -25,6 +25,31 @@
     "source": { "git": "https://github.com/expressjs/express" }
   },
   {
+    "label": "trpc/trpc (large clean)",
+    "kind": "clean",
+    "source": { "git": "https://github.com/trpc/trpc" }
+  },
+  {
+    "label": "TanStack/query (large clean)",
+    "kind": "clean",
+    "source": { "git": "https://github.com/TanStack/query" }
+  },
+  {
+    "label": "fastify/fastify (mid clean)",
+    "kind": "clean",
+    "source": { "git": "https://github.com/fastify/fastify" }
+  },
+  {
+    "label": "honojs/hono (mid-large clean, held-out)",
+    "kind": "clean",
+    "source": { "git": "https://github.com/honojs/hono" }
+  },
+  {
+    "label": "vuejs/core (large clean, held-out)",
+    "kind": "clean",
+    "source": { "git": "https://github.com/vuejs/core" }
+  },
+  {
     "label": "messy-saas (fixture)",
     "kind": "messy",
     "source": { "path": "fixtures/messy-saas" }

@@ -259,11 +259,14 @@ describe("fingerprintFindings — payload caps for huge duplicate groups", () =>
     expect(f.metadata?.truncatedLocations).toBe(80);
   });
 
-  it("confidence is always 1.0 regardless of group size (exact hash match is certain)", () => {
+  it("confidence is the calibrated structural-dup precision, independent of group size", () => {
+    // 0.95 = measured precision of exact-hash dup groups (98.7%, n=79, 2026-06-24
+    // Claude calibration; see eval/calibration/ + semantic-fingerprint.ts). Group
+    // size does not change how certain an exact normalized-hash match is.
     const small = fingerprintFindings([bigGroup(3)])[0];
     const huge = fingerprintFindings([bigGroup(120)])[0];
-    expect(small.confidence).toBe(1.0);
-    expect(huge.confidence).toBe(1.0);
+    expect(small.confidence).toBe(0.95);
+    expect(huge.confidence).toBe(0.95);
   });
 
   it("severity is graded by blast radius: info for 2-member, warning for 3-4, error for >=5", () => {

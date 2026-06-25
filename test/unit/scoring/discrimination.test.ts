@@ -202,6 +202,105 @@ describe("scoring decompression (v4)", () => {
     expect(small).toBeGreaterThan(large);
   });
 
+  it("granular (v6): composite decreases MONOTONICALLY as drift deepens (deviation + duplication)", () => {
+    // Each level deepens BOTH dominance deviation (lower consistencyScore) AND the
+    // duplicated-function fraction (larger dup group). The composite must strictly
+    // decrease — the score is granular, not compressed/clustered at the top.
+    const atLevel = (consistency: number, dupGroupSize: number): number => {
+      const findings: Finding[] = [
+        mkDrift("drift-architectural_consistency", "error", consistency, "src/a.ts"),
+        mkDrift("drift-naming_conventions", "error", consistency, "src/b.ts"),
+      ];
+      if (dupGroupSize > 1) {
+        findings.push({
+          analyzerId: "codedna-fingerprint",
+          severity: "warning",
+          confidence: 1,
+          message: "exact duplicate group",
+          locations: [{ file: "src/d.ts", line: 1 }],
+          tags: ["duplicate"],
+          dupGroupSize,
+        });
+      }
+      const ctx: AnalysisContext = { ...makeCtx(20000), functionCount: 200 };
+      return computeScores(findings, 20000, ctx).compositeScore;
+    };
+    const gradient = [
+      atLevel(90, 2),   // barely any drift
+      atLevel(72, 12),
+      atLevel(55, 28),
+      atLevel(38, 55),
+      atLevel(20, 95),  // severe drift + heavy duplication
+    ];
+    for (let i = 1; i < gradient.length; i++) {
+      expect(gradient[i]).toBeLessThan(gradient[i - 1]);
+    }
+    // And the span is wide (granular), not compressed into a few points.
+    expect(gradient[0] - gradient[gradient.length - 1]).toBeGreaterThan(25);
+  });
+
+  it("size-fair (v6): count-based drift at a FIXED per-function rate scores the same at any repo size", () => {
+    // 10 dup findings across 100 functions (10% rate) vs 100 dup findings across
+    // 1000 functions (same 10% rate). With function-count normalization the
+    // redundancy score must be ~identical — structural similarity that scales with
+    // function count no longer sinks the larger repo.
+    const ctxFn = (functions: number, lines: number): AnalysisContext => ({
+      ...makeCtx(lines),
+      functionCount: functions,
+    });
+    const dupes = (n: number): Finding[] =>
+      Array.from({ length: n }, (_, i) => mkCount("codedna-fingerprint", "warning", `src/dup${i}.ts`));
+    const small = computeScores(dupes(10), 5000, ctxFn(100, 5000)).scores.redundancy.score;
+    const large = computeScores(dupes(100), 50000, ctxFn(1000, 50000)).scores.redundancy.score;
+    expect(Math.abs(small - large)).toBeLessThan(1);
+  });
+
+  it("size-fair (v6): a HIGHER per-function dup rate scores lower than a low rate (same size)", () => {
+    const ctxFn = (functions: number): AnalysisContext => ({ ...makeCtx(20000), functionCount: functions });
+    const dupes = (n: number): Finding[] =>
+      Array.from({ length: n }, (_, i) => mkCount("codedna-fingerprint", "warning", `src/dup${i}.ts`));
+    const lowRate = computeScores(dupes(10), 20000, ctxFn(1000)).scores.redundancy.score; // 1%
+    const highRate = computeScores(dupes(300), 20000, ctxFn(1000)).scores.redundancy.score; // 30%
+    expect(highRate).toBeLessThan(lowRate);
+  });
+
+  it("shipped-code weighting (v6): the SAME dup group damages src/ most, examples/tests less, generated ~none", () => {
+    // The score measures drift in shipped code. An identical 40-member duplicate
+    // group should hurt most in src/, less in examples/ or tests/, and be
+    // effectively excluded when it lives in generated code.
+    const redundancyFor = (file: string): number => {
+      const findings: Finding[] = [{
+        analyzerId: "codedna-fingerprint",
+        severity: "error",
+        confidence: 0.95,
+        message: "exact duplicate group",
+        locations: [{ file, line: 1 }],
+        tags: ["duplicate"],
+        dupGroupSize: 40,
+      }];
+      const ctx: AnalysisContext = { ...makeCtx(20000), functionCount: 200 };
+      return computeScores(findings, 20000, ctx).scores.redundancy.score;
+    };
+    const src = redundancyFor("src/dup.ts");
+    const example = redundancyFor("examples/demo/dup.ts");
+    const test = redundancyFor("test/dup.test.ts");
+    const generated = redundancyFor("src/client.gen.ts");
+    // lower redundancy score = more damage. src is shipped → most damage.
+    expect(src).toBeLessThan(example);
+    expect(src).toBeLessThan(test);
+    // generated is not authored → effectively excluded → near-clean redundancy.
+    expect(generated).toBeGreaterThan(example);
+    expect(generated).toBeGreaterThan(19);
+  });
+
+  it("shipped-code weighting (v6): dominance drift in src/ damages more than the same drift in tests/", () => {
+    const compositeFor = (file: string): number => {
+      const findings = [mkDrift("drift-naming_conventions", "error", 40, file)];
+      return computeScores(findings, 20000, { ...makeCtx(20000), functionCount: 200 }).compositeScore;
+    };
+    expect(compositeFor("src/a.ts")).toBeLessThan(compositeFor("test/a.test.ts"));
+  });
+
   it("count-based codedna findings are volume-normalized, not collapsed to zero", () => {
     // 40 codedna duplicate findings with no dominance ratio. Under the flat-0.5
     // magnitude (kloc=1) bug these collapsed redundancy to ~0 and tanked the

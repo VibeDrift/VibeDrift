@@ -1,6 +1,6 @@
 {
   "corpus_version": "1",
-  "scoring_version": "v5",
+  "scoring_version": "v6",
   "generated": { "elite_n": 0, "negative_n": 0 },
   "languages": {}
 }

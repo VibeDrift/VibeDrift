@@ -33,12 +33,12 @@ describe("export-consistency detector", () => {
     expect(exportConsistency.detect(mkCtx(files))).toHaveLength(0);
   });
 
-  it("emits one entropy-based 'no convention' finding when there is no export convention", () => {
+  it("emits one plurality-based 'no convention' finding when there is no export convention", () => {
     // 50/50 split of default vs named across many files → entropy gate returns
     // no_convention. For a self-consistency score, having NO dominant pattern is
     // the floor of consistency, so the detector emits ONE category-level finding
-    // whose deviation IS the entropy (consistencyScore low → high deviation),
-    // naming no specific deviating files.
+    // whose deviation is 1 - plurality share (smooth + granular: 50/50 → 0.5,
+    // a 4-way even split → 0.75), naming no specific deviating files.
     const files: DriftFile[] = [];
     for (let i = 0; i < 6; i++) {
       files.push(file(`src/named${i}.ts`, `export const v${i} = 1;\nexport function f${i}() {}\n`));
@@ -50,8 +50,9 @@ describe("export-consistency detector", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0].dominantPattern).toBe("no dominant convention");
     expect(findings[0].deviatingFiles).toHaveLength(0);
-    // perfect 50/50 split → normalized entropy 1.0 → consistencyScore 0 → max deviation
-    expect(findings[0].consistencyScore).toBe(0);
+    // perfect 50/50 split → plurality share 0.5 → consistencyScore 50 → deviation 0.5
+    // (smooth/granular; a more-fragmented split would score lower, i.e. more drift)
+    expect(findings[0].consistencyScore).toBe(50);
     expect(findings[0].severity).toBe("warning");
   });
 
