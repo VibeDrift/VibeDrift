@@ -25,7 +25,18 @@
  */
 
 import type { AnalysisContext, Finding } from "../core/types.js";
-import type { CodeDnaResult } from "../codedna/types.js";
+import type { CodeDnaResult, ExtractedFunction } from "../codedna/types.js";
+
+// Non-shipped path regexes — mirror of src/scoring/engine.ts (kept local to
+// avoid exporting engine internals; same set the API reimplementation detector
+// uses). Test/example/generated dup pairs were 0% precision in the recall audit.
+const REIMPL_NOT_SHIPPED_RES: RegExp[] = [
+  /(^|\/)(generated|__generated__)\/|\.(generated|gen)\.[A-Za-z0-9]+$|\.pb\.go$|_pb2?\.py$|\.min\.[A-Za-z0-9]+$/,
+  /(^|\/)(fixtures?|__fixtures__|__mocks__|mocks|snapshots|__snapshots__)\//,
+  /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[A-Za-z0-9]+$|_test\.(go|py)$|(^|\/)test_[^/]*\.py$/,
+  /(^|\/)(examples?|demos?|samples?)\//,
+];
+const REIMPL_MIN_BODY_TOKENS = 12;
 
 // Names so generic that local classification can't tell what they do.
 // Deep scan's intent-mismatch uses UniXcoder to align name and body in
@@ -151,6 +162,38 @@ export function generateTeaseMessages(
   }
 
   return messages;
+}
+
+/**
+ * Free Tier-1 reimplementation teaser (COUNT only, never findings).
+ *
+ * Counts distinct function NAMES that appear as shipped functions in 2+ different
+ * files — a cheap proxy for "the same responsibility reimplemented per file"
+ * (the dominant AI-drift shape from the recall audit: send_message x5, formatDate
+ * x5, ...). Mirrors the API detector's Tier-1 rule (same-name, cross-file,
+ * shipped, non-generic, non-trivial) but emits only an integer the CLI shows as
+ * an upsell ("N possible ... run a deep scan to confirm"). The deep scan's panel
+ * is what confirms which are real, so we never present these as findings.
+ */
+export function countReimplementationCandidates(functions: ExtractedFunction[]): number {
+  const filesByName = new Map<string, Set<string>>();
+  for (const fn of functions) {
+    if (fn.name.length < 4) continue;
+    if (GENERIC_NAMES.has(fn.name)) continue;
+    if (fn.bodyTokenCount < REIMPL_MIN_BODY_TOKENS) continue;
+    if (REIMPL_NOT_SHIPPED_RES.some((re) => re.test(fn.relativePath))) continue;
+    let files = filesByName.get(fn.name);
+    if (!files) {
+      files = new Set();
+      filesByName.set(fn.name, files);
+    }
+    files.add(fn.relativePath);
+  }
+  let count = 0;
+  for (const files of filesByName.values()) {
+    if (files.size >= 2) count++;
+  }
+  return count;
 }
 
 /**

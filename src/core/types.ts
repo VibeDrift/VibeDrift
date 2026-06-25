@@ -195,6 +195,9 @@ export interface ScanResult {
   hygieneScore: number;
   maxHygieneScore: number;
   teaseMessages: string[];
+  /** Free Tier-1 reimplementation teaser: count of same-name cross-file shipped
+   * functions, shown as a deep-scan upsell. 0 on deep scans. */
+  reimplementationCandidates?: number;
   deepInsights: DeepInsight[];
   scanTimeMs: number;
   previousScan?: ScanResult;

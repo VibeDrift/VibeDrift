@@ -9,7 +9,7 @@ import { createAnalyzerRegistry } from "../../analyzers/index.js";
 import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
 import { computeScores, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
-import { generateTeaseMessages } from "../../output/tease.js";
+import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
 import { renderTerminalOutput, renderJsonOutput, renderStarCta } from "../../output/terminal.js";
 import { renderHtmlReport } from "../../output/html.js";
 import {
@@ -400,6 +400,11 @@ async function buildScanResult(
   // Pass codeDnaResult so the tease can name specific near-duplicate files
   // and opaque-named functions deep scan would confirm, not generic copy.
   const teaseMessages = generateTeaseMessages(ctx, allFindings, options.deep === true, codeDnaResult);
+  // Free Tier-1 reimplementation teaser (count only). Skipped on deep scans —
+  // there the real panel-confirmed ml-reimplementation findings render instead.
+  const reimplementationCandidates = options.deep
+    ? 0
+    : countReimplementationCandidates(codeDnaResult?.functions ?? []);
 
   const scanTimeMs = Date.now() - startTime;
   if (spinner) spinner.stop();
@@ -447,6 +452,7 @@ async function buildScanResult(
     hygieneScore,
     maxHygieneScore,
     teaseMessages,
+    reimplementationCandidates,
     deepInsights,
     scanTimeMs,
     perFileScores,

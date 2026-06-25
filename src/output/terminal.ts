@@ -668,6 +668,13 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
     lines.push("");
   }
 
+  // Reimplementation teaser — count only, never unconfirmed pairs (honest upsell).
+  const reimplCount = result.reimplementationCandidates ?? 0;
+  if (reimplCount > 0) {
+    lines.push(chalk.yellow(`  🔁  ${reimplCount} possible redundant reimplementation${reimplCount === 1 ? "" : "s"} — run a deep scan to confirm which are real`));
+    lines.push("");
+  }
+
   // Passive update notice — dim one-liner at the very end, shown only
   // when the registry reported a strictly-newer version AND the scan
   // didn't already fail. Non-interruptive; skipped for --local-only
