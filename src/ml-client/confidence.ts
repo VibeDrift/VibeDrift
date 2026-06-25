@@ -118,6 +118,21 @@ export function filterByConfidence(response: MlAnalyzeResponse): FilteredMlResul
     }
   }
 
+  // ──── Process reimplementations ────
+  // These arrive ALREADY panel-confirmed by the API (the 3-lens majority gate
+  // ran server-side), so every entry is shippable — no confidence threshold or
+  // LLM round-trip here. `confidence` is the panel vote ratio (1.0 = unanimous).
+  for (const r of response.reimplementations ?? []) {
+    highConfidence.push({
+      analyzerId: "ml-reimplementation",
+      severity: r.group_size >= 4 ? "error" : "warning",
+      confidence: r.confidence,
+      message: `Redundant reimplementation: ${r.name}() implemented ${r.group_size} times across ${r.files.length} files`,
+      locations: r.files.map((f) => ({ file: f })),
+      tags: ["ml", "reimplementation"],
+    });
+  }
+
   // Cap LLM candidates at MAX_LLM_CANDIDATES (highest confidence first)
   mediumConfidence.sort((a, b) => b.confidence - a.confidence);
   droppedCount += Math.max(0, mediumConfidence.length - MAX_LLM_CANDIDATES);

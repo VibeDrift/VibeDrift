@@ -97,6 +97,21 @@ export interface MlDeviationResult {
   needs_llm: boolean;
 }
 
+export interface MlReimplementationResult {
+  name: string;
+  function_a: string;
+  function_b: string;
+  member_ids: string[];
+  files: string[];
+  group_size: number;
+  verdict: string;
+  /** Panel vote ratio (1.0 = unanimous, 0.667 = 2/3). Already confirmed by the API. */
+  confidence: number;
+  real_votes: number;
+  votes: number;
+  reasons: string[];
+}
+
 export interface MlAnalyzeResponse {
   scan_id?: string;
   processing_time_ms: number;
@@ -104,6 +119,8 @@ export interface MlAnalyzeResponse {
   intent_mismatches: MlIntentMismatchResult[];
   anomalies: MlAnomalyResult[];
   deviations: MlDeviationResult[];
+  /** Panel-confirmed redundant reimplementations. Optional for old-server compat. */
+  reimplementations?: MlReimplementationResult[];
   llm_validations: any[];
 }
 
