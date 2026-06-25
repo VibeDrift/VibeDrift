@@ -11,6 +11,7 @@ import type {
 // it into the build. PLACEHOLDER until the corpus build lands: `languages` is
 // empty, so `compositeToPercentile` returns null and the renderer shows nothing.
 import scorePercentilesArtifact from "../data/score_percentiles.json" with { type: "json" };
+import { extractAllFunctions } from "../codedna/function-extractor.js";
 import {
   CATEGORY_CONFIG,
   ALL_CATEGORIES,
@@ -34,12 +35,20 @@ import {
  *                   single scoring engine (dual-engine collapse). The number
  *                   changes meaningfully, so this is a real methodology bump.
  *   v4 — decompressed scoring: dominance-ratio magnitude weighting, no per-analyzer cap, no sqrt-LOC dampener, multiplicative/geometric-mean composite; real 0–100 range.
+ *   v5 — evidence-weighted clean credit (no-finding categories regress toward the
+ *        population prior by LOC); deep-scan dedup-aliasing fix.
+ *   v6 — size-fair count-based normalization: structural-similarity / count-based
+ *        detectors are normalized by a per-FUNCTION rate (findings ÷ total
+ *        functions), not findings ÷ KLOC. Structural similarity scales with
+ *        function count, so the old per-KLOC density kept rising with repo size
+ *        and unfairly sank large clean repos (e.g. trpc 69.6→81.6, TanStack
+ *        62.1→76.4) into the messy range. The rate is size-invariant.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v5";
+export const SCORING_VERSION = "v6";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
@@ -105,6 +114,24 @@ const SEVERITY_DAMAGE = { error: 0.7, warning: 0.4, info: 0.12 };
 const MAX_DETECTOR_DAMAGE = 0.85;
 /** Findings-per-KLOC at which a count-based detector reaches ~63% of its deviation ceiling. */
 const COUNT_DENSITY_SCALE = 2.0;
+/**
+ * Size-fair normalization for count-based detectors: the deviating-FUNCTION rate
+ * (findings / total functions) at which a detector reaches ~63% of its deviation
+ * ceiling. Structural-similarity detectors (codedna) scale with function count,
+ * not lines — a raw count/KLOC keeps rising with repo size and unfairly sinks
+ * large clean repos. Using the per-function RATE makes the magnitude size-invariant
+ * (a 95%-consistent repo scores 95 at 5k or 5M lines). Used when the function count
+ * is known; falls back to COUNT_DENSITY_SCALE per-KLOC otherwise.
+ */
+const COUNT_RATE_SCALE = 0.5;
+/**
+ * Duplicated-function FRACTION (redundant copies ÷ total functions) at which a
+ * grouped-duplicate detector reaches ~63% of its deviation ceiling. Grouped
+ * duplicate findings carry `dupGroupSize`, so 32 identical functions register as
+ * ~31 redundant copies regardless of how the detector chunked them into findings.
+ * This is the volume-sensitive, size-fair duplication magnitude.
+ */
+const DUP_FRACTION_SCALE = 0.15;
 /** A flagged-but-near-consistent dominance finding still registers this faintly. */
 const DEVIATION_FLOOR = 0.05;
 /**
@@ -164,9 +191,42 @@ function isEntryPoint(filePath: string): boolean {
   return ENTRY_POINT_PATTERNS.some((p) => p.test(filePath));
 }
 
+// The score measures drift in the code a project SHIPS. Drift in code that is
+// not shipped — machine-generated output, demo/example code, test scaffolding —
+// is weighted down (or out) so a clean library is not dragged below a messy app
+// by duplication in its examples/ or *.gen.ts files. Calibration (2026-06-24)
+// found ~82% of trpc's REAL duplicate groups live in examples/tests/generated,
+// not in packages/src — this is the honest lever for that, NOT distrusting the
+// (98.7%-precise) duplicate detector. We still ANALYZE and REPORT these files;
+// we only weight their drift differently in the composite.
+const GENERATED_PATH_RE =
+  /(^|\/)(generated|__generated__)\/|\.(generated|gen)\.[A-Za-z0-9]+$|\.pb\.go$|_pb2?\.py$|\.min\.[A-Za-z0-9]+$/;
+const FIXTURE_PATH_RE = /(^|\/)(fixtures?|__fixtures__|__mocks__|mocks|snapshots|__snapshots__)\//;
+const TEST_PATH_RE =
+  /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[A-Za-z0-9]+$|_test\.(go|py)$|(^|\/)test_[^/]*\.py$/;
+const EXAMPLE_PATH_RE = /(^|\/)(examples?|demos?|samples?)\//;
+
+// Not human-authored / not test-relevant code: effectively excluded from the score.
+const WEIGHT_NOT_SHIPPED = 0.05;
+// Real authored code, but not the shipped product — drift here counts, but less.
+const WEIGHT_TEST = 0.35;
+const WEIGHT_EXAMPLE = 0.35;
+
 function computeFileImportanceWeight(filePath: string): number {
+  if (GENERATED_PATH_RE.test(filePath) || FIXTURE_PATH_RE.test(filePath)) return WEIGHT_NOT_SHIPPED;
+  if (TEST_PATH_RE.test(filePath)) return WEIGHT_TEST;
+  if (EXAMPLE_PATH_RE.test(filePath)) return WEIGHT_EXAMPLE;
   if (isEntryPoint(filePath)) return 1.5;
   return 1.0;
+}
+
+/** Max file-importance over a single finding's locations (default 1.0, no locs). */
+function findingMaxWeight(f: Finding): number {
+  let w: number | null = null;
+  for (const loc of f.locations) {
+    if (loc.file) w = w === null ? computeFileImportanceWeight(loc.file) : Math.max(w, computeFileImportanceWeight(loc.file));
+  }
+  return w ?? 1.0;
 }
 
 /**
@@ -211,15 +271,24 @@ function groupConfidence(findings: Finding[]): number {
   return sum / findings.length;
 }
 
-/** Max file-importance across a detector group's findings' locations (1.0–1.5). */
+/**
+ * Max file-importance across a detector group's findings' locations. Default 1.0
+ * only when the group has NO file locations — otherwise it is the true max over
+ * the group's files, so a detector that fires ONLY in de-weighted code (tests,
+ * examples, generated) is itself de-weighted. (Not floored at 1.0: that floor
+ * would make down-weighting a no-op.)
+ */
 function groupImportance(findings: Finding[]): number {
-  let imp = 1.0;
+  let imp: number | null = null;
   for (const f of findings) {
     for (const loc of f.locations) {
-      if (loc.file) imp = Math.max(imp, computeFileImportanceWeight(loc.file));
+      if (loc.file) {
+        const w = computeFileImportanceWeight(loc.file);
+        imp = imp === null ? w : Math.max(imp, w);
+      }
     }
   }
-  return imp;
+  return imp ?? 1.0;
 }
 
 /**
@@ -233,6 +302,7 @@ function groupDeviation(
   findings: Finding[],
   useDriftMagnitude: boolean,
   klocCount: number,
+  functionCount: number,
 ): number {
   const isDominance = useDriftMagnitude && findings.every((f) => f.driftSignal);
   if (isDominance) {
@@ -245,6 +315,32 @@ function groupDeviation(
     // only applies once there is some real deviation to register faintly.
     if (worst <= 0) return 0;
     return Math.max(DEVIATION_FLOOR, Math.min(1, worst));
+  }
+  // Grouped exact/near-duplicate detectors carry `dupGroupSize`: score by the
+  // DUPLICATED-FUNCTION FRACTION (Σ redundant copies ÷ total functions), which is
+  // size-fair AND volume-sensitive — 32 identical functions register as ~31
+  // redundant copies no matter how they were chunked into findings.
+  if (functionCount > 0 && findings.some((f) => (f.dupGroupSize ?? 0) > 1)) {
+    // Each duplicate group's redundant copies are weighted by WHERE the group
+    // lives (findingMaxWeight): duplication in shipped src counts full, in
+    // examples/tests less, in generated code ~0. Importance is therefore baked
+    // in PER-GROUP here (the detector-level groupImportance MAX would otherwise
+    // let one src dup pull the whole detector to full weight). detectorDamage
+    // skips groupImportance for dup detectors so this is not double-counted.
+    let redundant = 0;
+    for (const f of findings) {
+      if ((f.dupGroupSize ?? 0) > 1) redundant += (f.dupGroupSize! - 1) * findingMaxWeight(f);
+    }
+    const dupFraction = redundant / functionCount;
+    return 1 - Math.exp(-dupFraction / DUP_FRACTION_SCALE);
+  }
+  // Other count-based detectors (codedna structural similarity, ml, hygiene) scale
+  // with FUNCTION COUNT, not lines. Normalize as a size-fair per-function rate when
+  // the function count is known so structural similarity that grows with scale
+  // doesn't sink large clean repos; fall back to per-KLOC density when it isn't.
+  if (functionCount > 0) {
+    const rate = findings.length / functionCount;
+    return 1 - Math.exp(-rate / COUNT_RATE_SCALE);
   }
   const density = findings.length / klocCount;
   return 1 - Math.exp(-density / COUNT_DENSITY_SCALE);
@@ -270,12 +366,18 @@ function detectorDamage(
   findings: Finding[],
   useDriftMagnitude: boolean,
   klocCount: number,
+  functionCount: number,
 ): number {
+  // Dup detectors bake per-group file-importance into their deviation
+  // (findingMaxWeight); applying groupImportance again would double-count, so use
+  // a neutral 1.0 for them. All other detectors weight at the detector level.
+  const isDupDetector = findings.some((f) => (f.dupGroupSize ?? 0) > 1);
+  const importance = isDupDetector ? 1.0 : groupImportance(findings);
   const damage =
     groupSeverityDamage(findings) *
     groupConfidence(findings) *
-    groupImportance(findings) *
-    groupDeviation(findings, useDriftMagnitude, klocCount) *
+    importance *
+    groupDeviation(findings, useDriftMagnitude, klocCount, functionCount) *
     groupSampleConfidence(findings);
   return Math.min(MAX_DETECTOR_DAMAGE, Math.max(0, damage));
 }
@@ -290,6 +392,7 @@ export function categoryHealth(
   findings: Finding[],
   useDriftMagnitude: boolean,
   klocCount: number,
+  functionCount = 0,
 ): number {
   const byDetector = new Map<string, Finding[]>();
   for (const f of findings) {
@@ -299,7 +402,7 @@ export function categoryHealth(
   }
   let survival = 1;
   for (const [, group] of byDetector) {
-    survival *= 1 - detectorDamage(group, useDriftMagnitude, klocCount);
+    survival *= 1 - detectorDamage(group, useDriftMagnitude, klocCount, functionCount);
   }
   return Math.max(0, Math.min(1, survival));
 }
@@ -312,6 +415,7 @@ function computeCategoryScore(
   mutateImpact: boolean,
   useDriftMagnitude: boolean,
   treatEmptyAsNotMeasured: boolean,
+  functionCount: number,
 ): CategoryScore {
   if (!applicable) {
     return { score: 0, maxScore, locked: false, findingCount: 0, applicable: false };
@@ -335,7 +439,7 @@ function computeCategoryScore(
   }
 
   const klocCount = Math.max(1, totalLines / 1000);
-  const health = categoryHealth(findings, useDriftMagnitude, klocCount);
+  const health = categoryHealth(findings, useDriftMagnitude, klocCount, functionCount);
   const score = Math.round(maxScore * health * 10) / 10;
 
   // Marginal consistencyImpact: the score gain from removing finding i alone.
@@ -345,7 +449,7 @@ function computeCategoryScore(
     for (let i = 0; i < findings.length; i++) {
       const without = findings.slice(0, i).concat(findings.slice(i + 1));
       const healthWithout =
-        without.length === 0 ? 1 : categoryHealth(without, useDriftMagnitude, klocCount);
+        without.length === 0 ? 1 : categoryHealth(without, useDriftMagnitude, klocCount, functionCount);
       const impact = maxScore * (healthWithout - health);
       findings[i].consistencyImpact = Math.round(Math.max(0, impact) * 100) / 100;
     }
@@ -383,6 +487,7 @@ function computeScoresForKind(
   mutateImpact: boolean,
   previousScores: CategoryScores | undefined,
   previousScoresApplicable: boolean,
+  functionCount: number,
 ): { scores: CategoryScores; compositeScore: number; maxCompositeScore: number } {
   const findingsByCategory = new Map<ScoringCategory, Finding[]>();
   for (const cat of ALL_CATEGORIES) {
@@ -410,6 +515,7 @@ function computeScoresForKind(
       mutateImpact,
       kind === "drift",
       kind === "drift" && SURFACE_SPECIFIC_DRIFT_CATEGORIES.has(cat),
+      functionCount,
     );
 
     // Delta is only meaningful when the previous scores were computed under
@@ -519,6 +625,14 @@ export function computeScores(
     ? [...ctx.languageBreakdown.keys()]
     : ["javascript", "typescript"];
 
+  // Total function count drives size-fair normalization of count-based detectors
+  // (structural-similarity findings scale with functions, not lines). Reuse a
+  // pre-computed ctx.functionCount when the pipeline supplied one; otherwise
+  // derive it once here. 0 → engine falls back to per-KLOC density.
+  const functionCount = ctx
+    ? (ctx.functionCount ?? extractAllFunctions(ctx.files).length)
+    : 0;
+
   // Drift track: populates consistencyImpact on drift findings when
   // mutateImpact is true. Composite is the Vibe Drift Score.
   const drift = computeScoresForKind(
@@ -529,6 +643,7 @@ export function computeScores(
     mutateImpact,
     previousScores,
     versionsMatch,
+    functionCount,
   );
 
   // Hygiene track: parallel scoring, never mutates consistencyImpact
@@ -541,6 +656,7 @@ export function computeScores(
     false,
     options.previousHygieneScores,
     versionsMatch,
+    functionCount,
   );
 
   const perFileScores = computePerFileScores(findings, ctx);

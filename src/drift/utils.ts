@@ -153,6 +153,14 @@ export interface EntropyGateResult {
   confidence: number;
   /** Normalized entropy in [0, 1]. */
   normalizedEntropy: number;
+  /**
+   * Plurality share: largest pattern count ÷ total. Used as the no-convention
+   * deviation magnitude (`1 - dominantShare`) so scoring is SMOOTH and GRANULAR
+   * across the chaos range (50/50 → 0.50, 3-way even → 0.67, 4-way → 0.75)
+   * instead of the saturating normalized-entropy (any even split → ~1.0), which
+   * created a non-monotonic cliff between flag-deviators and no-convention modes.
+   */
+  dominantShare: number;
 }
 
 /**
@@ -168,21 +176,24 @@ export function entropyGate(
   distribution: Map<string, { count: number; files: string[] }>,
 ): EntropyGateResult {
   const counts = [...distribution.values()].map((d) => d.count);
+  const total = counts.reduce((a, b) => a + b, 0);
+  const dominantShare = total > 0 ? Math.max(0, ...counts) / total : 1;
   const k = counts.filter((c) => c > 0).length;
   if (k < 2) {
-    return { decision: "flag_deviators", confidence: 0.9, normalizedEntropy: 0 };
+    return { decision: "flag_deviators", confidence: 0.9, normalizedEntropy: 0, dominantShare };
   }
   const H = shannonEntropy(counts);
   const maxH = Math.log2(k);
   const normalizedEntropy = maxH > 0 ? H / maxH : 0;
 
   if (normalizedEntropy > 0.8) {
-    return { decision: "no_convention", confidence: 0.75, normalizedEntropy };
+    return { decision: "no_convention", confidence: 0.75, normalizedEntropy, dominantShare };
   }
   return {
     decision: "flag_deviators",
     confidence: Math.max(0.3, Math.min(0.9, 1 - normalizedEntropy)),
     normalizedEntropy,
+    dominantShare,
   };
 }
 
@@ -223,9 +234,12 @@ export function noConventionFinding(opts: {
       confidence: gate.confidence,
       finding: `No dominant ${axisLabel} across ${totalFiles} files — patterns are mixed with no convention`,
       dominantPattern: "no dominant convention",
-      dominantCount: 0,
+      dominantCount: Math.round(gate.dominantShare * totalFiles),
       totalRelevantFiles: totalFiles,
-      consistencyScore: Math.round((1 - gate.normalizedEntropy) * 100),
+      // Smooth, granular deviation: 1 - plurality share (chaos depth), NOT the
+      // saturating normalized entropy. Removes the flag↔no-convention cliff so
+      // progressively-more-mixed repos score monotonically lower.
+      consistencyScore: Math.round(gate.dominantShare * 100),
       deviatingFiles: [],
       dominantFiles: [],
       recommendation,

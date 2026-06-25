@@ -164,6 +164,19 @@ export function findDuplicateGroups(
 const MAX_FINGERPRINT_NAMES_IN_MESSAGE = 10;
 const MAX_FINGERPRINT_LOCATIONS = 20;
 
+// Confidence for an exact normalized-hash duplicate finding. CALIBRATED, not
+// guessed: on 2026-06-24 we harvested 79 real codedna-fingerprint dup groups
+// across 7 repos (monorepos + libs) and had Claude (claude-sonnet-4-6, the
+// production deep-scan judge prompt) rule each a semantic duplicate or not.
+// Measured precision = 98.7% (78/79), 95% Wilson CI [93.2, 99.8]; 100% on the
+// monorepos (trpc, TanStack) we suspected of over-firing. The detector does NOT
+// over-fire — its hits are real duplicates. Set to 0.95: essentially the measured
+// value, shaded slightly toward the CI floor for the JS/TS-only sample. See
+// eval/calibration/. (Where a repo's score is dragged by duplication, the lever
+// is file-importance weighting of examples/tests/generated code, NOT distrust of
+// this detector.)
+const STRUCTURAL_DUP_CONFIDENCE = 0.95;
+
 export function fingerprintFindings(groups: SemanticDuplicateGroup[]): Finding[] {
   return groups.map((group) => {
     const total = group.functions.length;
@@ -191,10 +204,12 @@ export function fingerprintFindings(groups: SemanticDuplicateGroup[]): Finding[]
     const finding: Finding = {
       analyzerId: "codedna-fingerprint",
       severity,
-      confidence: 1.0,
+      confidence: STRUCTURAL_DUP_CONFIDENCE,
       message: `Exact semantic duplicate: ${namesDisplay} have identical normalized bodies across ${total} files`,
       locations,
       tags: ["codedna", "duplicate", "fingerprint"],
+      // Group size drives the size-fair duplicated-FRACTION magnitude in scoring.
+      dupGroupSize: total,
     };
 
     if (total > MAX_FINGERPRINT_LOCATIONS) {

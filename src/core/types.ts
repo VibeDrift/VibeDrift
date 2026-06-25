@@ -70,6 +70,12 @@ export interface AnalysisContext {
   languageBreakdown: Map<SupportedLanguage, { files: number; lines: number }>;
   dominantLanguage: SupportedLanguage | null;
   /**
+   * Total extracted function count, used for size-fair (per-function-rate)
+   * normalization of count-based detectors. Optional: when absent, the scoring
+   * engine derives it from `files` on demand and falls back to per-KLOC density.
+   */
+  functionCount?: number;
+  /**
    * True when the scan root is a git repository and metadata was
    * successfully collected. `files[].git` is populated in this case.
    * False when .git is missing, git CLI unavailable, or collection
@@ -327,6 +333,15 @@ export interface Finding {
     /** Total files relevant to this drift category. */
     totalRelevantFiles: number;
   };
+  /**
+   * For grouped exact/near-duplicate findings (e.g. codedna-fingerprint): the
+   * number of functions in this duplicate group. The scoring engine sums
+   * `(dupGroupSize - 1)` across a detector's findings and divides by total
+   * functions to get the duplicated-code FRACTION — a size-fair, volume-sensitive
+   * magnitude (32 identical functions register as ~31 redundant copies, not as
+   * one grouped "finding"). Absent on non-grouped findings.
+   */
+  dupGroupSize?: number;
   /**
    * Structured context that downstream renderers (HTML, terminal, fix-
    * prompt template) use to build the Copy-as-AI-context block and
