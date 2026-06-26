@@ -13,12 +13,13 @@ import { buildFullFixPlanMarkdown, findingKey, buildFixPromptMarkdown, buildUpse
 import { getVersion } from "../core/version.js";
 import { relativeTime } from "./history-diff.js";
 import { formatCount } from "./format.js";
+import { hasMeaningfulImpact } from "./fix-plan-select.js";
 
 const OUT_DIR = ".vibedrift";
 
 function topImpact(findings: Finding[], n: number): Finding[] {
   return [...findings]
-    .filter((f) => (f.consistencyImpact ?? 0) > 0)
+    .filter(hasMeaningfulImpact)
     .sort((a, b) => (b.consistencyImpact ?? 0) - (a.consistencyImpact ?? 0))
     .slice(0, n);
 }

@@ -20,6 +20,15 @@ const JS_IMPORT_PATTERNS = [
 // Test fixture directories — their imports are intentionally broken/nonexistent
 const FIXTURE_PATH_PATTERN = /(?:fixtures?|testdata|__fixtures__|__mocks__)[/\\]/i;
 
+// Build/config files reference dependencies in ways the import patterns miss:
+// require.resolve('buffer/'), loader: 'ts-loader', plugin string names, etc.
+// Match common bundler/tooling config filenames anywhere in the tree.
+const BUILD_CONFIG_PATTERN =
+  /(?:^|[/\\])(?:webpack|vite|rollup|esbuild|tsup|babel|jest|vitest|tailwind|postcss|rspack|metro|next|nuxt|svelte|astro|gulpfile|gruntfile|karma|playwright|cypress)\.config\.[cm]?[jt]sx?$/i;
+
+// require.resolve("pkg") / require.resolve('pkg/sub') — used in bundler fallbacks
+const REQUIRE_RESOLVE_PATTERN = /require\.resolve\(\s*['"]([^'"]+)['"]\s*\)/g;
+
 // We extract Go imports by finding import blocks, not raw string matching
 function extractGoImports(content: string): string[] {
   const imports: string[] = [];
@@ -67,6 +76,9 @@ export const dependenciesAnalyzer: Analyzer = {
   category: "dependencyHealth",
   requiresAST: false,
   applicableLanguages: "all",
+  // v2: credit deps referenced only in build/config files (require.resolve,
+  // loader/plugin strings) so they aren't flagged as phantom.
+  version: 2,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -119,6 +131,36 @@ function collectImportedPackages(
   }
 
   return { imported, importLocations };
+}
+
+// Collect packages referenced in build/config files in ways the import
+// patterns don't catch: require.resolve("pkg/...") and bare quoted package
+// names (loader: "ts-loader", plugin strings). We only credit a declared dep
+// if its exact name appears as a quoted string, to stay precise.
+function collectConfigReferencedPackages(
+  configFiles: { content: string }[],
+  declared: Set<string>,
+): Set<string> {
+  const referenced = new Set<string>();
+
+  for (const file of configFiles) {
+    // require.resolve('buffer/') -> "buffer"
+    const reResolve = new RegExp(REQUIRE_RESOLVE_PATTERN.source, REQUIRE_RESOLVE_PATTERN.flags);
+    let m;
+    while ((m = reResolve.exec(file.content)) !== null) {
+      referenced.add(extractJsPackageName(m[1]));
+    }
+
+    // Any declared dep that appears as a bare quoted string (loader/plugin names)
+    const quoted = /['"]([^'"]+)['"]/g;
+    let q;
+    while ((q = quoted.exec(file.content)) !== null) {
+      const pkg = extractJsPackageName(q[1]);
+      if (declared.has(pkg)) referenced.add(pkg);
+    }
+  }
+
+  return referenced;
 }
 
 function detectPhantomDeps(declared: Set<string>, imported: Set<string>, devToolPatterns: string[]): Finding[] {
@@ -206,7 +248,14 @@ function analyzeJsDeps(ctx: AnalysisContext): Finding[] {
 
   const { imported, importLocations } = collectImportedPackages(jsFiles);
 
-  findings.push(...detectPhantomDeps(declared, imported, DEV_TOOL_PATTERNS));
+  // Credit deps referenced only in build/config files (require.resolve, loader
+  // strings, plugin names) so they aren't flagged as phantom. This only relaxes
+  // phantom detection — it does not affect "missing dep" detection.
+  const configFiles = ctx.files.filter((f) => BUILD_CONFIG_PATTERN.test(f.relativePath));
+  const configReferenced = collectConfigReferencedPackages(configFiles, declared);
+  const usedForPhantom = new Set<string>([...imported, ...configReferenced]);
+
+  findings.push(...detectPhantomDeps(declared, usedForPhantom, DEV_TOOL_PATTERNS));
   findings.push(...detectMissingDeps(declared, imported, isMonorepo || hasWorkspaces, importLocations));
 
   return findings;

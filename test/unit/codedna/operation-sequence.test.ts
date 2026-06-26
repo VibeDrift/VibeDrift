@@ -79,6 +79,78 @@ describe("findSequenceSimilarities", () => {
     expect(sims[0].similarity).toBeCloseTo(1, 1);
   });
 
+  it("does not emit a high-confidence match for short generic op sequences", () => {
+    // Reproduces the bandcamp-audit false positive: summarizeReason() (joins two
+    // strings) and appendDebugEvent() (pushes a debug record + trims an array)
+    // both reduce to the generic idiom [TRANSFORM, BRANCH, TRANSFORM]. They share
+    // nothing semantically, yet lcs/maxLen saturated to 1.0 and cleared the gate.
+    // A sequence made only of filler ops (TRANSFORM/BRANCH/LOOP) must not emit.
+    const summarizeReason = [
+      "const top = candidate.supportSignals.slice(0, 2);", // TRANSFORM (.slice)
+      "if (top.length) {",                                  // BRANCH
+      "return top.join('+');",                              // TRANSFORM (.join)
+    ].join("\n");
+    const appendDebugEvent = [
+      "recentEvents.push(evt);",
+      "const label = evt.kind.trim();",                     // TRANSFORM (.trim)
+      "if (recentEvents.length > maxEvents) {",             // BRANCH
+      "recentEvents.splice(0, recentEvents.length - max);", // TRANSFORM (.splice)
+    ].join("\n");
+    const fns = [
+      mkFn({ name: "summarizeReason", file: "src/tempo.ts", domainCategory: "handlers", rawBody: summarizeReason }),
+      mkFn({ name: "appendDebugEvent", file: "src/engine.ts", domainCategory: "handlers", rawBody: appendDebugEvent }),
+    ];
+    const seqs = extractOperationSequences(fns);
+    // Sanity: both really do reduce to the identical generic 3-op sequence.
+    expect(seqs[0].sequence).toEqual(["TRANSFORM", "BRANCH", "TRANSFORM"]);
+    expect(seqs[1].sequence).toEqual(["TRANSFORM", "BRANCH", "TRANSFORM"]);
+    // The matcher must NOT report this as a near-duplicate.
+    expect(findSequenceSimilarities(seqs, fns)).toHaveLength(0);
+  });
+
+  it("does not emit when a generic-dominated run carries one incidental distinctive op", () => {
+    // Reproduces the bandcamp-audit pruneAndCap() vs UI-builder false positives.
+    // A cache-eviction loop and a DOM builder both reduce to LOOP/BRANCH plumbing
+    // with a single incidental `.delete(`/`.create(` MUTATE. Their shared run is
+    // [LOOP, BRANCH, LOOP, BRANCH, MUTATE] — 5 ops but only ONE distinctive op.
+    // That is generic idiom, not a shared workflow, and must not be reported.
+    const generic1: OperationSequence = {
+      functionRef: { file: "src/cache.ts", relativePath: "src/cache.ts", name: "pruneAndCap", line: 1 },
+      sequence: ["LOOP", "BRANCH", "MUTATE", "LOOP", "BRANCH", "MUTATE"],
+    };
+    const generic2: OperationSequence = {
+      functionRef: { file: "src/ui.ts", relativePath: "src/ui.ts", name: "createTransport", line: 1 },
+      sequence: ["BRANCH", "LOOP", "BRANCH", "LOOP", "BRANCH", "MUTATE"],
+    };
+    const fns = [
+      mkFn({ name: "pruneAndCap", file: "src/cache.ts", domainCategory: "handlers" }),
+      mkFn({ name: "createTransport", file: "src/ui.ts", domainCategory: "handlers" }),
+    ];
+    expect(findSequenceSimilarities([generic1, generic2], fns)).toHaveLength(0);
+  });
+
+  it("still emits a genuine long all-generic exact duplicate", () => {
+    // parseClockDurationToSeconds() is copy-pasted across two files: identical
+    // 6-op all-generic sequence. A long exact generic duplicate is a real drift
+    // signal and must remain detected (do not zero out the detector).
+    const body = ["LOOP", "BRANCH", "TRANSFORM", "BRANCH", "LOOP", "BRANCH"] as const;
+    const dupA: OperationSequence = {
+      functionRef: { file: "src/payload.ts", relativePath: "src/payload.ts", name: "parseClock", line: 1 },
+      sequence: [...body],
+    };
+    const dupB: OperationSequence = {
+      functionRef: { file: "src/resolver.ts", relativePath: "src/resolver.ts", name: "parseClock", line: 1 },
+      sequence: [...body],
+    };
+    const fns = [
+      mkFn({ name: "parseClock", file: "src/payload.ts", domainCategory: "handlers" }),
+      mkFn({ name: "parseClock", file: "src/resolver.ts", domainCategory: "handlers" }),
+    ];
+    const sims = findSequenceSimilarities([dupA, dupB], fns);
+    expect(sims).toHaveLength(1);
+    expect(sims[0].similarity).toBeCloseTo(1, 1);
+  });
+
   it("skips same-file pairs", () => {
     const fns = [
       mkFn({ name: "getA", file: "src/a.ts", domainCategory: "auth", rawBody: "const x = db.query(q); return x;" }),

@@ -36,6 +36,7 @@ import { getLanguageDisplayName } from "../core/language.js";
 import type { SupportedLanguage } from "../core/types.js";
 import { getVersion } from "../core/version.js";
 import { estimateScoreAfterFixes } from "../scoring/engine.js";
+import { hasMeaningfulImpact } from "./fix-plan-select.js";
 import { relativeTime } from "./history-diff.js";
 
 function severityIcon(severity: Finding["severity"]): string {
@@ -172,7 +173,7 @@ function findingPriority(f: Finding): number {
 function renderFixPlan(result: ScanResult, driftFirst = false): string[] {
   const lines: string[] = [];
   const allSorted = [...result.findings]
-    .filter((f) => (f.consistencyImpact ?? 0) > 0)
+    .filter(hasMeaningfulImpact)
     .sort((a, b) => (b.consistencyImpact ?? 0) - (a.consistencyImpact ?? 0));
 
   let top: Finding[];
@@ -457,6 +458,35 @@ function renderHygienePane(result: ScanResult): string[] {
   return lines;
 }
 
+/**
+ * Count the drift categories that actually scored. The composite is a
+ * geometric mean over only the APPLICABLE categories (see scoring/engine.ts),
+ * so this is the true denominator behind the headline "X/100" — which can be
+ * fewer than the five total categories when some are N/A (not applicable for
+ * the project's languages, or no drift surface was measured).
+ *
+ * Pure and unit-tested so the headline can never silently imply a full
+ * five-category verdict when the score really spans N<5.
+ */
+export function applicableCategoryCount(scores: ScanResult["scores"]): number {
+  let n = 0;
+  for (const cat of ALL_CATEGORIES) {
+    if (scores[cat]?.applicable) n++;
+  }
+  return n;
+}
+
+/**
+ * Honest scope qualifier for the composite headline. Returns "" when the
+ * score spans every category (no qualifier needed); otherwise a dim-able note
+ * like "(over 3 of 5 categories)" so the reader knows the /100 is a partial
+ * verdict. Does NOT fabricate scores for N/A categories — it only labels.
+ */
+export function compositeScopeNote(applicable: number, total: number): string {
+  if (applicable >= total) return "";
+  return `(over ${applicable} of ${total} categories)`;
+}
+
 function renderCategoryBars(result: ScanResult): string[] {
   const lines: string[] = [];
   lines.push(chalk.bold("\u2500\u2500 Vibe Drift Score \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"));
@@ -467,7 +497,7 @@ function renderCategoryBars(result: ScanResult): string[] {
     const label = padRight(config.name, 28);
 
     if (!s.applicable) {
-      lines.push(chalk.dim(`  ${label}   N/A`));
+      lines.push(chalk.dim(`  ${label}   N/A — not scored`));
     } else {
       const color = scoreColorFn(s.score, s.maxScore);
       const bar = color(scoreBar(s.score, s.maxScore));
@@ -483,7 +513,16 @@ function renderCategoryBars(result: ScanResult): string[] {
 
   lines.push(`  ${"─".repeat(34)}`);
   const totalColor = scoreColorFn(result.compositeScore, result.maxCompositeScore);
-  lines.push(`  ${padRight("Vibe Drift Score:", 28)} ${totalColor(`${result.compositeScore.toFixed(0)}/${result.maxCompositeScore}`)}`);
+  // Honest scope qualifier: the composite is a geometric mean over only the
+  // applicable categories, so when some render N/A the /100 spans N<5
+  // categories. Append a dim note so the headline never reads as a full
+  // five-category verdict.
+  const scopeNote = compositeScopeNote(
+    applicableCategoryCount(result.scores),
+    ALL_CATEGORIES.length,
+  );
+  const scopeSuffix = scopeNote ? `  ${chalk.dim(scopeNote)}` : "";
+  lines.push(`  ${padRight("Vibe Drift Score:", 28)} ${totalColor(`${result.compositeScore.toFixed(0)}/${result.maxCompositeScore}`)}${scopeSuffix}`);
   // Hygiene composite — only rendered when there's a non-zero hygiene
   // surface (some hygiene category applies). Presented as a separate
   // scalar so it's clearly NOT part of the drift score.

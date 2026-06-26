@@ -22,7 +22,7 @@
 
 import type { Analyzer } from "./base.js";
 import type { AnalysisContext, Finding, SourceFile } from "../core/types.js";
-import { buildImportGraph, type FileExport } from "../core/import-graph.js";
+import { buildImportGraph, fileBasename, sourceLookupKey, type FileExport } from "../core/import-graph.js";
 
 const ENTRY_POINT_BASES = new Set([
   "index", "main", "app", "server", "mod", "lib", "init", "__init__",
@@ -34,12 +34,45 @@ const ENTRY_POINT_PATTERNS = [
   /\.d\.ts$/i,
   /(?:^|\/)(?:test|tests|spec|__tests__|__test__|__mocks__|fixtures?|e2e)\//i,
   /\.(?:test|spec|stories)\.(?:ts|tsx|js|jsx)$/i,
+  // Web Worker / service-worker entry files: by design they have no static
+  // importers (loaded via `new Worker(url)` / `runtime.getURL(...)`).
+  /\.worker\.(?:ts|tsx|js|jsx|mjs|cjs)$/i,
+];
+
+// String literal passed to `new Worker('X')` / `runtime.getURL('X')` / Vite's
+// `new Worker(new URL('X', ...))`. These reference build-output paths whose
+// basename matches a source file → that source file is a runtime root.
+const WORKER_REF_PATTERNS = [
+  /new\s+Worker\s*\(\s*(?:new\s+URL\s*\(\s*)?['"]([^'"]+)['"]/g,
+  /\bgetURL\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
 function isEntryFile(filePath: string): boolean {
   const base = filePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
   if (ENTRY_POINT_BASES.has(base)) return true;
   return ENTRY_POINT_PATTERNS.some((p) => p.test(filePath));
+}
+
+/**
+ * Files referenced as a runtime entry point — loaded as a Web Worker or via a
+ * build-output URL — have no static importers by design and must not be flagged
+ * as orphans. We scan every source for `new Worker('X')` / `getURL('X')` string
+ * literals, reduce each to a basename lookup key, and return the set of such
+ * keys. A file whose basename matches is treated as a root.
+ */
+function collectWorkerRootBases(files: SourceFile[]): Set<string> {
+  const bases = new Set<string>();
+  for (const file of files) {
+    for (const pattern of WORKER_REF_PATTERNS) {
+      const regex = new RegExp(pattern.source, pattern.flags);
+      let match;
+      while ((match = regex.exec(file.content)) !== null) {
+        const ref = match[1];
+        if (ref) bases.add(sourceLookupKey(ref));
+      }
+    }
+  }
+  return bases;
 }
 
 // ─── JS/TS dead-code analysis (delegates to shared import-graph) ─────
@@ -58,17 +91,27 @@ function analyzeJsGraph(files: SourceFile[]): JsAnalysis {
     for (const n of names) allImportedNames.add(n);
   }
 
+  // A symbol used WITHIN its own file (e.g. an exported type referenced in a
+  // same-file annotation) is not dead — only exported-and-never-imported AND
+  // not referenced internally counts. Content keyed by relative path (FileExport.file).
+  const contentByFile = new Map(files.map((f) => [f.relativePath, f.content]));
   const deadExports: FileExport[] = [];
   for (const exports of graph.exportsByFile.values()) {
     for (const ex of exports) {
-      if (!allImportedNames.has(ex.name)) deadExports.push(ex);
+      if (allImportedNames.has(ex.name)) continue;
+      // > 1 occurrence ⇒ declaration + at least one same-file use ⇒ not dead.
+      if (countOccurrences(contentByFile.get(ex.file) ?? "", ex.name) > 1) continue;
+      deadExports.push(ex);
     }
   }
 
-  // File-level: zero incoming imports (excluding entry files).
+  // File-level: zero incoming imports (excluding entry files + runtime roots
+  // referenced via new Worker(...) / getURL(...)).
+  const workerRootBases = collectWorkerRootBases(files);
   const deadFiles: { file: string; reason: string }[] = [];
   for (const file of files) {
     if (isEntryFile(file.relativePath)) continue;
+    if (workerRootBases.has(fileBasename(file.relativePath))) continue;
     const count = graph.incomingCount.get(file.relativePath) ?? 0;
     if (count === 0) {
       deadFiles.push({ file: file.relativePath, reason: "zero incoming imports" });
@@ -86,7 +129,10 @@ export const deadCodeAnalyzer: Analyzer = {
   category: "redundancy",
   requiresAST: false,
   applicableLanguages: "all",
-  version: 3,
+  // v7: count same-file usage before flagging an export unused; an unreachable
+  // block only counts after a COMPLETE (`;`-terminated) return/throw statement;
+  // single-name barrel re-exports are trimmed so they match imported names.
+  version: 7,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -218,6 +264,16 @@ function detectUnreachableCode(ctx: AnalysisContext): Finding[] {
     const regex = new RegExp(UNREACHABLE_PATTERN.source, UNREACHABLE_PATTERN.flags);
     let match;
     while ((match = regex.exec(file.content)) !== null) {
+      // Only a COMPLETE statement makes the following line unreachable. A
+      // return/throw that spans multiple lines — opening a bracket
+      // (`return {` / `throw new X(`) or ending on an operator/ternary
+      // (`return a &&` / `return cond`) — is a continuation, and the next line
+      // is its body, not dead code. In this semicolon-style codebase a complete
+      // return/throw/break/continue ends with ';'.
+      const firstLine = match[0].slice(0, match[0].indexOf("\n"));
+      const stmt = firstLine.replace(/\/\/.*$/, "").trimEnd();
+      if (!stmt.endsWith(";")) continue;
+
       const returnIndent = match[1].length;
       const nextIndent = match[2].length;
       if (nextIndent >= returnIndent) {

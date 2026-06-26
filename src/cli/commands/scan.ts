@@ -30,6 +30,31 @@ import { resolveToken, resolveApiUrl } from "../../auth/resolver.js";
 import { fetchCredits } from "../../auth/api.js";
 import type { Finding, ScanResult, ScanOptions } from "../../core/types.js";
 
+/**
+ * True when stdout must carry ONLY the machine-readable JSON document and
+ * nothing else. Mirrors the format resolution at the render step:
+ *   format = options.format ?? (options.json ? "json" : "html")
+ * so a bare `--json` selects JSON, but an explicit `--format <x>` wins (the
+ * shorthand only applies when no real format was given). Used to redirect
+ * info/progress/notice messages to stderr so they never corrupt the JSON
+ * a caller pipes into JSON.parse.
+ */
+export function isJsonOutput(options: ScanOptions): boolean {
+  return (options.format ?? (options.json ? "json" : "html")) === "json";
+}
+
+/**
+ * Emit a non-data info/progress/notice line. Under JSON output it goes to
+ * stderr (stdout is reserved for the JSON payload); otherwise to stdout.
+ */
+function notice(options: ScanOptions, message: string): void {
+  if (isJsonOutput(options)) {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────
 // 1. resolveAuthAndBanner
 // ────────────────────────────────────────────────────────────────────
@@ -516,7 +541,7 @@ async function writeContextIfRequested(
   }
 }
 
-async function logAndRender(
+export async function logAndRender(
   result: ScanResult,
   options: ScanOptions,
   bearerToken: string | null,
@@ -609,7 +634,8 @@ async function logAndRender(
         if (logResult.trimmedFields && logResult.trimmedFields.length > 0) {
           const before = Math.round((logResult.initialBytes ?? 0) / 1024 / 1024);
           const after = Math.round((logResult.finalBytes ?? 0) / 1024 / 1024);
-          console.log(
+          notice(
+            options,
             chalk.dim(
               `  ⓘ Result trimmed for upload: ${before}MB → ${after}MB ` +
                 `(stripped ${logResult.trimmedFields.join(", ")}). ` +
@@ -626,16 +652,18 @@ async function logAndRender(
           logResult.finalBytes && logResult.finalBytes > 5_000_000
             ? ` (payload ${Math.round(logResult.finalBytes / 1024 / 1024)}MB)`
             : "";
-        console.log(
+        notice(
+          options,
           chalk.yellow(`  ⚠ Couldn't upload scan to dashboard${sizeNote}: ${reason}`),
         );
-        console.log(
+        notice(
+          options,
           chalk.dim(`    Run with --verbose for full details. Local report still saved.`),
         );
       }
     } catch (err: any) {
       // Unexpected exception (import error, etc.) — also surface by default.
-      console.log(chalk.yellow(`  ⚠ Couldn't upload scan to dashboard: ${err.message}`));
+      notice(options, chalk.yellow(`  ⚠ Couldn't upload scan to dashboard: ${err.message}`));
       if (options.verbose) {
         console.error(chalk.dim(err.stack ?? ""));
       }

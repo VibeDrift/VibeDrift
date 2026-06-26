@@ -73,7 +73,9 @@ const SHAPE_PATTERNS: Record<ReturnShape, RegExp> = {
   result_type: /\b(?:Result\.(?:fail|ok|err)|Err\s*\(|Ok\s*\(|Either\.(?:left|right)|Result<|Either<)/,
   // Go-style `return x, err` or `return nil, err` — two-return-value with err token last
   tuple: /\breturn\s+[^;{}\n]+,\s*(?:err|error|Err)\b/,
-  result_object: /\breturn\s+\{[^{}]*\b(?:error|err|status|success)\b\s*:/,
+  // Require an explicit error field. `status`/`success` alone over-match
+  // benign state/config objects (e.g. `return { status: 0, ... }`).
+  result_object: /\breturn\s+\{[^{}]*\b(?:error|err)\b\s*:/,
   null_sentinel: /\breturn\s+(?:null|undefined|None)\b/,
 };
 
@@ -120,10 +122,36 @@ function extractFunctionBodies(file: DriftFile): FunctionExtraction[] {
   return out;
 }
 
+// Global (count) variants for dominance classification. A function's shape is
+// the one it uses MOST, not merely the most "distinctive" one that appears once.
+const SHAPE_COUNT_PATTERNS: Record<Exclude<ReturnShape, "throws">, RegExp> = {
+  result_type: new RegExp(SHAPE_PATTERNS.result_type.source, "g"),
+  tuple: new RegExp(SHAPE_PATTERNS.tuple.source, "g"),
+  result_object: new RegExp(SHAPE_PATTERNS.result_object.source, "g"),
+  null_sentinel: new RegExp(SHAPE_PATTERNS.null_sentinel.source, "g"),
+};
+// Intentional throw contracts: construct-and-throw / raise / panic.
+const STRONG_THROW = /\b(?:throw\s+new\s+\w+|raise\s+\w+|panic\s*\()/g;
+// Any `throw <token>` (includes "throw new X"); bare = ANY − THROW_NEW.
+const ANY_THROW = /\bthrow\s+\w+/g;
+const THROW_NEW = /\bthrow\s+new\s+\w+/g;
+
+function countMatches(re: RegExp, s: string): number {
+  const m = s.match(re);
+  return m ? m.length : 0;
+}
+
 /**
- * Classify one function's error-path shape. Returns null if the body shows
- * no error-handling pattern (healthy plain-return function — skip from the
- * drift analysis entirely).
+ * Classify one function's error-path shape by its DOMINANT pattern. Returns
+ * null if the body shows no error-handling pattern (healthy plain-return
+ * function — skip from the drift analysis entirely).
+ *
+ * Counting (not first-priority-wins) avoids mislabeling a function that
+ * returns error-object/sentinel values several times but has a single
+ * defensive `throw error` re-propagating a caught error. A bare `throw <ident>`
+ * is treated as a re-throw (not this function's own contract) and only counts
+ * toward "throws" when the function exposes no other error-return shape. Ties
+ * break by SHAPE_PRIORITY (most distinctive wins).
  */
 function classifyShape(body: string): ReturnShape | null {
   // Strip line comments so "// throw new Error" doesn't trigger.
@@ -132,10 +160,29 @@ function classifyShape(body: string): ReturnShape | null {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*#.*$/gm, "");
 
+  const counts: Record<ReturnShape, number> = {
+    throws: 0,
+    result_type: countMatches(SHAPE_COUNT_PATTERNS.result_type, stripped),
+    tuple: countMatches(SHAPE_COUNT_PATTERNS.tuple, stripped),
+    result_object: countMatches(SHAPE_COUNT_PATTERNS.result_object, stripped),
+    null_sentinel: countMatches(SHAPE_COUNT_PATTERNS.null_sentinel, stripped),
+  };
+
+  const strongThrows = countMatches(STRONG_THROW, stripped);
+  const bareThrows = countMatches(ANY_THROW, stripped) - countMatches(THROW_NEW, stripped);
+  const hasOtherShape =
+    counts.result_type + counts.tuple + counts.result_object + counts.null_sentinel > 0;
+  counts.throws = strongThrows + (hasOtherShape ? 0 : bareThrows);
+
+  let best: ReturnShape | null = null;
+  let bestCount = 0;
   for (const shape of SHAPE_PRIORITY) {
-    if (SHAPE_PATTERNS[shape].test(stripped)) return shape;
+    if (counts[shape] > bestCount) {
+      best = shape;
+      bestCount = counts[shape];
+    }
   }
-  return null;
+  return bestCount > 0 ? best : null;
 }
 
 /**

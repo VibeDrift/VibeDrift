@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { returnShapeConsistency } from "../../../src/drift/return-shape-consistency.js";
+import { returnShapeConsistency, classifyReturnShapeLabel } from "../../../src/drift/return-shape-consistency.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 
 function makeCtx(files: Partial<DriftFile>[]): DriftContext {
@@ -270,5 +270,66 @@ describe("return-shape-consistency detector", () => {
 
       expect(returnShapeConsistency.detect(ctx)).toHaveLength(0);
     });
+  });
+});
+
+// Classify a function by its DOMINANT on-error shape, not by a single throw.
+// Regression for the bandcamp-player-extension audit: html-fallback.ts returns
+// error-object sentinels ~4x with one defensive `throw error` in a catch, yet
+// was mislabeled "throws on error" because throws had top priority.
+describe("classifyReturnShapeLabel — dominant shape, defensive rethrow discounted", () => {
+  it("a function that returns error-objects but defensively rethrows is NOT 'throws on error'", () => {
+    const body = `
+      async function fetchHtml(url) {
+        if (!url) return { html: "", resolvedUrl: "", error: "invalid-url" };
+        if (bad)  return { html: "", resolvedUrl: "", error: "malformed-url" };
+        try {
+          const r = await fetch(url);
+          if (!r.ok) return { html: "", resolvedUrl: "", error: "HTTP " + r.status };
+          return { html: await r.text(), resolvedUrl: r.url, error: "" };
+        } catch (error) {
+          if (isAbort(error)) throw error;
+          return { html: "", resolvedUrl: "", error: String(error) };
+        }
+      }`;
+    expect(classifyReturnShapeLabel(body)).toBe("error-object returns");
+  });
+
+  it("still classifies a genuine thrower as 'throws on error'", () => {
+    expect(
+      classifyReturnShapeLabel("if (!id) throw new NotFoundError('x');\n return data;"),
+    ).toBe("throws on error");
+  });
+
+  it("classifies a pure null-sentinel returner as 'null/undefined sentinels'", () => {
+    expect(
+      classifyReturnShapeLabel("if (!id) return null;\n return data;"),
+    ).toBe("null/undefined sentinels");
+  });
+
+  it("a function that ONLY rethrows (no other return shape) stays 'throws on error'", () => {
+    expect(
+      classifyReturnShapeLabel("try { run(); } catch (e) { cleanup(); throw e; }"),
+    ).toBe("throws on error");
+  });
+
+  it("dominant throws still wins when it returns one sentinel but throws twice", () => {
+    expect(
+      classifyReturnShapeLabel("if (!a) throw new Error('a');\n if (!b) throw new Error('b');\n if (z) return null;\n return v;"),
+    ).toBe("throws on error");
+  });
+
+  // A plain state/config object with a `status`/`success` field is NOT an
+  // error-return shape. Regression for constants.ts mislabeled "error-object
+  // returns" because the result-object regex matched a benign `status:` field.
+  it("does not classify a state/config object (status field, no error) as error-object returns", () => {
+    const body = "return {\n enabled: false,\n target: 'none',\n status: 0,\n phase: 'phase-1',\n };";
+    expect(classifyReturnShapeLabel(body)).toBe(null);
+  });
+
+  it("still classifies a true error-result object (has error field) as error-object returns", () => {
+    expect(
+      classifyReturnShapeLabel("if (bad) return { success: false, error: 'x' };\n return value;"),
+    ).toBe("error-object returns");
   });
 });

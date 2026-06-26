@@ -2,7 +2,9 @@ import type { ScanResult, Finding, DriftFindingReport } from "../core/types.js";
 import { getVersion } from "../core/version.js";
 import { buildFixPromptMarkdown, buildFullFixPlanMarkdown, findingKey, type FixPromptContext } from "./fix-prompt.js";
 import { estimateScoreAfterFixes } from "../scoring/engine.js";
-import { getAnalyzerKind } from "../scoring/categories.js";
+import { hasMeaningfulImpact } from "./fix-plan-select.js";
+import { getAnalyzerKind, ALL_CATEGORIES } from "../scoring/categories.js";
+import { applicableCategoryCount, compositeScopeNote } from "./terminal.js";
 import { formatCount } from "./format.js";
 
 const SCORING_CATEGORY_LABELS: Record<string, string> = {
@@ -36,7 +38,7 @@ function buildFixPromptContext(result: ScanResult): FixPromptContext {
  */
 function topImpactFindings(result: ScanResult, n = 5): Finding[] {
   return [...result.findings]
-    .filter((f) => typeof f.consistencyImpact === "number" && f.consistencyImpact > 0)
+    .filter(hasMeaningfulImpact)
     .sort((a, b) => (b.consistencyImpact ?? 0) - (a.consistencyImpact ?? 0))
     .slice(0, n);
 }
@@ -1392,6 +1394,14 @@ function buildGlanceableSummary(result: ScanResult, detailedUrl: string): string
   const { compositeScore, maxCompositeScore, scores } = result;
   const { letter, color: gradeColor } = gradeFor(compositeScore, maxCompositeScore);
   const pct = maxCompositeScore > 0 ? (compositeScore / maxCompositeScore) * 100 : 0;
+  // Honest scope qualifier: the composite is a geometric mean over only the
+  // applicable categories, so when some cat-cards render N/A the headline /100
+  // spans N<5 categories. Surface a small note near the hero so the score is
+  // never read as a full five-category verdict. Mirrors the terminal renderer.
+  const scopeNote = compositeScopeNote(
+    applicableCategoryCount(scores),
+    ALL_CATEGORIES.length,
+  );
   const fileCount = result.context.files.length;
   const totalLines = result.context.totalLines;
   const scanSec = (result.scanTimeMs / 1000).toFixed(1);
@@ -1427,7 +1437,10 @@ function buildGlanceableSummary(result: ScanResult, detailedUrl: string): string
     const gain = after.compositeScore - compositeScore;
     if (gain > 0.3) {
       const projGrade = gradeFor(after.compositeScore, after.maxCompositeScore).letter;
-      ctaHint = `<span class="cta-hint">Fix the top ${top5.length} drifts → projected <strong style="color:var(--intent-green)">${after.compositeScore.toFixed(1)}/${after.maxCompositeScore}</strong> (Grade ${projGrade}, +${gain.toFixed(1)}pts consistency)</span>`;
+      // One scale: the projected composite score and its composite-point delta
+      // (gain). The per-item impacts are a separate ranking signal and are NOT
+      // summed here — composite delta ≠ Σ per-item impacts.
+      ctaHint = `<span class="cta-hint">Fix the top ${top5.length} drifts → projected <strong style="color:var(--intent-green)">${after.compositeScore.toFixed(1)}/${after.maxCompositeScore}</strong> (Grade ${projGrade}, +${gain.toFixed(1)} pts)</span>`;
     }
   }
 
@@ -1448,6 +1461,7 @@ function buildGlanceableSummary(result: ScanResult, detailedUrl: string): string
         <span><strong>${esc(lang)}</strong></span>
         <span>scanned in <strong>${scanSec}s</strong></span>
         <span style="opacity:0.6">· Vibe Drift Score measures how consistent your codebase is with its own dominant patterns</span>
+        ${scopeNote ? `<span style="opacity:0.6">· composite ${esc(scopeNote.replace(/^\(|\)$/g, ""))}</span>` : ""}
       </div>
     </div>
   </div>
@@ -1462,7 +1476,7 @@ function buildGlanceableSummary(result: ScanResult, detailedUrl: string): string
 </section>`;
 }
 
-function buildFixPlanWidget(result: ScanResult): string {
+export function buildFixPlanWidget(result: ScanResult): string {
   const top = topImpactFindings(result, 5);
   if (top.length === 0) {
     return `<section class="section fix-plan" id="fix-plan">
@@ -1477,8 +1491,14 @@ function buildFixPlanWidget(result: ScanResult): string {
     result.context.totalLines,
     result.context,
   );
-  const cumulativeGain = after.compositeScore - result.compositeScore;
-  const sumIndividual = top.reduce((s, f) => s + (f.consistencyImpact ?? 0), 0);
+  // Project in ONE scale: the composite score and its composite-point delta.
+  // The per-item impact chips are a separate per-finding ranking signal
+  // (category points) and are deliberately NOT summed into the headline — the
+  // composite is a geometric mean, so its delta is not equal to Σ per-item
+  // impacts and pairing the two reads as a contradiction.
+  const projectedDelta = after.compositeScore - result.compositeScore;
+  const projGrade = gradeFor(after.compositeScore, after.maxCompositeScore).letter;
+  const curGrade = gradeFor(result.compositeScore, result.maxCompositeScore).letter;
 
   const items = top.map((f, i) => {
     const impact = (f.consistencyImpact ?? 0).toFixed(2);
@@ -1522,11 +1542,7 @@ function buildFixPlanWidget(result: ScanResult): string {
   <ul class="fix-list">${items}</ul>
   <div class="fix-plan-summary">
     <div class="fix-plan-estimate">
-      If all ${top.length} close: <span class="projected">+${cumulativeGain.toFixed(1)}pts consistency</span>
-      &nbsp;(projected <strong>${after.compositeScore.toFixed(1)}/${after.maxCompositeScore}</strong>, Grade ${gradeFor(after.compositeScore, after.maxCompositeScore).letter})
-    </div>
-    <div style="color:var(--text-tertiary);font-size:11px;">
-      Sum of individual: +${sumIndividual.toFixed(1)}pts · cumulative is sub-additive (non-linear decay)
+      If all ${top.length} close: projected <strong>${after.compositeScore.toFixed(1)}/${after.maxCompositeScore}</strong>${curGrade !== projGrade ? ` (Grade ${curGrade} → ${projGrade})` : ` (Grade ${projGrade})`} <span class="projected">+${projectedDelta.toFixed(1)} pts</span>
     </div>
   </div>
 </section>`;

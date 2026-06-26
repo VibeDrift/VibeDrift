@@ -48,12 +48,28 @@ const EXPORT_NAMED_PATTERNS = [
 ];
 const EXPORT_DEFAULT_PATTERN = /export\s+default\s+(?:(?:async\s+)?(?:function|class)\s+(\w+)|(\w+))/g;
 
+// A leading `(?:type\s+)?` makes TypeScript type-only imports parse like their
+// value counterparts: `import type { Foo } from './x'` and
+// `import type Foo from './x'` capture the same names + source as the non-type
+// forms. Per-specifier `type` prefixes inside `{ type Foo, Bar }` are stripped
+// in parseImports.
 const IMPORT_PATTERNS = [
-  /import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g,
-  /import\s+(\w+)\s+from\s*['"]([^'"]+)['"]/g,
+  /import\s*(?:type\s+)?\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g,
+  /import\s+(?:type\s+)?(\w+)\s+from\s*['"]([^'"]+)['"]/g,
   /import\s*\*\s*as\s+(\w+)\s+from\s*['"]([^'"]+)['"]/g,
   /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g,
   /(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g,
+];
+
+// Re-export edges: a barrel file's `export { X } from './y'` / `export * from
+// './y'` / `export * as ns from './y'` makes './y' reachable through the barrel.
+// We treat the re-export SOURCE as an import source so the re-exported file gets
+// an incoming edge (and is no longer counted as phantom). Only the source path
+// is captured here — the re-exported names are surfaced by parseExports on the
+// barrel's own exports, so we don't add names to avoid double-handling.
+const REEXPORT_SOURCE_PATTERNS = [
+  /export\s*\{[^}]*\}\s*from\s*['"]([^'"]+)['"]/g,
+  /export\s*\*\s*(?:as\s+\w+\s+)?from\s*['"]([^'"]+)['"]/g,
 ];
 
 export function parseExports(file: SourceFile): FileExport[] {
@@ -71,7 +87,12 @@ export function parseExports(file: SourceFile): FileExport[] {
           if (trimmed) exports.push({ name: trimmed, file: file.relativePath, line, isDefault: false });
         }
       } else {
-        exports.push({ name: captured, file: file.relativePath, line, isDefault: false });
+        // Single-name export, e.g. `export { foo } from './x'` — trim and drop
+        // any `as` alias, matching the comma-branch above. Without this the name
+        // keeps its surrounding whitespace (" foo ") and never matches a trimmed
+        // imported name, so a barrel re-export gets falsely flagged dead.
+        const trimmed = captured.trim().split(/\s+as\s+/)[0].trim();
+        if (trimmed) exports.push({ name: trimmed, file: file.relativePath, line, isDefault: false });
       }
     }
   }
@@ -102,12 +123,29 @@ export function parseImports(file: SourceFile): FileImports {
       sources.add(source);
       if (raw.includes(",") || raw.includes("{")) {
         for (const n of raw.split(",")) {
-          const trimmed = n.trim().split(/\s+as\s+/)[0].trim().replace(/[{}]/g, "");
+          // Drop a per-specifier `type ` modifier (`{ type Foo, Bar }`) and any
+          // `as` alias, then strip stray braces.
+          const trimmed = n
+            .trim()
+            .replace(/^type\s+/, "")
+            .split(/\s+as\s+/)[0]
+            .trim()
+            .replace(/[{}]/g, "");
           if (trimmed) names.add(trimmed);
         }
       } else {
         names.add(raw.trim());
       }
+    }
+  }
+
+  // Register re-export sources as incoming edges to the re-exported file.
+  for (const pattern of REEXPORT_SOURCE_PATTERNS) {
+    const regex = new RegExp(pattern.source, pattern.flags);
+    let match;
+    while ((match = regex.exec(file.content)) !== null) {
+      const source = match[1];
+      if (source) sources.add(source);
     }
   }
 

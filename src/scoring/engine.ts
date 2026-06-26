@@ -443,14 +443,25 @@ function computeCategoryScore(
   const score = Math.round(maxScore * health * 10) / 10;
 
   // Marginal consistencyImpact: the score gain from removing finding i alone.
-  // Exact — recompute category health with that finding removed and diff.
+  // Exact — recompute the category SCORE with that finding removed and diff.
   // O(n²) per category, but findings-per-category is small.
+  //
+  // Removing the LAST finding does NOT restore the full maxScore: an emptied
+  // category routes through the evidence-weighted clean-credit path (it earns
+  // NO_FINDING_PRIOR..1 of maxScore by LOC, not a free 1.0). The marginal impact
+  // must use that same empty-category score, otherwise per-finding impacts
+  // over-state the achievable gain and become inconsistent with the cumulative
+  // Fix-Plan projection (which is a real recompute through this same path).
   if (mutateImpact) {
+    const evidence = 1 - Math.exp(-Math.max(0, totalLines) / EVIDENCE_SCALE_LINES);
+    const emptyFrac = NO_FINDING_PRIOR + (1 - NO_FINDING_PRIOR) * evidence;
     for (let i = 0; i < findings.length; i++) {
       const without = findings.slice(0, i).concat(findings.slice(i + 1));
-      const healthWithout =
-        without.length === 0 ? 1 : categoryHealth(without, useDriftMagnitude, klocCount, functionCount);
-      const impact = maxScore * (healthWithout - health);
+      const fracWithout =
+        without.length === 0
+          ? emptyFrac
+          : categoryHealth(without, useDriftMagnitude, klocCount, functionCount);
+      const impact = maxScore * (fracWithout - health);
       findings[i].consistencyImpact = Math.round(Math.max(0, impact) * 100) / 100;
     }
   }
@@ -696,15 +707,48 @@ export function computeScores(
  *
  * Drift-track only. Hygiene is not part of the Vibe Drift Score, so the
  * Fix Plan projection does not model hygiene removals.
+ *
+ * Returns BOTH the projected composite and `consistencyGain` — the cumulative
+ * gain in the SAME consistency-point unit as each finding's `consistencyImpact`
+ * (the sum of per-category point gains). These are different scales:
+ *   - `compositeScore` is the geometric mean of category healths × 100, so its
+ *     delta is amplified when drift spans several categories and is NOT directly
+ *     comparable to the per-item impacts (it can come out larger than their sum).
+ *   - `consistencyGain` is summed per-category category-point gains, the natural
+ *     cumulative analog of `consistencyImpact`. It is provably in
+ *     `[max(individual), Σ individual]`: within a category the noisy-OR is
+ *     sub-additive (removing all together gains ≤ summing each removal), and
+ *     across categories the gains add independently. The Fix Plan displays this
+ *     value for "if all N close: +Npts consistency", so the number and the
+ *     "sub-additive" wording stay internally consistent.
  */
 export function estimateScoreAfterFixes(
   allFindings: Finding[],
   findingsToFix: Iterable<Finding>,
   totalLines: number,
   ctx?: AnalysisContext,
-): { compositeScore: number; maxCompositeScore: number; scores: CategoryScores } {
+): {
+  compositeScore: number;
+  maxCompositeScore: number;
+  scores: CategoryScores;
+  /**
+   * Cumulative projected consistency-point gain from removing the fix set,
+   * summed across categories in the same unit as `Finding.consistencyImpact`.
+   * Always in `[max(individual impact), Σ(individual impacts)]` — genuinely
+   * sub-additive and monotonic. Use THIS (not the composite delta) when
+   * displaying a "+Npts consistency" total alongside per-item impacts.
+   */
+  consistencyGain: number;
+} {
   const fixSet = new Set(findingsToFix);
   const remaining = allFindings.filter((f) => !fixSet.has(f));
+
+  // Baseline category scores over the full finding set (drift track), so the
+  // per-category point gain is measured against the same context the per-finding
+  // consistencyImpact values were computed in.
+  const before = computeScores(allFindings, totalLines, ctx, undefined, {
+    mutateImpact: false,
+  });
   const { compositeScore, maxCompositeScore, scores } = computeScores(
     remaining,
     totalLines,
@@ -712,7 +756,22 @@ export function estimateScoreAfterFixes(
     undefined,
     { mutateImpact: false },
   );
-  return { compositeScore, maxCompositeScore, scores };
+
+  // Cumulative gain in consistency-point units: Σ over categories of the
+  // (non-negative) category-score gain. A category that was not measured (or
+  // becomes not-measured) contributes nothing. This is the cumulative analog of
+  // consistencyImpact and stays within [max(individual), Σ(individual)].
+  let consistencyGain = 0;
+  for (const cat of ALL_CATEGORIES) {
+    const b = before.scores[cat];
+    const a = scores[cat];
+    if (!b?.applicable || !a?.applicable) continue;
+    const gain = a.score - b.score;
+    if (gain > 0) consistencyGain += gain;
+  }
+  consistencyGain = Math.round(consistencyGain * 100) / 100;
+
+  return { compositeScore, maxCompositeScore, scores, consistencyGain };
 }
 
 function computePerFileScores(

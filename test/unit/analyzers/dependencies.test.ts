@@ -27,6 +27,73 @@ describe("dependencies analyzer", () => {
     expect(findings.find((f) => f.tags.includes("phantom"))).toBeDefined();
   });
 
+  it("does not flag deps used only in build config (require.resolve + loader string)", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [
+        {
+          path: "/test/src/index.ts", relativePath: "src/index.ts", language: "typescript",
+          content: 'import express from "express";\n', lineCount: 1,
+        },
+        {
+          path: "/test/webpack.config.js", relativePath: "webpack.config.js", language: "javascript",
+          content: [
+            "module.exports = {",
+            "  module: { rules: [{ test: /\\.ts$/, loader: 'ts-loader' }] },",
+            "  resolve: {",
+            "    fallback: {",
+            "      buffer: require.resolve('buffer/'),",
+            "      process: require.resolve('process/browser'),",
+            "    },",
+            "  },",
+            "};",
+          ].join("\n"),
+          lineCount: 9,
+        },
+      ],
+      packageJson: {
+        dependencies: { express: "^4.0.0" },
+        devDependencies: { "ts-loader": "^9.5.1", buffer: "^6.0.3", process: "^0.11.10" },
+      },
+      totalLines: 10,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const phantom = findings.find((f) => f.tags.includes("phantom"));
+    if (phantom) {
+      expect(phantom.message).not.toContain("buffer");
+      expect(phantom.message).not.toContain("process");
+      expect(phantom.message).not.toContain("ts-loader");
+    }
+    expect(phantom).toBeUndefined();
+  });
+
+  it("still flags a genuinely-unused dep even when a build config is present", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [
+        {
+          path: "/test/src/index.ts", relativePath: "src/index.ts", language: "typescript",
+          content: 'import express from "express";\n', lineCount: 1,
+        },
+        {
+          path: "/test/webpack.config.js", relativePath: "webpack.config.js", language: "javascript",
+          content: "module.exports = { module: { rules: [{ loader: 'ts-loader' }] } };",
+          lineCount: 1,
+        },
+      ],
+      packageJson: {
+        dependencies: { express: "^4.0.0", "totally-unused-lib": "^1.0.0" },
+        devDependencies: { "ts-loader": "^9.5.1" },
+      },
+      totalLines: 2,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const phantom = findings.find((f) => f.tags.includes("phantom"));
+    expect(phantom).toBeDefined();
+    expect(phantom!.message).toContain("totally-unused-lib");
+    expect(phantom!.message).not.toContain("ts-loader");
+  });
+
   it("detects missing dependencies", async () => {
     const ctx: AnalysisContext = {
       ...BASE,

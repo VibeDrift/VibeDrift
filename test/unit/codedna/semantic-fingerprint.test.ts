@@ -45,19 +45,39 @@ describe("computeSemanticFingerprints", () => {
     expect(a.normalizedHash).toBe(b.normalizedHash);
   });
 
-  it("string literals are normalized (same structure, different strings → same hash)", () => {
+  it("string literal VALUES are preserved (different strings → different hash)", () => {
+    // EXACT-duplicate tier: a literal value carries the semantics. Two
+    // predicates that compare against DIFFERENT string constants are NOT
+    // the same function and must not collide. (Regression: see the
+    // isHighCorrectionMode / isLowCorrectionMode false positive.)
     const [a] = computeSemanticFingerprints([
       mkFn({ rawBody: `console.log("hello");` }),
     ]);
     const [b] = computeSemanticFingerprints([
       mkFn({ rawBody: `console.log("world");` }),
     ]);
+    expect(a.normalizedHash).not.toBe(b.normalizedHash);
+  });
+
+  it("identical string literals still produce the same hash", () => {
+    const [a] = computeSemanticFingerprints([
+      mkFn({ rawBody: `console.log("hello");` }),
+    ]);
+    const [b] = computeSemanticFingerprints([
+      mkFn({ rawBody: `console.log("hello");` }),
+    ]);
     expect(a.normalizedHash).toBe(b.normalizedHash);
   });
 
-  it("numeric literals are normalized", () => {
+  it("numeric literal VALUES are preserved (different numbers → different hash)", () => {
     const [a] = computeSemanticFingerprints([mkFn({ rawBody: "return 42;" })]);
     const [b] = computeSemanticFingerprints([mkFn({ rawBody: "return 99;" })]);
+    expect(a.normalizedHash).not.toBe(b.normalizedHash);
+  });
+
+  it("identical numeric literals still produce the same hash", () => {
+    const [a] = computeSemanticFingerprints([mkFn({ rawBody: "return 42;" })]);
+    const [b] = computeSemanticFingerprints([mkFn({ rawBody: "return 42;" })]);
     expect(a.normalizedHash).toBe(b.normalizedHash);
   });
 
@@ -195,6 +215,64 @@ describe("findDuplicateGroups", () => {
     const fps = computeSemanticFingerprints(fns);
     const groups = findDuplicateGroups(fps, fns);
     expect(groups).toHaveLength(0);
+  });
+
+  it("does NOT group two predicates that differ only by their string-literal VALUES", () => {
+    // Real false positive from /tmp/bandcamp-audit/repo: isHighCorrectionMode
+    // and isLowCorrectionMode have the same SHAPE (`mode === STR || mode === STR`)
+    // but test DIFFERENT constants. Erasing the literal values collides them into
+    // a bogus "exact semantic duplicate". They must stay distinct.
+    const fns = [
+      mkFn({
+        name: "isHighCorrectionMode",
+        file: "src/background/audio/tempo-beat-correction.ts",
+        rawBody: "return mode === 'high-overshoot' || mode === 'high-overread-nonclassic';",
+      }),
+      mkFn({
+        name: "isLowCorrectionMode",
+        file: "src/background/audio/tempo-correction-support.ts",
+        rawBody: "return mode === 'low-ambiguous' || mode === 'mid-underread';",
+      }),
+    ];
+    const fps = computeSemanticFingerprints(fns);
+    const groups = findDuplicateGroups(fps, fns);
+    expect(groups).toHaveLength(0);
+  });
+
+  it("does NOT group two functions that differ only by a numeric-literal VALUE", () => {
+    const fns = [
+      mkFn({ name: "tax5", file: "src/a.ts", rawBody: "return price * 0.05;" }),
+      mkFn({ name: "tax8", file: "src/b.ts", rawBody: "return price * 0.08;" }),
+    ];
+    const fps = computeSemanticFingerprints(fns);
+    const groups = findDuplicateGroups(fps, fns);
+    expect(groups).toHaveLength(0);
+  });
+
+  it("STILL groups byte-identical functions that share their literal values (clamp01-style)", () => {
+    // True positive preserved: clamp01 is defined byte-identically in 6 files
+    // on the bandcamp repo. Same literals (0 and 1) → same hash → one group.
+    const body = "if (value <= 0) return 0; if (value >= 1) return 1; return value;";
+    const fns = [
+      mkFn({ name: "clamp01", file: "src/a.ts", rawBody: body }),
+      mkFn({ name: "clamp01", file: "src/b.ts", rawBody: body }),
+    ];
+    const fps = computeSemanticFingerprints(fns);
+    const groups = findDuplicateGroups(fps, fns);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].functions).toHaveLength(2);
+  });
+
+  it("STILL groups byte-identical functions that share their string literals (normalizeText-style)", () => {
+    const body = "return String(value ?? '').replace(/\\s+/g, ' ').trim();";
+    const fns = [
+      mkFn({ name: "normalizeText", file: "src/a.ts", rawBody: body }),
+      mkFn({ name: "normalizeText", file: "src/b.ts", rawBody: body }),
+    ];
+    const fps = computeSemanticFingerprints(fns);
+    const groups = findDuplicateGroups(fps, fns);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].functions).toHaveLength(2);
   });
 
   it("groups three copies of the same function across three files", () => {

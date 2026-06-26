@@ -189,29 +189,70 @@ export function extractOperationSequences(functions: ExtractedFunction[]): Opera
   });
 }
 
-// Longest Common Subsequence length
-function lcsLength(a: Operation[], b: Operation[]): number {
+// Longest Common Subsequence itself (the shared op run), so we can inspect what
+// the two functions actually agree on — not just how long the agreement is.
+function lcsSequence(a: Operation[], b: Operation[]): Operation[] {
   const m = a.length;
   const n = b.length;
-  if (m === 0 || n === 0) return 0;
+  if (m === 0 || n === 0) return [];
 
-  // Space-optimized: only need previous row
-  let prev = new Array(n + 1).fill(0);
-  let curr = new Array(n + 1).fill(0);
-
+  // Full DP table is needed for backtracking. Sequences are tiny (collapsed op
+  // lists, typically < 20), so the O(m·n) table is negligible.
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       if (a[i - 1] === b[j - 1]) {
-        curr[j] = prev[j - 1] + 1;
+        dp[i][j] = dp[i - 1][j - 1] + 1;
       } else {
-        curr[j] = Math.max(prev[j], curr[j - 1]);
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
       }
     }
-    [prev, curr] = [curr, prev];
-    curr.fill(0);
   }
 
-  return prev[n];
+  const result: Operation[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      result.push(a[i - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return result.reverse();
+}
+
+// Generic "filler" ops that, on their own, describe the most common idiom in any
+// codebase ("do something, branch, loop"). A shared subsequence made up only of
+// these is not distinctive enough to claim two functions do the same workflow.
+const GENERIC_OPS: ReadonlySet<Operation> = new Set<Operation>(["TRANSFORM", "BRANCH", "LOOP"]);
+
+// Count the distinctive (non-filler) ops in a shared run.
+function distinctiveOpCount(seq: Operation[]): number {
+  return seq.reduce((n, op) => (GENERIC_OPS.has(op) ? n : n + 1), 0);
+}
+
+// A near-duplicate is only credible when its shared run is *specific*. Two paths
+// to specificity, gated on the shared subsequence (the LCS), not the raw ratio:
+//   • it carries at least two distinctive ops (INPUT/QUERY/MUTATE/AUTH/…) — a
+//     genuine multi-step workflow, not a single incidental DB/cache call buried
+//     in generic plumbing, or
+//   • it is a generic-dominated run (TRANSFORM/BRANCH/LOOP) but long enough that
+//     the shared workflow is itself notable (an exact long duplicate).
+// A bare 3-op all-generic run — the [TRANSFORM, BRANCH, TRANSFORM] idiom — and a
+// long generic run carrying one incidental `cache.delete`-style MUTATE both clear
+// the 0.80 ratio trivially yet pair unrelated cross-domain code; those are the
+// dominant source of false positives.
+const MIN_DISTINCTIVE_OPS = 2;
+const MIN_GENERIC_LCS = 6;
+
+function isSpecificMatch(lcsSeq: Operation[]): boolean {
+  if (distinctiveOpCount(lcsSeq) >= MIN_DISTINCTIVE_OPS) return true;
+  return lcsSeq.length >= MIN_GENERIC_LCS;
 }
 
 export function findSequenceSimilarities(
@@ -248,11 +289,17 @@ export function findSequenceSimilarities(
       if (!domainA || !domainB || domainA !== domainB) continue;
       if (domainA === "general" || domainA === "request_handling") continue;
 
-      const lcs = lcsLength(seqA.sequence, seqB.sequence);
+      const lcsSeq = lcsSequence(seqA.sequence, seqB.sequence);
+      const lcs = lcsSeq.length;
       const maxLen = Math.max(seqA.sequence.length, seqB.sequence.length);
       const similarity = maxLen > 0 ? lcs / maxLen : 0;
 
-      if (similarity >= 0.80) {
+      // Gate on the shared subsequence, not just the ratio. A short shared run
+      // saturates the ratio to 1.0 on tiny functions, and a run made only of
+      // generic filler ops (TRANSFORM/BRANCH/LOOP) is the most common idiom in
+      // any codebase — neither is evidence that two functions share a workflow.
+      // Require the shared run to be specific before reporting a near-duplicate.
+      if (similarity >= 0.80 && isSpecificMatch(lcsSeq)) {
         similarities.push({
           functionA: seqA.functionRef,
           functionB: seqB.functionRef,

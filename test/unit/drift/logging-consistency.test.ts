@@ -45,6 +45,46 @@ describe("logging-consistency detector", () => {
     expect(loggingConsistency.detect(ctx)).toHaveLength(0);
   });
 
+  it("does not name absent libraries when the structured logger is a console wrapper", () => {
+    // 5 files use a project-local `logger.*` wrapper (no winston/pino/etc
+    // anywhere), 1 file uses raw console.* — mirrors the bandcamp repo where
+    // createLogger() wraps console.* and NO third-party logger is installed.
+    const wrapperFiles = Array.from({ length: 5 }, (_, i) => ({
+      path: `src/svc${i}.ts`,
+      language: "typescript" as const,
+      content: `import { logger } from "./debug";\nlogger.info("started");\nlogger.warn("careful");\n`,
+    }));
+    const consoleFile = {
+      path: "src/odd.ts",
+      language: "typescript" as const,
+      content: `console.log("hello");\nconsole.error("bad");\n`,
+    };
+    const ctx = makeCtx([...wrapperFiles, consoleFile]);
+    const findings = loggingConsistency.detect(ctx);
+    expect(findings).toHaveLength(1);
+    const text = `${findings[0].finding} ${findings[0].recommendation} ${findings[0].dominantPattern}`;
+    // The false positive: asserting libraries that are not in the project.
+    expect(text).not.toMatch(/winston|pino|bunyan|log4js/i);
+  });
+
+  it("still names winston when it is actually present in the code", () => {
+    const winstonFiles = Array.from({ length: 5 }, (_, i) => ({
+      path: `src/svc${i}.ts`,
+      language: "typescript" as const,
+      content: `import winston from "winston";\nconst logger = winston.createLogger({});\nlogger.info("started");\n`,
+    }));
+    const consoleFile = {
+      path: "src/odd.ts",
+      language: "typescript" as const,
+      content: `console.log("hello");\nconsole.error("bad");\n`,
+    };
+    const ctx = makeCtx([...winstonFiles, consoleFile]);
+    const findings = loggingConsistency.detect(ctx);
+    expect(findings).toHaveLength(1);
+    const text = `${findings[0].finding} ${findings[0].recommendation} ${findings[0].dominantPattern}`;
+    expect(text).toMatch(/winston/i);
+  });
+
   describe("intent-hint seeding", () => {
     it("emits divergence when team declares winston but code uses console.log", () => {
       // 5 console.log files. CLAUDE.md declares structured logging.

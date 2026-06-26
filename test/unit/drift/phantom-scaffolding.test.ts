@@ -96,6 +96,44 @@ describe("phantom-scaffolding detector", () => {
     expect(findings.some((f) => f.severity === "error")).toBe(true);
   });
 
+  it("does not flag a CRUD symbol reachable through a barrel re-export, but still flags a sibling orphan", () => {
+    // getFoo is defined in src/lib/foo.ts, re-exported through the barrel
+    // src/lib/index.ts (`export { getFoo } from './foo'`), and the barrel is
+    // imported by src/app.ts. So getFoo IS reachable and must NOT be phantom.
+    //
+    // getStale is defined in src/lib/stale.ts, has no import and no re-export
+    // (the tempo-dsp analog) and MUST still be flagged.
+    const files = [
+      file("src/lib/foo.ts", `export function getFoo() {}\n`),
+      file("src/lib/stale.ts", `export function getStale() {}\n`),
+      file(
+        "src/lib/index.ts",
+        `export { getFoo } from './foo';\n`,
+      ),
+      file(
+        "src/app.ts",
+        `import { getFoo } from './lib';\ngetFoo();\n`,
+      ),
+    ];
+    const findings = phantomScaffolding.detect(mkCtx(files));
+    const allDeviating = findings.flatMap((f) => f.deviatingFiles.map((d) => d.path));
+    // foo.ts is reachable through the barrel — not phantom.
+    expect(allDeviating.some((p) => p.includes("lib/foo.ts"))).toBe(false);
+    // stale.ts is a genuine orphan — still flagged.
+    expect(allDeviating.some((p) => p.includes("lib/stale.ts"))).toBe(true);
+  });
+
+  it("does not flag a CRUD symbol reachable through a wildcard re-export (export * from)", () => {
+    const files = [
+      file("src/lib/foo.ts", `export function getFoo() {}\n`),
+      file("src/lib/index.ts", `export * from './foo';\n`),
+      file("src/app.ts", `import { getFoo } from './lib';\ngetFoo();\n`),
+    ];
+    const findings = phantomScaffolding.detect(mkCtx(files));
+    const allDeviating = findings.flatMap((f) => f.deviatingFiles.map((d) => d.path));
+    expect(allDeviating.some((p) => p.includes("lib/foo.ts"))).toBe(false);
+  });
+
   it("grades a directory where phantoms are a small share of CRUD exports as info/warning, not error", () => {
     // Same directory: one wired file with many CRUD exports (it IS imported,
     // so none of its exports are phantom) plus one tiny orphan file with a

@@ -113,6 +113,15 @@ function classifyBaseName(filePath: string): { basename: string; convention: Nam
   const basename = filePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
   if (basename.length <= 1) return null;
   if (/(?:test|spec|config|setup|__)/i.test(basename)) return null;
+  // A single-token, separator-free, all-lowercase basename (index, render,
+  // state, aggregation) is simultaneously valid camelCase, kebab-case AND
+  // snake_case — it expresses no file-naming convention, so it must not vote
+  // or be flagged. Returning null drops it from `profiles` entirely (see
+  // analyzeFileNaming's `if (!classified) continue;`). This neutrality is
+  // scoped to the FILE-naming axis only; classifyName() keeps the
+  // single-word→camelCase default for the SYMBOL path, where a lone lowercase
+  // identifier legitimately reads as camelCase.
+  if (/^[a-z][a-z0-9]*$/.test(basename)) return null;
   const convention = classifyName(basename);
   if (!convention) return null;
   return { basename, convention };

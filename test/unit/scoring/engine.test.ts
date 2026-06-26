@@ -297,5 +297,84 @@ describe("scoring engine", () => {
       estimateScoreAfterFixes(all, [all[0]], 1000);
       expect(all[1].consistencyImpact).toBe(originalImpact);
     });
+
+    // Regression: the cumulative Fix-Plan projection ("if all N close: +Npts
+    // consistency") is displayed alongside per-item consistencyImpacts and
+    // labeled "sub-additive (non-linear decay)". The composite delta is in a
+    // DIFFERENT unit (geometric mean × 100) than the per-item impacts (category
+    // points), so it could come out SUPER-additive (> the sum of impacts) —
+    // contradicting both the math and the label. The projection must be returned
+    // in the SAME consistency-point unit and be genuinely sub-additive:
+    //   max(individual) <= consistencyGain <= sum(individual)
+    it("consistencyGain is in the same unit as per-item impacts and is sub-additive", () => {
+      function dom(
+        analyzerId: string,
+        consistencyScore: number,
+        file: string,
+        n: number,
+      ): Finding {
+        return {
+          analyzerId,
+          severity: "warning",
+          confidence: 0.9,
+          message: `DRIFT ${analyzerId}`,
+          locations: [{ file, line: 1 }],
+          tags: ["drift"],
+          driftSignal: {
+            consistencyScore,
+            dominantCount: Math.round((n * consistencyScore) / 100),
+            totalRelevantFiles: n,
+          },
+        };
+      }
+
+      // Spread drift across SEVERAL categories so the geometric-mean composite
+      // delta is amplified — this is the configuration that used to go
+      // super-additive (cumulative composite gain > sum of per-item impacts).
+      const findings: Finding[] = [
+        dom("drift-logging_consistency", 70, "src/a.ts", 39),
+        dom("drift-architectural_consistency", 85, "src/b.ts", 20),
+        dom("drift-comment_style_consistency", 60, "src/c.ts", 130),
+        dom("drift-return_shape_consistency", 90, "src/d.ts", 10),
+        dom("drift-export_style", 88, "src/e.ts", 9),
+        dom("drift-security_posture", 50, "src/routes/x.ts", 8),
+      ];
+      const lines = 20000;
+
+      // Populate per-item consistencyImpact (mutateImpact defaults to true).
+      computeScores(findings, lines);
+      const top = findings.slice(0, 5);
+      const sumIndividual = top.reduce((s, f) => s + (f.consistencyImpact ?? 0), 0);
+      const maxIndividual = Math.max(...top.map((f) => f.consistencyImpact ?? 0));
+
+      const after = estimateScoreAfterFixes(findings, top, lines);
+
+      // The projection must be returned in consistency-point units.
+      expect(typeof after.consistencyGain).toBe("number");
+      // Genuinely sub-additive AND monotonic vs the individual impacts.
+      expect(after.consistencyGain).toBeGreaterThanOrEqual(maxIndividual - 1e-6);
+      expect(after.consistencyGain).toBeLessThanOrEqual(sumIndividual + 1e-6);
+    });
+
+    it("consistencyGain equals the largest single impact when only one finding is fixed", () => {
+      const all = [
+        mkFinding("naming", "error", "a"),
+        mkFinding("duplicates", "warning", "c"),
+      ];
+      computeScores(all, 5000);
+      const after = estimateScoreAfterFixes(all, [all[0]], 5000);
+      // Fixing exactly one finding: cumulative gain == that finding's own impact,
+      // at the 1-decimal precision both numbers are displayed in (category scores
+      // round to 1 decimal). The per-finding impact and the cumulative recompute
+      // now share the SAME empty-category clean-credit model, so they agree.
+      expect(after.consistencyGain).toBeCloseTo(all[0].consistencyImpact ?? 0, 1);
+    });
+
+    it("consistencyGain is zero when nothing is fixed", () => {
+      const all = [mkFinding("naming", "error", "a")];
+      computeScores(all, 1000);
+      const after = estimateScoreAfterFixes(all, [], 1000);
+      expect(after.consistencyGain).toBe(0);
+    });
   });
 });
