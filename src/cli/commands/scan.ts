@@ -747,28 +747,25 @@ async function renderToFormat(
     await writeFile(outputPath, summaryHtml);
     await writeFile(detailedPath, detailedHtml);
     // Serve on localhost
-    const { createServer } = await import("http");
-    const server = createServer((req, res) => {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      const url = req.url ?? "/";
-      if (url.includes("detailed")) {
-        res.end(detailedHtml);
-      } else {
-        res.end(summaryHtml);
-      }
-    });
-    const port = 4173 + Math.floor(Math.random() * 100);
-    server.listen(port, () => {
-      console.log(`\n  ${chalk.dim("Full report (every finding, drift detail, and duplicates) is in the HTML report:")}`);
-      console.log(`  Report saved to ${outputPath}`);
-      console.log(`  View in browser: \x1b[36mhttp://localhost:${port}\x1b[0m\n`);
-      for (const line of renderStarCta()) console.log(line);
-    });
-    // Keep alive for 10 minutes then auto-close
-    setTimeout(() => { server.close(); process.exit(0); }, 600_000);
-    // But don't block if user presses Ctrl+C
-    process.on("SIGINT", () => { server.close(); process.exit(0); });
-    return; // Don't exit — server is running
+    // Open the report directly and exit. We used to serve it from a localhost
+    // server kept alive for 10 minutes, which made the whole command appear to
+    // "hang" long after the ~1s scan finished. The report is self-contained and
+    // links to the detailed file by relative path, so file:// works without a
+    // server. Auto-open is best-effort and interactive-only (skipped in CI /
+    // when VIBEDRIFT_NO_BROWSER=1); the path is always printed as a fallback.
+    const { pathToFileURL } = await import("url");
+    const { resolve } = await import("path");
+    const { openInBrowser } = await import("../../auth/browser.js");
+    const fileUrl = pathToFileURL(resolve(outputPath)).href;
+    console.log(`\n  ${chalk.dim("Full report (every finding, drift detail, and duplicates):")}`);
+    console.log(`  Report saved to ${chalk.bold(outputPath)}`);
+    if (openInBrowser(fileUrl)) {
+      console.log(chalk.dim("  Opening it in your browser…"));
+    } else {
+      console.log(`  Open it: \x1b[36m${fileUrl}\x1b[0m`);
+    }
+    console.log("");
+    for (const line of renderStarCta()) console.log(line);
   } else if (format === "csv") {
     const { renderCsvReport } = await import("../../output/csv.js");
     const csv = renderCsvReport(result);
