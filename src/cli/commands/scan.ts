@@ -635,6 +635,11 @@ export async function logAndRender(
       if (logResult.scanId) {
         (result as any).__scanId = logResult.scanId;
         (result as any).__apiUrl = apiUrl;
+        // The scan is now on the dashboard. Its project page URL is the first
+        // 12 chars of the project hash (matches the dashboard's own links), so
+        // authenticated users get a link there instead of a local HTML file.
+        (result as any).__dashboardUrl =
+          `https://vibedrift.ai/dashboard/projects/${projectIdentity.hash.slice(0, 12)}`;
         // Surface trim notice (always — user should know if their result
         // was compacted before upload, even on a successful log).
         if (logResult.trimmedFields && logResult.trimmedFields.length > 0) {
@@ -737,38 +742,51 @@ async function renderToFormat(
     // and serve below, so authed users get a clean terminal summary and the
     // complete detail in the browser.
     console.log(renderConciseSummary(result, plan));
-    const scanId = (result as any).__scanId as string | undefined;
-    const beaconApiUrl = (result as any).__apiUrl as string | undefined;
-    const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
-    const summaryHtml = renderHtmlReport(result, "summary", {}, beaconOpts);
-    const detailedHtml = renderHtmlReport(result, "detailed", {}, beaconOpts);
-    const outputPath = options.output ?? "vibedrift-report.html";
-    const detailedPath = outputPath.replace(/(\.html?)?$/i, "-detailed.html");
-    await writeFile(outputPath, summaryHtml);
-    await writeFile(detailedPath, detailedHtml);
-    // Serve on localhost
-    const { createServer } = await import("http");
-    const server = createServer((req, res) => {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      const url = req.url ?? "/";
-      if (url.includes("detailed")) {
-        res.end(detailedHtml);
+
+    const dashboardUrl = (result as any).__dashboardUrl as string | undefined;
+    // Authenticated + uploaded: the scan lives on the dashboard (richer,
+    // persistent, shareable). Link there and SKIP the local HTML render — it is
+    // the slow part of the command. Only write a local file when there is no
+    // dashboard entry (offline / upload failed) or --output was given.
+    const writeLocalReport = !dashboardUrl || !!options.output;
+
+    if (writeLocalReport) {
+      const scanId = (result as any).__scanId as string | undefined;
+      const beaconApiUrl = (result as any).__apiUrl as string | undefined;
+      const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
+      const summaryHtml = renderHtmlReport(result, "summary", {}, beaconOpts);
+      const detailedHtml = renderHtmlReport(result, "detailed", {}, beaconOpts);
+      const outputPath = options.output ?? "vibedrift-report.html";
+      const detailedPath = outputPath.replace(/(\.html?)?$/i, "-detailed.html");
+      await writeFile(outputPath, summaryHtml);
+      await writeFile(detailedPath, detailedHtml);
+
+      if (!dashboardUrl) {
+        // No dashboard entry. Open the local report directly — no long-lived
+        // server (the report links to the detailed file by relative path, so
+        // file:// works). Auto-open is best-effort + interactive-only.
+        const { pathToFileURL } = await import("url");
+        const { resolve } = await import("path");
+        const { openInBrowser } = await import("../../auth/browser.js");
+        const fileUrl = pathToFileURL(resolve(outputPath)).href;
+        console.log(`\n  ${chalk.dim("Full report (every finding, drift detail, and duplicates):")}`);
+        console.log(`  Report saved to ${chalk.bold(outputPath)}`);
+        if (openInBrowser(fileUrl)) {
+          console.log(chalk.dim("  Opening it in your browser…"));
+        } else {
+          console.log(`  Open it: \x1b[36m${fileUrl}\x1b[0m`);
+        }
       } else {
-        res.end(summaryHtml);
+        console.log(`\n  ${chalk.dim(`Report also written to ${outputPath}`)}`);
       }
-    });
-    const port = 4173 + Math.floor(Math.random() * 100);
-    server.listen(port, () => {
-      console.log(`\n  ${chalk.dim("Full report (every finding, drift detail, and duplicates) is in the HTML report:")}`);
-      console.log(`  Report saved to ${outputPath}`);
-      console.log(`  View in browser: \x1b[36mhttp://localhost:${port}\x1b[0m\n`);
-      for (const line of renderStarCta()) console.log(line);
-    });
-    // Keep alive for 10 minutes then auto-close
-    setTimeout(() => { server.close(); process.exit(0); }, 600_000);
-    // But don't block if user presses Ctrl+C
-    process.on("SIGINT", () => { server.close(); process.exit(0); });
-    return; // Don't exit — server is running
+    }
+
+    if (dashboardUrl) {
+      console.log(`\n  ${chalk.dim("View this scan on your dashboard:")}`);
+      console.log(`  \x1b[36m${dashboardUrl}\x1b[0m`);
+    }
+    console.log("");
+    for (const line of renderStarCta()) console.log(line);
   } else if (format === "csv") {
     const { renderCsvReport } = await import("../../output/csv.js");
     const csv = renderCsvReport(result);
