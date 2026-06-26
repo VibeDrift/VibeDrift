@@ -7,20 +7,23 @@ const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
 /**
  * Spawn config for a global npm install, routed through the shell.
  *
- * The bug this fixes: on Windows `npm` is `npm.cmd`, and Node refuses to spawn
- * a `.cmd` file without a shell (`spawn npm ENOENT`, hardened further after the
- * .cmd-spawn CVE). MINGW64 / Git Bash still reports `process.platform === "win32"`,
- * so there is no POSIX escape hatch — the single cross-platform fix is to let the
- * shell (cmd.exe on Windows, /bin/sh on POSIX) resolve `npm` from PATH/PATHEXT.
+ * Why the shell: on Windows `npm` is `npm.cmd`, and Node refuses to spawn a
+ * `.cmd` file without a shell (`spawn npm ENOENT`, hardened after the .cmd-spawn
+ * CVE). MINGW64 / Git Bash still reports `process.platform === "win32"`, so the
+ * cross-platform fix is to let the shell (cmd.exe / /bin/sh) resolve `npm`.
+ *
+ * Why ONE command string (not command + args array): Node's DEP0190 deprecates
+ * passing an args array together with `shell: true` (the args are concatenated,
+ * not escaped). Passing a single command string with `shell: true` avoids the
+ * warning. Safe here because the only interpolated value, the version inside
+ * `pkgSpec`, is validated by `isSafeVersionToken` before it reaches this point.
  */
 export function npmGlobalInstallSpawn(pkgSpec: string): {
   command: string;
-  args: string[];
   options: SpawnOptions & { shell: true; stdio: "inherit" };
 } {
   return {
-    command: "npm",
-    args: ["i", "-g", pkgSpec],
+    command: `npm i -g ${pkgSpec}`,
     options: { stdio: "inherit", shell: true },
   };
 }
@@ -101,10 +104,10 @@ export async function runUpdate(currentVersion: string): Promise<void> {
   console.log(chalk.dim(`Running: npm i -g ${PACKAGE_NAME}@${latest}\n`));
 
   await new Promise<void>((resolve, reject) => {
-    const { command, args, options } = npmGlobalInstallSpawn(
+    const { command, options } = npmGlobalInstallSpawn(
       `${PACKAGE_NAME}@${latest}`,
     );
-    const child = spawn(command, args, options);
+    const child = spawn(command, options);
     child.on("error", (err) => {
       reject(err);
     });

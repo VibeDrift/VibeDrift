@@ -170,7 +170,7 @@ function findingPriority(f: Finding): number {
   return 2 * sev;
 }
 
-function renderFixPlan(result: ScanResult, driftFirst = false): string[] {
+function renderFixPlan(result: ScanResult, driftFirst = false, maxItems = 5): string[] {
   const lines: string[] = [];
   const allSorted = [...result.findings]
     .filter(hasMeaningfulImpact)
@@ -194,17 +194,17 @@ function renderFixPlan(result: ScanResult, driftFirst = false): string[] {
     const diverse: Finding[] = [];
     for (const f of prioritySorted) {
       const key = f.analyzerId;
-      if (seen.has(key) && diverse.length < 5) {
-        // Allow a second from the same analyzer only if we have <5 total
+      if (seen.has(key) && diverse.length < maxItems) {
+        // Allow a second from the same analyzer only if we're short of the cap
         if (diverse.length >= 3) continue;
       }
       seen.add(key);
       diverse.push(f);
-      if (diverse.length >= 5) break;
+      if (diverse.length >= maxItems) break;
     }
     top = diverse;
   } else {
-    top = allSorted.slice(0, 5);
+    top = allSorted.slice(0, maxItems);
   }
 
   if (top.length === 0) return lines;
@@ -748,19 +748,37 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
 
 /**
  * Brief terminal output for unauthenticated users.
- * Shows: score, category bars, top 5 findings — enough to prove value,
+ * Shows: score, category bars, top findings — enough to prove value,
  * not enough to replace the full report.
+ *
+ * `concise: true` is the authenticated-summary variant: it caps the Fix Plan
+ * at the top 3 items so stdout stays a tight, scannable high-level summary
+ * (score, bars, hygiene, three fixes). The full detail lives in the HTML
+ * report the CLI writes and serves.
  */
-function renderBriefOutput(result: ScanResult, plan?: Plan): string {
+function renderBriefOutput(result: ScanResult, plan?: Plan, opts?: { concise?: boolean }): string {
+  const maxFixes = opts?.concise ? 3 : 5;
   const lines: string[] = [
     ...renderUpdateBanner(result),
     ...renderScoreSection(result),
     ...renderCategoryBars(result),
     ...renderPeerPercentile(result, plan),
-    ...renderFixPlan(result, true),  // drift-first mix for conversion
+    ...renderFixPlan(result, true, maxFixes),  // drift-first mix, capped
   ];
 
   return lines.join("\n");
+}
+
+/**
+ * Concise authenticated summary for the default (html) format. Renders the
+ * update banner, scan header, Vibe Drift Score with category bars and the
+ * Hygiene Score, and the top 3 fixes — a tight high-level summary, not the
+ * wall-of-text full report. The complete findings list, hygiene pane, and
+ * per-directory drift detail all live in the HTML report the CLI saves and
+ * serves alongside this summary.
+ */
+export function renderConciseSummary(result: ScanResult, plan?: Plan): string {
+  return renderBriefOutput(result, plan, { concise: true });
 }
 
 export function renderJsonOutput(result: ScanResult): string {

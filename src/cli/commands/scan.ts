@@ -10,7 +10,7 @@ import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
 import { computeScores, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
-import { renderTerminalOutput, renderJsonOutput, renderStarCta } from "../../output/terminal.js";
+import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta } from "../../output/terminal.js";
 import { renderHtmlReport } from "../../output/html.js";
 import {
   saveScanResult,
@@ -604,6 +604,12 @@ export async function logAndRender(
       sanitizedResult.scanType = options.deep ? "deep" : "free";
       sanitizedResult.scannedAt = new Date().toISOString();
 
+      // On large repos the result_json upload can take several seconds. Show a
+      // status line (stderr, so --json stdout stays clean) so it doesn't look
+      // like the scan hung between the timings and the report.
+      if (!options.json) {
+        console.error(chalk.dim("  Syncing scan to your dashboard…"));
+      }
       const logResult = await logScan({
         token: bearerToken,
         apiUrl,
@@ -724,11 +730,13 @@ async function renderToFormat(
   }
 
   if (format === "html") {
-    // Print the rich terminal summary (update banner, score, category bars,
-    // Fix Plan, findings) for authenticated runs too — they were only seeing
-    // "report saved", while logged-out runs got the full in-terminal UI. Then
-    // write + serve the HTML report as before, so authed users get both.
-    console.log(renderTerminalOutput(result, { plan }));
+    // Print a tight, scannable high-level summary on stdout: the update banner,
+    // scan header, Vibe Drift Score with category bars and the Hygiene Score,
+    // and the top 3 fixes. The full report (every finding, the hygiene pane,
+    // per-directory drift, exact duplicates) lives in the HTML report we write
+    // and serve below, so authed users get a clean terminal summary and the
+    // complete detail in the browser.
+    console.log(renderConciseSummary(result, plan));
     const scanId = (result as any).__scanId as string | undefined;
     const beaconApiUrl = (result as any).__apiUrl as string | undefined;
     const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
@@ -751,7 +759,8 @@ async function renderToFormat(
     });
     const port = 4173 + Math.floor(Math.random() * 100);
     server.listen(port, () => {
-      console.log(`\n  Report saved to ${outputPath}`);
+      console.log(`\n  ${chalk.dim("Full report (every finding, drift detail, and duplicates) is in the HTML report:")}`);
+      console.log(`  Report saved to ${outputPath}`);
       console.log(`  View in browser: \x1b[36mhttp://localhost:${port}\x1b[0m\n`);
       for (const line of renderStarCta()) console.log(line);
     });

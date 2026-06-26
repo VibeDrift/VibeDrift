@@ -6,12 +6,12 @@ import {
 } from "../../../src/cli/commands/update.js";
 
 describe("npmGlobalInstallSpawn", () => {
-  it("routes through the shell so Windows can resolve npm.cmd (fixes spawn npm ENOENT)", () => {
-    const { command, args, options } = npmGlobalInstallSpawn("@vibedrift/cli@0.9.3");
-    expect(command).toBe("npm");
-    expect(args).toEqual(["i", "-g", "@vibedrift/cli@0.9.3"]);
-    // The bug was shell:false — npm is npm.cmd on Windows and Node refuses to
-    // spawn a .cmd without a shell. shell:true is the cross-platform fix.
+  it("routes through the shell as one command string (Windows npm.cmd + avoids DEP0190)", () => {
+    const { command, options } = npmGlobalInstallSpawn("@vibedrift/cli@0.9.3");
+    // One command string (not command + args array): a shell is needed so
+    // Windows resolves npm.cmd, and passing args alongside shell:true triggers
+    // Node's DEP0190 deprecation. A single string avoids it.
+    expect(command).toBe("npm i -g @vibedrift/cli@0.9.3");
     expect(options.shell).toBe(true);
     expect(options.stdio).toBe("inherit");
   });
