@@ -662,12 +662,35 @@ function renderCoherenceReport(result: ScanResult): string[] {
   return lines;
 }
 
+/**
+ * Top-of-output update nudge. Renders a prominent banner when the registry
+ * reported a strictly-newer STABLE release (`@vibedrift/cli@latest`, fetched
+ * dynamically and cached 24h). Empty under `--local-only` / when telemetry is
+ * off (`updateCheck` is null there), so the zero-network guarantee still holds.
+ * Shown for both signed-out and signed-in scans.
+ */
+function renderUpdateBanner(result: ScanResult): string[] {
+  if (!result.updateCheck?.outdated) return [];
+  const { current, latest } = result.updateCheck;
+  return [
+    chalk.yellow.bold(`  ⬆  Update available: v${latest}`) +
+      chalk.dim(` (latest stable) — you're on v${current}`),
+    chalk.dim("     Newer releases sharpen the detectors and ship fixes. Update for better results:"),
+    "       " +
+      chalk.bold.cyan("npm i -g @vibedrift/cli@latest") +
+      chalk.dim("   ·   or run ") +
+      chalk.bold("vibedrift update"),
+    "",
+  ];
+}
+
 export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolean; plan?: Plan }): string {
   if (opts?.brief) {
     return renderBriefOutput(result, opts.plan);
   }
 
   const lines: string[] = [
+    ...renderUpdateBanner(result),
     ...renderScoreSection(result),
     ...renderDiffBanner(result),
     ...renderCategoryBars(result),
@@ -714,16 +737,8 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
     lines.push("");
   }
 
-  // Passive update notice — dim one-liner at the very end, shown only
-  // when the registry reported a strictly-newer version AND the scan
-  // didn't already fail. Non-interruptive; skipped for --local-only
-  // (updateCheck is null there) and when telemetry is disabled.
-  if (result.updateCheck?.outdated) {
-    const { current, latest } = result.updateCheck;
-    lines.push(chalk.dim(`  ℹ New version available: ${chalk.bold(latest)} (you're on ${current}). VibeDrift is early-stage — each release sharpens detectors and ships fixes.`));
-    lines.push(chalk.dim(`     Update: ${chalk.bold("vibedrift update")}  ·  Release notes: https://vibedrift.ai/releases`));
-    lines.push("");
-  }
+  // The update nudge now renders as a banner at the TOP of the output
+  // (renderUpdateBanner), so it's the first thing a user sees.
 
   // Post-scan "star us" CTA — hidden until a public repo is configured.
   lines.push(...renderStarCta());
@@ -738,19 +753,12 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
  */
 function renderBriefOutput(result: ScanResult, plan?: Plan): string {
   const lines: string[] = [
+    ...renderUpdateBanner(result),
     ...renderScoreSection(result),
     ...renderCategoryBars(result),
     ...renderPeerPercentile(result, plan),
     ...renderFixPlan(result, true),  // drift-first mix for conversion
   ];
-
-  // Same update notice as the full output — shown at the very end so
-  // brief-output users also learn about newer versions.
-  if (result.updateCheck?.outdated) {
-    const { current, latest } = result.updateCheck;
-    lines.push("");
-    lines.push(chalk.dim(`  ℹ New version available: ${chalk.bold(latest)} (you're on ${current}). Update: ${chalk.bold("vibedrift update")}`));
-  }
 
   return lines.join("\n");
 }

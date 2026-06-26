@@ -724,6 +724,11 @@ async function renderToFormat(
   }
 
   if (format === "html") {
+    // Print the rich terminal summary (update banner, score, category bars,
+    // Fix Plan, findings) for authenticated runs too — they were only seeing
+    // "report saved", while logged-out runs got the full in-terminal UI. Then
+    // write + serve the HTML report as before, so authed users get both.
+    console.log(renderTerminalOutput(result, { plan }));
     const scanId = (result as any).__scanId as string | undefined;
     const beaconApiUrl = (result as any).__apiUrl as string | undefined;
     const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
