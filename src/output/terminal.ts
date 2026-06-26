@@ -53,30 +53,23 @@ export const DASHBOARD_SPINNER_SUCCESS_SYMBOL = chalk.green("✓");
 export const DASHBOARD_SPINNER_FAIL_SYMBOL = chalk.red("✘");
 
 /**
- * Final beat of an authenticated scan: the scan is live on the web dashboard
- * and this is the link to view it. Printed once, right after the concise
- * summary and after the upload spinner resolves. Honest by construction: the
- * scan IS uploaded by the time this renders, so the full report, history, and
- * trends genuinely live at the URL.
- *
- * Visual: a compact rounded cyan box (same vocabulary as renderScoreSection's
- * banner) with a green ✓ "live" line, the underlined-cyan clickable URL, and a
- * dim one-liner naming what lives there. Two-space left indent throughout.
+ * A compact rounded cyan box with a green ✓ heading, a dim one-liner, and an
+ * underlined-cyan clickable URL. The closing beat of a scan: it points the user
+ * at where the full report lives. Box width tracks the widest *visible* line so
+ * the right border always aligns (ANSI codes have zero print width, so we pad
+ * using the un-styled lengths). Two-space left indent throughout.
  */
-export function renderDashboardLink(url: string): string {
-  // Box width tracks the widest *visible* line so the right border always
-  // aligns. We pad each row using its un-styled length (ANSI codes have zero
-  // print width, so styled strings would otherwise break the math).
-  const headingPlain = "✓ Scan is live on your dashboard";
-  const subPlain = "View the full report, history, and trends.";
+function renderLinkBox(headingText: string, subText: string, url: string): string {
+  const headingPlain = "✓ " + headingText;
+  const subPlain = subText;
   const urlPlain = url;
 
   const inner = Math.max(headingPlain.length, subPlain.length, urlPlain.length);
   const pad = (plain: string, styled: string): string =>
     styled + " ".repeat(inner - plain.length);
 
-  const heading = chalk.green("✓") + " " + chalk.bold("Scan is live on your dashboard");
-  const sub = chalk.dim("View the full report, history, and trends.");
+  const heading = chalk.green("✓") + " " + chalk.bold(headingText);
+  const sub = chalk.dim(subText);
   const link = chalk.underline.cyan(url);
 
   const top = chalk.cyan("╭" + "─".repeat(inner + 2) + "╮");
@@ -84,7 +77,7 @@ export function renderDashboardLink(url: string): string {
   const row = (plain: string, styled: string): string =>
     chalk.cyan("│") + " " + pad(plain, styled) + " " + chalk.cyan("│");
 
-  const lines = [
+  return [
     "",
     "  " + top,
     "  " + row(headingPlain, heading),
@@ -92,8 +85,33 @@ export function renderDashboardLink(url: string): string {
     "  " + row(urlPlain, link),
     "  " + bottom,
     "",
-  ];
-  return lines.join("\n");
+  ].join("\n");
+}
+
+/**
+ * Final beat of an authenticated scan: the scan is live on the web dashboard.
+ * Honest by construction — the scan IS uploaded by the time this renders, so the
+ * full report, history, and trends genuinely live at the URL.
+ */
+export function renderDashboardLink(url: string): string {
+  return renderLinkBox(
+    "Scan is live on your dashboard",
+    "View the full report, history, and trends.",
+    url,
+  );
+}
+
+/**
+ * Final beat of an unauthenticated scan: the full HTML report is being served
+ * locally and this is the localhost link to open it. Same box vocabulary as the
+ * dashboard link so the two paths feel consistent.
+ */
+export function renderLocalReportLink(url: string): string {
+  return renderLinkBox(
+    "Your full report is ready",
+    "Every finding, drift detail, and exact duplicate.",
+    url,
+  );
 }
 
 import { getLanguageDisplayName } from "../core/language.js";

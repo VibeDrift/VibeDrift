@@ -10,7 +10,7 @@ import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
 import { computeScores, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
-import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
+import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, renderLocalReportLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
 import { renderHtmlReport } from "../../output/html.js";
 import {
   saveScanResult,
@@ -594,18 +594,12 @@ export async function logAndRender(
     });
   }
 
-  if (!bearerToken && format !== "json" && format !== "terminal") {
-    // Unauthenticated: show score + Fix Plan + personalized CTA.
-    // No plan passed → free-gated peer percentile (locked teaser when corpus
-    // data exists; nothing in the current placeholder case).
-    console.log(renderTerminalOutput(result, { brief: true }));
-    console.log("");
-    console.log(chalk.dim("  ─────────────────────────────────────────────────────────────"));
-    console.log("");
-    console.log(`  ${chalk.yellow("→")} Track this score over time: ${chalk.underline.cyan("https://vibedrift.ai/login")} ${chalk.dim("(free, 30s)")}`);
-    console.log(`    ${chalk.dim("HTML report · score history · AI fix prompts (Pro)")}`);
-    for (const line of renderStarCta()) console.log(line);
-    console.log("");
+  if (!bearerToken && format === "html") {
+    // Unauthenticated html: the full report is no longer gated. Render the
+    // complete report (every finding, drift detail, exact duplicate) and serve
+    // it on localhost so anyone gets it, not a teaser. Authenticated users get
+    // the dashboard link instead (handled in renderToFormat below).
+    await serveHtmlReportOnLocalhost(result, options, paid, plan);
   } else {
     // Build the deferred loader steps for the html path: first the AI fix-prompt
     // synthesis (Pro), then the dashboard sync. Each runs behind its own spinner
@@ -645,6 +639,68 @@ interface DeferredStep {
    *  otherwise it just clears (e.g. the sync step, followed by the link box). */
   doneText?: string;
   run: () => Promise<void>;
+}
+
+/**
+ * Unauthenticated html path: render the FULL report (no longer gated) and serve
+ * it on localhost so the user opens it in their browser with working internal
+ * links (the summary links to the detailed view by relative path). The command
+ * stays alive serving until Ctrl+C, with a 10-minute auto-close as a backstop.
+ * Authenticated scans link to the dashboard instead (see renderToFormat).
+ */
+async function serveHtmlReportOnLocalhost(
+  result: ScanResult,
+  options: ScanOptions,
+  paid: boolean,
+  plan?: import("../../auth/plan.js").Plan,
+): Promise<void> {
+  // High-level summary on stdout first.
+  console.log(renderConciseSummary(result, plan));
+
+  // The full report. Unauthenticated, so no report-open beacon (no scanId/token).
+  const summaryHtml = renderHtmlReport(result, "summary", {}, { isPaid: paid });
+  const detailedHtml = renderHtmlReport(result, "detailed", {}, { isPaid: paid });
+
+  // Keep a copy on disk only when explicitly asked, so we don't litter the CWD.
+  if (options.output) {
+    const detailedPath = options.output.replace(/(\.html?)?$/i, "-detailed.html");
+    await writeFile(options.output, summaryHtml);
+    await writeFile(detailedPath, detailedHtml);
+  }
+
+  const { createServer } = await import("http");
+  const { openInBrowser } = await import("../../auth/browser.js");
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end((req.url ?? "/").includes("detailed") ? detailedHtml : summaryHtml);
+  });
+  // Don't crash if the port is taken — surface it and keep the scan a success.
+  server.on("error", (err: any) => {
+    notice(options, chalk.yellow(`  ⚠ Couldn't start the local report server: ${err.message}`));
+    if (options.output) notice(options, chalk.dim(`    The report was written to ${options.output}.`));
+  });
+  const port = 4173 + Math.floor(Math.random() * 100);
+  // Auto-close after 10 minutes; Ctrl+C closes immediately.
+  const closeTimer = setTimeout(() => { server.close(); process.exit(0); }, 600_000);
+  process.on("SIGINT", () => { clearTimeout(closeTimer); server.close(); process.exit(0); });
+  server.listen(port, () => {
+    const url = `http://localhost:${port}`;
+    console.log(renderLocalReportLink(url));
+    if (openInBrowser(url)) {
+      console.log(chalk.dim("  Opening it in your browser…"));
+    } else {
+      console.log(`  Open it: ${chalk.underline.cyan(url)}`);
+    }
+    console.log("");
+    console.log(
+      `  ${chalk.yellow("→")} Sign in to track your score over time: ` +
+        `${chalk.underline.cyan("https://vibedrift.ai/login")} ${chalk.dim("(free, 30s)")}`,
+    );
+    console.log("");
+    for (const line of renderStarCta()) console.log(line);
+    console.log("");
+    console.log(chalk.dim("  Report server is running. Press Ctrl+C to stop."));
+  });
 }
 
 /**
