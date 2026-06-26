@@ -10,7 +10,7 @@ import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
 import { computeScores, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
-import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta } from "../../output/terminal.js";
+import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
 import { renderHtmlReport } from "../../output/html.js";
 import {
   saveScanResult,
@@ -109,7 +109,10 @@ async function resolveAuthAndBanner(
   if (!options.json && options.format !== "json" && !options.deep) {
     if (bearerToken) {
       try {
-        const credits = await fetchCredits(bearerToken, { apiUrl });
+        // Cosmetic banner only — cap the wait hard so a slow/contended API
+        // never delays the scan from even starting. If credits don't come back
+        // in time we simply skip the banner.
+        const credits = await fetchCredits(bearerToken, { apiUrl, timeoutMs: 2500 });
         if (credits.has_free_deep_scan && !credits.unlimited) {
           console.log("");
           console.log(chalk.bgYellow.black.bold("  🎁  1 FREE DEEP SCAN EVERY MONTH  "));
@@ -551,133 +554,45 @@ export async function logAndRender(
   paid: boolean,
   plan?: import("../../auth/plan.js").Plan,
 ): Promise<void> {
-  const { findings: allFindings, compositeScore, maxCompositeScore, scanTimeMs } = result;
+  const { compositeScore } = result;
 
-  // ── Log the scan to the dashboard ──
-  // The CLI's full ScanResult (sanitized) is the single source of truth.
-  // Both the dashboard's metadata strip AND the embedded HTML report
-  // are derived from this object, so they're guaranteed consistent.
-  // Runs for both free and deep scans whenever the user is logged in.
-  // Silent on failure — the scan already succeeded locally.
-  if (bearerToken) {
+  const format = options.format ?? (options.json ? "json" : "html");
+  // The html loader path prints the summary first, then runs the slow network
+  // work (AI fix-prompt synthesis, then the dashboard sync) behind sequential
+  // spinners — so the user sees results instantly and watches progress instead
+  // of a silent multi-second hang. Every other path runs that work up front.
+  const htmlLoaderPath = !!bearerToken && format === "html" && !options.json;
+
+  // Rich fix-prompt prose (PAID). Attaches metadata.fixPromptProse used by the
+  // dashboard/HTML report. Skipped if already synthesized (--write-context does
+  // it earlier, before its files are written). Best-effort.
+  const needsFixPrompts = (): boolean =>
+    !!bearerToken && paid && !(result as any).__fixPromptsDone;
+  const runFixPrompts = async (): Promise<void> => {
+    if (!needsFixPrompts()) return;
     try {
-      const { logScan } = await import("../../ml-client/log-scan.js");
-      const { detectProjectIdentity, detectLocalDisplayName } = await import("../../ml-client/project-name.js");
-      const { sanitizeResultForUpload } = await import("../../ml-client/sanitize-result.js");
-      const projectIdentity = await detectProjectIdentity(
-        rootDir,
-        options.projectName,
-        options.private,
-      );
-      // Local display name for the HTML report
-      const localDisplayName = options.private
-        ? projectIdentity.name
-        : await detectLocalDisplayName(rootDir, options.projectName);
-
-      // Tally per-detector ML counts (only present for deep scans).
-      const mlDuplicates = allFindings.filter((f) => f.analyzerId === "ml-duplicate").length;
-      const mlIntent = allFindings.filter((f) => f.analyzerId === "ml-intent").length;
-      const mlAnomaly = allFindings.filter((f) => f.analyzerId === "ml-anomaly").length;
-
-      // No longer upload the HTML blob — the dashboard renders reports
-      // client-side from result_json. This eliminates the upload timeout
-      // issue (HTML was 400KB-1MB, JSON metadata is ~10-50KB).
-
-      // Letter grade — MUST match the thresholds in src/output/html.ts
-      // gradeFor() so the dashboard's metadata strip agrees with the
-      // report it embeds. (A=90, B=75, C=50, D=25, F<25)
-      const pct = maxCompositeScore > 0 ? (compositeScore / maxCompositeScore) * 100 : 0;
-      const grade =
-        pct >= 90 ? "A" : pct >= 75 ? "B" : pct >= 50 ? "C" : pct >= 25 ? "D" : "F";
-
-      // Sanitize the full ScanResult so we can ship it as the canonical
-      // metadata blob. Strips ctx.rootDir + any absolute paths.
-      const sanitizedResult = sanitizeResultForUpload(result);
-      // Stamp the project identity onto the envelope (the sanitizer
-      // doesn't know it because it's computed by detectProjectIdentity).
-      // Local report gets the display name; server upload gets hash only
-      (sanitizedResult.project as Record<string, unknown>) = {
-        name: localDisplayName,
-        hash: projectIdentity.hash,
-      };
-      sanitizedResult.grade = grade;
-      sanitizedResult.scanType = options.deep ? "deep" : "free";
-      sanitizedResult.scannedAt = new Date().toISOString();
-
-      // On large repos the result_json upload can take several seconds. Show a
-      // status line (stderr, so --json stdout stays clean) so it doesn't look
-      // like the scan hung between the timings and the report.
-      if (!options.json) {
-        console.error(chalk.dim("  Syncing scan to your dashboard…"));
-      }
-      const logResult = await logScan({
-        token: bearerToken,
+      const { synthesizeFixPrompts } = await import("../../ml-client/fix-prompts.js");
+      await synthesizeFixPrompts(result.findings, result.context, {
+        token: bearerToken as string,
         apiUrl,
         verbose: options.verbose,
-        payload: {
-          project_hash: projectIdentity.hash,
-          project_name: projectIdentity.name,
-          language: result.context.dominantLanguage ?? "unknown",
-          file_count: result.context.files.length,
-          total_lines: result.context.totalLines,
-          function_count: codeDnaResult?.functions?.length ?? 0,
-          finding_count: allFindings.length,
-          score: compositeScore,
-          grade,
-          duplicates_found: mlDuplicates,
-          intent_mismatches: mlIntent,
-          anomalies_found: mlAnomaly,
-          is_deep: !!options.deep,
-          processing_time_ms: scanTimeMs,
-          result_json: sanitizedResult,
-        },
       });
-      if (logResult.scanId) {
-        (result as any).__scanId = logResult.scanId;
-        (result as any).__apiUrl = apiUrl;
-        // Surface trim notice (always — user should know if their result
-        // was compacted before upload, even on a successful log).
-        if (logResult.trimmedFields && logResult.trimmedFields.length > 0) {
-          const before = Math.round((logResult.initialBytes ?? 0) / 1024 / 1024);
-          const after = Math.round((logResult.finalBytes ?? 0) / 1024 / 1024);
-          notice(
-            options,
-            chalk.dim(
-              `  ⓘ Result trimmed for upload: ${before}MB → ${after}MB ` +
-                `(stripped ${logResult.trimmedFields.join(", ")}). ` +
-                `Local report unaffected.`,
-            ),
-          );
-        }
-      } else {
-        // Surface upload failure regardless of --verbose. The user
-        // expects the dashboard to show the scan; if it didn't, they
-        // need to know why without re-running with --verbose to dig.
-        const reason = logResult.error ?? "unknown error";
-        const sizeNote =
-          logResult.finalBytes && logResult.finalBytes > 5_000_000
-            ? ` (payload ${Math.round(logResult.finalBytes / 1024 / 1024)}MB)`
-            : "";
-        notice(
-          options,
-          chalk.yellow(`  ⚠ Couldn't upload scan to dashboard${sizeNote}: ${reason}`),
-        );
-        notice(
-          options,
-          chalk.dim(`    Run with --verbose for full details. Local report still saved.`),
-        );
-      }
     } catch (err: any) {
-      // Unexpected exception (import error, etc.) — also surface by default.
-      notice(options, chalk.yellow(`  ⚠ Couldn't upload scan to dashboard: ${err.message}`));
-      if (options.verbose) {
-        console.error(chalk.dim(err.stack ?? ""));
-      }
+      if (options.verbose) console.error(`[fix-prompts] skipped: ${err.message ?? err}`);
+    } finally {
+      (result as any).__fixPromptsDone = true;
     }
-  }
+  };
 
-  // Output — gate full reports behind free account
-  const format = options.format ?? (options.json ? "json" : "html");
+  if (bearerToken && !htmlLoaderPath) {
+    // Non-loader paths (json/terminal/csv/docx): synthesize prose then log, both
+    // up front. These formats don't render the loader UX.
+    await runFixPrompts();
+    await uploadScanToDashboard(result, options, bearerToken, apiUrl, rootDir, codeDnaResult, {
+      showSyncLine: !options.json,
+      quiet: false,
+    });
+  }
 
   if (!bearerToken && format !== "json" && format !== "terminal") {
     // Unauthenticated: show score + Fix Plan + personalized CTA.
@@ -692,12 +607,168 @@ export async function logAndRender(
     for (const line of renderStarCta()) console.log(line);
     console.log("");
   } else {
-    await renderToFormat(result, format, options, paid, plan);
+    // Build the deferred loader steps for the html path: first the AI fix-prompt
+    // synthesis (Pro), then the dashboard sync. Each runs behind its own spinner
+    // after the summary is on screen.
+    const deferredSteps: DeferredStep[] = [];
+    if (htmlLoaderPath) {
+      if (needsFixPrompts()) {
+        deferredSteps.push({
+          text: chalk.dim("Getting your AI fix prompts…"),
+          doneText: "AI fix prompts ready",
+          run: runFixPrompts,
+        });
+      }
+      deferredSteps.push({
+        text: DASHBOARD_SPINNER_TEXT,
+        run: () =>
+          uploadScanToDashboard(result, options, bearerToken as string, apiUrl, rootDir, codeDnaResult, {
+            showSyncLine: false,
+            quiet: true,
+          }),
+      });
+    }
+    await renderToFormat(result, format, options, paid, plan, deferredSteps);
   }
 
   // Fail on score threshold
   if (options.failOnScore !== undefined && compositeScore < options.failOnScore) {
     process.exit(1);
+  }
+}
+
+/** One deferred, post-summary step on the html loader path: a labeled spinner
+ *  wrapping a best-effort async task (fix-prompt synthesis, dashboard sync). */
+interface DeferredStep {
+  text: string;
+  /** If set, the spinner persists a green-check line with this text when done;
+   *  otherwise it just clears (e.g. the sync step, followed by the link box). */
+  doneText?: string;
+  run: () => Promise<void>;
+}
+
+/**
+ * Upload the scan to the dashboard (logScan). Mutates `result` with __scanId,
+ * __apiUrl and __dashboardUrl (the last set only on success). The scan already
+ * succeeded locally, so a failed upload is non-fatal.
+ *
+ * In `quiet` mode (the html loader path, where a spinner owns the line) it
+ * stashes any trim / failure message on the result instead of printing it, so
+ * the caller can render it cleanly after stopping the spinner.
+ */
+async function uploadScanToDashboard(
+  result: ScanResult,
+  options: ScanOptions,
+  bearerToken: string,
+  apiUrl: string | undefined,
+  rootDir: string,
+  codeDnaResult: any,
+  opts: { showSyncLine: boolean; quiet: boolean },
+): Promise<void> {
+  const { findings: allFindings, compositeScore, maxCompositeScore, scanTimeMs } = result;
+  // The CLI's full ScanResult (sanitized) is the single source of truth. The
+  // dashboard's metadata strip and the report it renders both derive from this
+  // object, so they stay consistent. Runs for free and deep scans alike.
+  try {
+    const { logScan } = await import("../../ml-client/log-scan.js");
+    const { detectProjectIdentity, detectLocalDisplayName } = await import("../../ml-client/project-name.js");
+    const { sanitizeResultForUpload } = await import("../../ml-client/sanitize-result.js");
+    const projectIdentity = await detectProjectIdentity(rootDir, options.projectName, options.private);
+    // Local display name for the HTML report fallback.
+    const localDisplayName = options.private
+      ? projectIdentity.name
+      : await detectLocalDisplayName(rootDir, options.projectName);
+
+    // Tally per-detector ML counts (only present for deep scans).
+    const mlDuplicates = allFindings.filter((f) => f.analyzerId === "ml-duplicate").length;
+    const mlIntent = allFindings.filter((f) => f.analyzerId === "ml-intent").length;
+    const mlAnomaly = allFindings.filter((f) => f.analyzerId === "ml-anomaly").length;
+
+    // Letter grade — MUST match src/output/html.ts gradeFor() so the
+    // dashboard's metadata strip agrees with the report. (A=90 B=75 C=50 D=25 F)
+    const pct = maxCompositeScore > 0 ? (compositeScore / maxCompositeScore) * 100 : 0;
+    const grade = pct >= 90 ? "A" : pct >= 75 ? "B" : pct >= 50 ? "C" : pct >= 25 ? "D" : "F";
+
+    const sanitizedResult = sanitizeResultForUpload(result);
+    // Stamp the project identity (the sanitizer doesn't know it). Local report
+    // gets the display name; the server upload gets the hash only.
+    (sanitizedResult.project as Record<string, unknown>) = {
+      name: localDisplayName,
+      hash: projectIdentity.hash,
+    };
+    sanitizedResult.grade = grade;
+    sanitizedResult.scanType = options.deep ? "deep" : "free";
+    sanitizedResult.scannedAt = new Date().toISOString();
+
+    // Non-loader paths show a status line (stderr keeps --json stdout clean) so
+    // a several-second sync on a large repo doesn't look like a hang. The loader
+    // path suppresses it — the spinner is the status indicator there.
+    if (opts.showSyncLine) {
+      console.error(chalk.dim("  Syncing scan to your dashboard…"));
+    }
+    const logResult = await logScan({
+      token: bearerToken,
+      apiUrl,
+      verbose: options.verbose,
+      payload: {
+        project_hash: projectIdentity.hash,
+        project_name: projectIdentity.name,
+        language: result.context.dominantLanguage ?? "unknown",
+        file_count: result.context.files.length,
+        total_lines: result.context.totalLines,
+        function_count: codeDnaResult?.functions?.length ?? 0,
+        finding_count: allFindings.length,
+        score: compositeScore,
+        grade,
+        duplicates_found: mlDuplicates,
+        intent_mismatches: mlIntent,
+        anomalies_found: mlAnomaly,
+        is_deep: !!options.deep,
+        processing_time_ms: scanTimeMs,
+        result_json: sanitizedResult,
+      },
+    });
+    if (logResult.scanId) {
+      (result as any).__scanId = logResult.scanId;
+      (result as any).__apiUrl = apiUrl;
+      // The scan is on the dashboard. Its project page URL is the first 12 chars
+      // of the project hash (matches the dashboard's own links), so authed users
+      // get a link there instead of a local HTML file.
+      (result as any).__dashboardUrl =
+        `https://vibedrift.ai/dashboard/projects/${projectIdentity.hash.slice(0, 12)}`;
+      // Surface a trim notice if the payload was compacted before upload.
+      if (logResult.trimmedFields && logResult.trimmedFields.length > 0) {
+        const before = Math.round((logResult.initialBytes ?? 0) / 1024 / 1024);
+        const after = Math.round((logResult.finalBytes ?? 0) / 1024 / 1024);
+        const msg = chalk.dim(
+          `  ⓘ Result trimmed for upload: ${before}MB → ${after}MB ` +
+            `(stripped ${logResult.trimmedFields.join(", ")}). Local report unaffected.`,
+        );
+        if (opts.quiet) (result as any).__uploadTrimNote = msg;
+        else notice(options, msg);
+      }
+    } else {
+      const reason = logResult.error ?? "unknown error";
+      const sizeNote =
+        logResult.finalBytes && logResult.finalBytes > 5_000_000
+          ? ` (payload ${Math.round(logResult.finalBytes / 1024 / 1024)}MB)`
+          : "";
+      if (opts.quiet) {
+        (result as any).__uploadError = `${reason}${sizeNote}`;
+      } else {
+        notice(options, chalk.yellow(`  ⚠ Couldn't upload scan to dashboard${sizeNote}: ${reason}`));
+        notice(options, chalk.dim(`    Run with --verbose for full details. Local report still saved.`));
+      }
+    }
+  } catch (err: any) {
+    if (opts.quiet) {
+      (result as any).__uploadError = err.message;
+    } else {
+      notice(options, chalk.yellow(`  ⚠ Couldn't upload scan to dashboard: ${err.message}`));
+    }
+    if (options.verbose) {
+      console.error(chalk.dim(err.stack ?? ""));
+    }
   }
 }
 
@@ -707,6 +778,10 @@ async function renderToFormat(
   options: ScanOptions,
   paid: boolean,
   plan?: import("../../auth/plan.js").Plan,
+  // Deferred steps for the html loader path: each runs behind its own spinner
+  // after the summary prints (AI fix prompts, then the dashboard sync). Empty
+  // for every other path.
+  deferredSteps: DeferredStep[] = [],
 ): Promise<void> {
   // Fixture/generated-code nudge. Surfaces the exclude feature when scored
   // files look like test inputs or generated code, so users discover it
@@ -730,45 +805,82 @@ async function renderToFormat(
   }
 
   if (format === "html") {
-    // Print a tight, scannable high-level summary on stdout: the update banner,
-    // scan header, Vibe Drift Score with category bars and the Hygiene Score,
-    // and the top 3 fixes. The full report (every finding, the hygiene pane,
-    // per-directory drift, exact duplicates) lives in the HTML report we write
-    // and serve below, so authed users get a clean terminal summary and the
-    // complete detail in the browser.
+    // Print a tight, scannable high-level summary on stdout right away: the
+    // update banner, scan header, Vibe Drift Score with category bars and the
+    // Hygiene Score, and the top fixes. The complete detail lives on the
+    // dashboard (or the local HTML report fallback).
     console.log(renderConciseSummary(result, plan));
-    const scanId = (result as any).__scanId as string | undefined;
-    const beaconApiUrl = (result as any).__apiUrl as string | undefined;
-    const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
-    const summaryHtml = renderHtmlReport(result, "summary", {}, beaconOpts);
-    const detailedHtml = renderHtmlReport(result, "detailed", {}, beaconOpts);
-    const outputPath = options.output ?? "vibedrift-report.html";
-    const detailedPath = outputPath.replace(/(\.html?)?$/i, "-detailed.html");
-    await writeFile(outputPath, summaryHtml);
-    await writeFile(detailedPath, detailedHtml);
-    // Serve on localhost
-    const { createServer } = await import("http");
-    const server = createServer((req, res) => {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      const url = req.url ?? "/";
-      if (url.includes("detailed")) {
-        res.end(detailedHtml);
-      } else {
-        res.end(summaryHtml);
+
+    // Loader UX: results are on screen, so run the slow network work behind
+    // sequential spinners — "Getting your AI fix prompts…" then "Generating
+    // your dashboard link…". The user watches progress instead of a silent hang.
+    for (const step of deferredSteps) {
+      const spinner = ora({ text: step.text, color: "cyan" }).start();
+      try {
+        await step.run();
+      } finally {
+        if (step.doneText) {
+          spinner.stopAndPersist({
+            symbol: DASHBOARD_SPINNER_SUCCESS_SYMBOL,
+            text: chalk.dim(step.doneText),
+          });
+        } else {
+          spinner.stop();
+        }
       }
-    });
-    const port = 4173 + Math.floor(Math.random() * 100);
-    server.listen(port, () => {
-      console.log(`\n  ${chalk.dim("Full report (every finding, drift detail, and duplicates) is in the HTML report:")}`);
-      console.log(`  Report saved to ${outputPath}`);
-      console.log(`  View in browser: \x1b[36mhttp://localhost:${port}\x1b[0m\n`);
-      for (const line of renderStarCta()) console.log(line);
-    });
-    // Keep alive for 10 minutes then auto-close
-    setTimeout(() => { server.close(); process.exit(0); }, 600_000);
-    // But don't block if user presses Ctrl+C
-    process.on("SIGINT", () => { server.close(); process.exit(0); });
-    return; // Don't exit — server is running
+    }
+
+    const dashboardUrl = (result as any).__dashboardUrl as string | undefined;
+    const trimNote = (result as any).__uploadTrimNote as string | undefined;
+    if (trimNote) console.log(trimNote);
+
+    // Authenticated + uploaded: the scan lives on the dashboard (persistent,
+    // shareable, full detail). Link there and SKIP the local HTML render — it is
+    // the slow part of the command. Only write a local file when there's no
+    // dashboard entry (upload failed / offline) or the user asked with --output.
+    const writeLocalReport = !dashboardUrl || !!options.output;
+
+    if (writeLocalReport) {
+      const scanId = (result as any).__scanId as string | undefined;
+      const beaconApiUrl = (result as any).__apiUrl as string | undefined;
+      const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
+      const summaryHtml = renderHtmlReport(result, "summary", {}, beaconOpts);
+      const detailedHtml = renderHtmlReport(result, "detailed", {}, beaconOpts);
+      const outputPath = options.output ?? "vibedrift-report.html";
+      const detailedPath = outputPath.replace(/(\.html?)?$/i, "-detailed.html");
+      await writeFile(outputPath, summaryHtml);
+      await writeFile(detailedPath, detailedHtml);
+
+      if (!dashboardUrl) {
+        // No dashboard entry. Open the local report directly via file:// — the
+        // report links to the detailed file by relative path, so file:// works.
+        // No long-lived server, no 10-minute hang.
+        const uploadError = (result as any).__uploadError as string | undefined;
+        if (uploadError) {
+          console.log(
+            `\n  ${chalk.yellow("⚠")} ${chalk.dim(`Couldn't sync to your dashboard (${uploadError}). Opened a local report instead.`)}`,
+          );
+        }
+        const { pathToFileURL } = await import("url");
+        const { openInBrowser } = await import("../../auth/browser.js");
+        const fileUrl = pathToFileURL(resolve(outputPath)).href;
+        console.log(`\n  ${chalk.dim("Full report (every finding, drift detail, and duplicates):")}`);
+        console.log(`  Report saved to ${chalk.bold(outputPath)}`);
+        if (openInBrowser(fileUrl)) {
+          console.log(chalk.dim("  Opening it in your browser…"));
+        } else {
+          console.log(`  Open it: \x1b[36m${fileUrl}\x1b[0m`);
+        }
+      } else {
+        console.log(`\n  ${chalk.dim(`Report also written to ${outputPath}`)}`);
+      }
+    }
+
+    if (dashboardUrl) {
+      console.log(renderDashboardLink(dashboardUrl));
+    }
+    console.log("");
+    for (const line of renderStarCta()) console.log(line);
   } else if (format === "csv") {
     const { renderCsvReport } = await import("../../output/csv.js");
     const csv = renderCsvReport(result);
@@ -974,8 +1086,13 @@ export async function runScan(
     paid = isPaidPlan(plan);
   } catch { /* default: free-gated */ }
 
-  // Rich fix-prompt prose synthesis. PAID-ONLY; runs when logged in AND network is on.
-  if (bearerToken && networkEnabled && paid) {
+  // Rich fix-prompt prose synthesis (PAID). An Anthropic call (~15-20s) whose
+  // prose feeds the .vibedrift files, the HTML report, and the dashboard report
+  // (never the terminal summary). For --write-context we MUST synthesize here,
+  // before writeContextIfRequested writes the files below. Every other authed
+  // path runs it later — behind a loader after the summary (see logAndRender) —
+  // so it never delays the result the user sees.
+  if (bearerToken && networkEnabled && paid && options.writeContext) {
     try {
       const { synthesizeFixPrompts } = await import("../../ml-client/fix-prompts.js");
       await synthesizeFixPrompts(result.findings, result.context, {
@@ -983,6 +1100,7 @@ export async function runScan(
         apiUrl,
         verbose: options.verbose,
       });
+      (result as any).__fixPromptsDone = true;
     } catch (err: any) {
       if (options.verbose) console.error(`[fix-prompts] skipped: ${err.message ?? err}`);
     }

@@ -32,6 +32,70 @@ export function renderStarCta(repoUrl: string = GITHUB_REPO_URL): string[] {
     chalk.dim(`  ★ Find VibeDrift useful? Star us: ${chalk.underline.cyan(repoUrl)}`),
   ];
 }
+/**
+ * Spinner copy + glyphs for the dashboard-upload step (step 2 of the
+ * authenticated flow). The `ora` lifecycle is wired by the caller; these
+ * constants keep the spinner's look matched to the rest of the CLI output.
+ *
+ *   spinner.text       → DASHBOARD_SPINNER_TEXT
+ *   spinner.succeed()  → uses DASHBOARD_SPINNER_SUCCESS_SYMBOL (green ✓)
+ *   spinner.fail()     → uses DASHBOARD_SPINNER_FAIL_SYMBOL (red ✘)
+ *
+ * Example wiring:
+ *   const s = ora({ text: DASHBOARD_SPINNER_TEXT, color: "cyan" }).start();
+ *   s.stopAndPersist({ symbol: DASHBOARD_SPINNER_SUCCESS_SYMBOL, text: "" });
+ *   console.log(renderDashboardLink(url));
+ */
+export const DASHBOARD_SPINNER_TEXT = chalk.dim("Generating your dashboard link…");
+/** Green check, matches the success glyph used elsewhere in this file. */
+export const DASHBOARD_SPINNER_SUCCESS_SYMBOL = chalk.green("✓");
+/** Red cross, matches the error glyph used elsewhere in this file. */
+export const DASHBOARD_SPINNER_FAIL_SYMBOL = chalk.red("✘");
+
+/**
+ * Final beat of an authenticated scan: the scan is live on the web dashboard
+ * and this is the link to view it. Printed once, right after the concise
+ * summary and after the upload spinner resolves. Honest by construction: the
+ * scan IS uploaded by the time this renders, so the full report, history, and
+ * trends genuinely live at the URL.
+ *
+ * Visual: a compact rounded cyan box (same vocabulary as renderScoreSection's
+ * banner) with a green ✓ "live" line, the underlined-cyan clickable URL, and a
+ * dim one-liner naming what lives there. Two-space left indent throughout.
+ */
+export function renderDashboardLink(url: string): string {
+  // Box width tracks the widest *visible* line so the right border always
+  // aligns. We pad each row using its un-styled length (ANSI codes have zero
+  // print width, so styled strings would otherwise break the math).
+  const headingPlain = "✓ Scan is live on your dashboard";
+  const subPlain = "View the full report, history, and trends.";
+  const urlPlain = url;
+
+  const inner = Math.max(headingPlain.length, subPlain.length, urlPlain.length);
+  const pad = (plain: string, styled: string): string =>
+    styled + " ".repeat(inner - plain.length);
+
+  const heading = chalk.green("✓") + " " + chalk.bold("Scan is live on your dashboard");
+  const sub = chalk.dim("View the full report, history, and trends.");
+  const link = chalk.underline.cyan(url);
+
+  const top = chalk.cyan("╭" + "─".repeat(inner + 2) + "╮");
+  const bottom = chalk.cyan("╰" + "─".repeat(inner + 2) + "╯");
+  const row = (plain: string, styled: string): string =>
+    chalk.cyan("│") + " " + pad(plain, styled) + " " + chalk.cyan("│");
+
+  const lines = [
+    "",
+    "  " + top,
+    "  " + row(headingPlain, heading),
+    "  " + row(subPlain, sub),
+    "  " + row(urlPlain, link),
+    "  " + bottom,
+    "",
+  ];
+  return lines.join("\n");
+}
+
 import { getLanguageDisplayName } from "../core/language.js";
 import type { SupportedLanguage } from "../core/types.js";
 import { getVersion } from "../core/version.js";

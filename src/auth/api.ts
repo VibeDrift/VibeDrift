@@ -97,10 +97,12 @@ export class VibeDriftApiError extends Error {
   }
 }
 
-/** Internal: shared fetch helper with timeout, JSON parsing, error mapping. */
-async function jsonFetch<T>(url: string, init: RequestInit = {}): Promise<T> {
+/** Internal: shared fetch helper with timeout, JSON parsing, error mapping.
+ *  `timeoutMs` overrides the default for best-effort, latency-sensitive calls
+ *  (e.g. a cosmetic banner) that must not stall the command if the API is slow. */
+async function jsonFetch<T>(url: string, init: RequestInit = {}, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       ...init,
@@ -126,7 +128,7 @@ async function jsonFetch<T>(url: string, init: RequestInit = {}): Promise<T> {
     return await res.json() as T;
   } catch (err: any) {
     if (err?.name === "AbortError") {
-      throw new VibeDriftApiError(0, `Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new VibeDriftApiError(0, `Request timed out after ${timeoutMs / 1000}s`);
     }
     if (err instanceof VibeDriftApiError) throw err;
     throw new VibeDriftApiError(0, err?.message ?? String(err));
@@ -208,13 +210,15 @@ export async function sendFeedback(args: {
   });
 }
 
-/** Fetch the user's credit summary (welcome + purchased + manual). */
-export async function fetchCredits(token: string, opts?: { apiUrl?: string }): Promise<CreditsResponse> {
+/** Fetch the user's credit summary (welcome + purchased + manual).
+ *  `timeoutMs` lets a caller cap the wait — the pre-scan banner uses a short
+ *  one so a slow API never delays the scan from starting. */
+export async function fetchCredits(token: string, opts?: { apiUrl?: string; timeoutMs?: number }): Promise<CreditsResponse> {
   const base = await resolveApiUrl(opts?.apiUrl);
   return jsonFetch<CreditsResponse>(`${base}/account/credits`, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, opts?.timeoutMs);
 }
 
 /** Create a Stripe Customer Portal session and return the URL to open. */
