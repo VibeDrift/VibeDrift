@@ -9,5 +9,5 @@
     "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*.ts", "eval/**/*.ts", "test/eval/**/*.ts"],
-  "exclude": ["node_modules", "dist", "eval/fixtures"]
+  "exclude": ["node_modules", "dist", "eval/fixtures", "eval/context-token-benchmark/**"]
 }

@@ -1,0 +1,20 @@
+{
+  "name": "@vibedrift/context-token-benchmark",
+  "version": "0.1.0",
+  "description": "Self-contained benchmark harness for context-token injection experiments",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

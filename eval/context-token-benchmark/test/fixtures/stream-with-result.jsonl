@@ -1,0 +1,15 @@
+{"type":"system","subtype":"init","model":"claude-opus-4-8","apiKeySource":"env","cwd":"/tmp/bench"}
+{"type":"stream_event","uuid":"uuid-1","session_id":"sess-1","event":{"type":"message_start","message":{"id":"msg-1","type":"message","role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":2500,"output_tokens":1,"cache_creation_input_tokens":600,"cache_read_input_tokens":15000}}}}
+{"type":"stream_event","uuid":"uuid-2","session_id":"sess-1","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}
+{"type":"stream_event","uuid":"uuid-3","session_id":"sess-1","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello from turn 1."}}}
+{"type":"stream_event","uuid":"uuid-4","session_id":"sess-1","event":{"type":"content_block_stop","index":0}}
+{"type":"stream_event","uuid":"uuid-5","session_id":"sess-1","event":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":400}}}
+{"type":"stream_event","uuid":"uuid-6","session_id":"sess-1","event":{"type":"message_stop"}}
+{"type":"system","subtype":"compact_boundary","truncation_type":"auto","summary_tokens":120}
+{"type":"stream_event","uuid":"uuid-7","session_id":"sess-1","event":{"type":"message_start","message":{"id":"msg-2","type":"message","role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":2500,"output_tokens":1,"cache_creation_input_tokens":600,"cache_read_input_tokens":15000}}}}
+{"type":"stream_event","uuid":"uuid-8","session_id":"sess-1","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}
+{"type":"stream_event","uuid":"uuid-9","session_id":"sess-1","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello from turn 2."}}}
+{"type":"stream_event","uuid":"uuid-10","session_id":"sess-1","event":{"type":"content_block_stop","index":0}}
+{"type":"stream_event","uuid":"uuid-11","session_id":"sess-1","event":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":400}}}
+{"type":"stream_event","uuid":"uuid-12","session_id":"sess-1","event":{"type":"message_stop"}}
+{"type":"result","subtype":"success","usage":{"input_tokens":5000,"output_tokens":800,"cache_creation_input_tokens":1200,"cache_read_input_tokens":30000},"total_cost_usd":0.42,"num_turns":2,"model_usage":{"claude-opus-4-8":{"input_tokens":5000,"output_tokens":800,"cache_creation_input_tokens":1200,"cache_read_input_tokens":30000}}}
