@@ -8,7 +8,7 @@
 
 It forgets your patterns, repeats code, and breaks what worked. **VibeDrift catches the drift before it spreads** — locally, on your machine.
 
-[![Website](https://img.shields.io/badge/vibedrift.ai-FFD000?style=flat&labelColor=1a1a1a)](https://vibedrift.ai) [![npm](https://img.shields.io/npm/v/@vibedrift/cli.svg?color=FFD000)](https://www.npmjs.com/package/@vibedrift/cli) [![Vibe Drift Score](https://img.shields.io/badge/Vibe_Drift_Score-72-9ACD32?style=flat&labelColor=1a1a1a)](https://vibedrift.ai/guide) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?style=flat)](https://discord.gg/YVcQ65Jt3Q)
+[![Website](https://img.shields.io/badge/vibedrift.ai-FFD000?style=flat&labelColor=1a1a1a)](https://vibedrift.ai) [![npm](https://img.shields.io/npm/v/@vibedrift/cli.svg?color=FFD000)](https://www.npmjs.com/package/@vibedrift/cli) [![Vibe Drift Score](https://img.shields.io/badge/Vibe_Drift_Score-89-3FB950?style=flat&labelColor=1a1a1a)](https://vibedrift.ai/guide) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?style=flat)](https://discord.gg/YVcQ65Jt3Q)
 
 **Free · Open source · Runs on your machine**
 
