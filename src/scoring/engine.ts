@@ -54,6 +54,49 @@ export const SCORING_VERSION = "v6";
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
 
 /**
+ * Reimplementation concentration gate (calibrated 2026-06-27 on the 425-repo
+ * corpus deep-scan run). Panel-confirmed reimplementation findings feed the
+ * Vibe Drift Score ONLY when CONCENTRATED: at least REIMPL_CONCENTRATION_MIN_COUNT
+ * findings AND at least REIMPL_CONCENTRATION_DENSITY_MIN per KLOC.
+ *
+ * Why concentration, not count: across 425 repos, raw reimplementation COUNT did
+ * NOT separate elite from messy/AI-generated repos — large elite repos carry a
+ * sparse-but-common reimplementation baseline (legacy files, parallel platform
+ * impls). DENSITY did: 0 of 249 elite repos reach 1 finding/KLOC, while the
+ * concentrated AI-sprawl repos clear it. The gate is deliberately conservative
+ * (high precision on "clean"): no elite repo in the calibration set crosses it,
+ * so it never penalizes well-structured code. Global threshold for now;
+ * per-language refinement waits for a larger dense-tail sample.
+ */
+export const REIMPL_CONCENTRATION_DENSITY_MIN = 1.0; // panel-confirmed findings per KLOC
+export const REIMPL_CONCENTRATION_MIN_COUNT = 3;
+const REIMPL_HYGIENE_ID = "ml-reimplementation";
+const REIMPL_DRIFT_ID = "ml-reimplementation-concentrated";
+
+/**
+ * Re-tag panel-confirmed reimplementation findings to the drift-kind analyzer id
+ * when, and only when, they are concentrated (see the gate constants above). When
+ * the gate does not fire the findings keep their hygiene id and stay informational.
+ * Pure; returns the same array reference when nothing is re-tagged.
+ */
+export function applyReimplementationConcentrationGate(
+  findings: Finding[],
+  totalLines: number,
+): Finding[] {
+  const reimplCount = findings.reduce(
+    (n, f) => (f.analyzerId === REIMPL_HYGIENE_ID ? n + 1 : n),
+    0,
+  );
+  if (reimplCount < REIMPL_CONCENTRATION_MIN_COUNT) return findings;
+  const kloc = totalLines / 1000;
+  if (kloc <= 0) return findings;
+  if (reimplCount / kloc < REIMPL_CONCENTRATION_DENSITY_MIN) return findings;
+  return findings.map((f) =>
+    f.analyzerId === REIMPL_HYGIENE_ID ? { ...f, analyzerId: REIMPL_DRIFT_ID } : f,
+  );
+}
+
+/**
  * Place a composite Vibe Drift Score on a peer percentile against a bundled
  * corpus of real-world repos in the same language. Pure, local, deterministic,
  * and FREE — only surfacing the result is Pro-gated (see `isPeerGroundedEntitled`).
@@ -625,6 +668,12 @@ export function computeScores(
    */
   previousScoresMismatch?: string;
 } {
+  // Panel-confirmed reimplementation feeds the composite only when concentrated
+  // (see applyReimplementationConcentrationGate). Sparse reimplementation keeps
+  // its hygiene id and stays informational. Applied here so the gate sees the
+  // full finding set together with totalLines.
+  findings = applyReimplementationConcentrationGate(findings, totalLines);
+
   const mutateImpact = options.mutateImpact ?? true;
   const previousScoringVersion = options.previousScoringVersion;
   const versionsMatch = previousScoringVersion === SCORING_VERSION;

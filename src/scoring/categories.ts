@@ -88,13 +88,16 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
       { id: "codedna-opseq", applicableLanguages: "all", kind: "drift" },
       // ML embeddings
       { id: "ml-duplicate", applicableLanguages: "all", kind: "drift" },
-      // Panel-confirmed redundant reimplementation. FINDINGS-ONLY for now
-      // (kind "hygiene" → renders in its own pane, does NOT feed the drift
-      // composite). The v6 composite is a geometric mean of score/maxScore, so
-      // a zero-weight scored category can't express "show but don't score" — the
-      // hygiene classification is the lever. Flip kind to "drift" to enable
-      // scoring once per-language precision is calibrated.
+      // Panel-confirmed redundant reimplementation. Hygiene by default (renders
+      // in its own pane, does NOT feed the composite) because raw reimplementation
+      // COUNT does not separate clean from messy code — large clean repos carry a
+      // sparse baseline. When reimplementation is CONCENTRATED, computeScores
+      // re-tags the findings to the drift-kind id below so they feed the composite
+      // (see applyReimplementationConcentrationGate, calibrated 2026-06-27: 0/249
+      // elite repos cross the bar). The split is the lever the geometric-mean
+      // composite needs to express "show but don't score" vs "score".
       { id: "ml-reimplementation", applicableLanguages: "all", kind: "hygiene" },
+      { id: "ml-reimplementation-concentrated", applicableLanguages: "all", kind: "drift" },
     ],
   },
   dependencyHealth: {
