@@ -6,12 +6,27 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.14.7 — 2026-07-01
+
 ### Added
 
 - **`--inject-context` flag.** Inlines the context summary into `CLAUDE.md`
   inside an idempotent managed block. Pairs with `--write-context` — run both
   together to refresh `.vibedrift/` files and keep the CLAUDE.md block in sync
   in a single pass.
+
+### Fixed
+
+- **Fewer false-positive duplicates.** Recurring test-fixture helpers, and
+  functions that merely share a control-flow shape rather than real duplicated
+  logic, are no longer flagged as duplicates — so the duplicates you see are the
+  ones actually worth consolidating.
+- **Clearer messaging for categories with no signal.** Instead of a bare
+  "N/A — not scored", a category with nothing to score now says why: Dependency
+  Health reads "not yet measured", and every other category reads "no findings
+  in this repo".
+- **Cleaner scans of repos with vendored code.** File discovery now skips
+  vendored and minified files, so bundled third-party code doesn't skew results.
 
 ## 0.14.6 — 2026-06-27
 
