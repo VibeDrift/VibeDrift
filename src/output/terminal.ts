@@ -888,6 +888,10 @@ export function renderJsonOutput(result: ScanResult): string {
       // analytics consumers can read the same hero report the terminal and HTML
       // render. Undefined on free or non-deep scans.
       coherenceReport: result.coherenceReport,
+      // Additive size-invariant scoring telemetry (F1–F4). Does not affect the
+      // composite score — emitted for a validation experiment. Undefined only
+      // on results produced before feature computation was wired in.
+      features: result.features,
       perFileScores: Object.fromEntries(result.perFileScores),
     },
     null,

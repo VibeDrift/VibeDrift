@@ -223,6 +223,12 @@ export interface ScanResult {
    * the one-time scoring-refined notice explains the change).
    */
   previousScoresMismatch?: string;
+  /**
+   * Additive size-invariant scoring telemetry (F1–F4). Does NOT affect the
+   * composite score or any scoring math — emitted alongside a scan for a
+   * validation experiment. See src/scoring/features.ts.
+   */
+  features?: import("../scoring/features.js").SizeInvariantFeatures;
 }
 
 export interface DriftFindingReport {

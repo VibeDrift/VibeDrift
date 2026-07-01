@@ -8,6 +8,7 @@ import { parseFiles } from "../../utils/ast.js";
 import { createAnalyzerRegistry } from "../../analyzers/index.js";
 import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
 import { computeScores, SCORING_VERSION } from "../../scoring/engine.js";
+import { computeSizeInvariantFeatures } from "../../scoring/features.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
 import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, renderLocalReportLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
@@ -489,6 +490,14 @@ async function buildScanResult(
     scoringVersion,
     previousScoresMismatch,
   };
+
+  // Size-invariant scoring features (F1–F4) — additive telemetry only; does
+  // NOT affect the composite score or any scoring math.
+  result.features = computeSizeInvariantFeatures(
+    driftResult.driftFindings,
+    codeDnaResult?.patternDistributions ?? [],
+    ctx.totalLines,
+  );
 
   // AI Summary (when --deep is enabled, call the VibeDrift API for an executive summary)
   if (options.deep && bearerToken) {
