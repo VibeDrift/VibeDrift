@@ -3,6 +3,7 @@ import { namingAnalyzer } from "./naming.js";
 import { importsAnalyzer } from "./imports.js";
 import { errorHandlingAnalyzer } from "./error-handling.js";
 import { dependenciesAnalyzer } from "./dependencies.js";
+import { dependencyDriftAnalyzer } from "./dependency-drift.js";
 import { duplicatesAnalyzer } from "./duplicates.js";
 import { todoDensityAnalyzer } from "./todo-density.js";
 import { configDriftAnalyzer } from "./config-drift.js";
@@ -27,6 +28,12 @@ export function createAnalyzerRegistry(): Analyzer[] {
     // Dependency Health
     dependenciesAnalyzer,
     configDriftAnalyzer,
+    // Dependency-drift: FINDINGS-ONLY. analyzerId "dependency-drift" is
+    // deliberately NOT in CATEGORY_CONFIG, so its findings appear in scan
+    // output / --json but feed neither the composite nor the hygiene score
+    // (validating discrimination on a corpus before scoring — see the file
+    // header in ./dependency-drift.ts).
+    dependencyDriftAnalyzer,
     // Security Posture
     securityAnalyzer,
     // Intent Clarity
