@@ -1,0 +1,17 @@
+[
+  {
+    "label": "remeda",
+    "lang": "typescript",
+    "source": { "git": "https://github.com/remeda/remeda.git", "sha": "c9feae9f07bc7b925371eadcd5ffd321190ffdf1" }
+  },
+  {
+    "label": "yt-dlp",
+    "lang": "python",
+    "source": { "git": "https://github.com/yt-dlp/yt-dlp.git" }
+  },
+  {
+    "label": "rustdesk",
+    "lang": "rust",
+    "source": { "git": "https://github.com/rustdesk/rustdesk.git" }
+  }
+]

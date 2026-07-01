@@ -16,22 +16,37 @@ export interface RunOneDeps {
     repo: RepoSpec,
     arm: Arm,
     replicate: number
-  ) => Promise<{ cwd: string; ownContextMd: string; placeboContextMd: string }>;
-  applyArm: (
-    cwd: string,
-    arm: Arm,
-    ownContextMd: string,
-    placeboContextMd: string
-  ) => Promise<void>;
+  ) => Promise<{ cwd: string }>;
+  applyArm: (cwd: string, arm: Arm) => Promise<void>;
   applyTestsPatch: (cwd: string, task: TaskSpec) => Promise<void>;
   /** Returns claude -p stdout. METERED in real life; inject a fake in tests. */
   runAgent: (
     cwd: string,
     task: TaskSpec,
+    arm: Arm,
     modelId: string,
     maxTurns: number
   ) => Promise<string>;
+  /**
+   * Capture the agent's BLINDED source diff after it runs and BEFORE reassertTests
+   * mutates the test files. Must exclude harness artifacts (.mcp.json, the injected
+   * CLAUDE.md directive, .vibedrift/) and the task's test files so the judge cannot
+   * infer the arm. Non-destructive (leaves the working tree intact for gating).
+   */
+  captureDiff: (
+    cwd: string,
+    task: TaskSpec,
+    arm: Arm
+  ) => Promise<{ diff: string; truncated: boolean }>;
+  /**
+   * Restore the canonical test files AFTER the agent runs and BEFORE gating, so
+   * the agent cannot weaken/delete the gate's tests to pass. Reverts the test
+   * patch's files to base and re-applies the patch; agent source edits are kept.
+   */
+  reassertTests: (cwd: string, task: TaskSpec) => Promise<void>;
   gate: (cwd: string, cmd: string, reruns: number) => Promise<GateResult>;
+  /** Remove the run's workspace to reclaim disk. Runs in a finally (best-effort). */
+  cleanup: (cwd: string) => Promise<void>;
 }
 
 /**
@@ -39,7 +54,7 @@ export interface RunOneDeps {
  *
  * Orchestration order:
  *   prepareWorkspace → applyArm → applyTestsPatch → runAgent →
- *   parseClaudeUsage → gate → assemble RunResult
+ *   parseClaudeUsage → captureDiff → reassertTests → gate → assemble RunResult
  *
  * The caller is responsible for persisting the result via store.appendResult.
  */
@@ -55,26 +70,37 @@ export async function runOne(
   const startedAt = new Date(startMs).toISOString();
 
   // 1. Prepare a fresh workspace
-  const { cwd, ownContextMd, placeboContextMd } = await deps.prepareWorkspace(
-    repo,
-    arm,
-    replicate
-  );
+  const { cwd } = await deps.prepareWorkspace(repo, arm, replicate);
 
-  // 2. Inject the arm-specific context block into CLAUDE.md
-  await deps.applyArm(cwd, arm, ownContextMd, placeboContextMd);
+  let gateResult: GateResult;
+  let parsed: ReturnType<typeof parseClaudeUsage>;
+  let captured: { diff: string; truncated: boolean };
+  try {
+    // 2. Apply the arm-specific config (T attaches the VibeDrift MCP)
+    await deps.applyArm(cwd, arm);
 
-  // 3. Apply the task's test patch (if any) before the agent runs
-  await deps.applyTestsPatch(cwd, task);
+    // 3. Apply the task's test patch (if any) before the agent runs
+    await deps.applyTestsPatch(cwd, task);
 
-  // 4. Run the agent (METERED boundary — real impl calls `claude -p`)
-  const stdout = await deps.runAgent(cwd, task, ctx.modelId, ctx.maxTurns);
+    // 4. Run the agent (METERED boundary — real impl calls `claude -p`)
+    const stdout = await deps.runAgent(cwd, task, arm, ctx.modelId, ctx.maxTurns);
 
-  // 5. Parse token usage from agent stdout
-  const parsed = parseClaudeUsage(stdout);
+    // 5. Parse token usage from agent stdout
+    parsed = parseClaudeUsage(stdout);
 
-  // 6. Run the acceptance gate (with retry/flake detection)
-  const gateResult = await deps.gate(cwd, task.gateTestCmd, ctx.reruns);
+    // 6. Capture the agent's blinded source diff BEFORE reassertTests mutates
+    //    the test files. Non-destructive (restores the index/working tree).
+    captured = await deps.captureDiff(cwd, task, arm);
+
+    // 7. Restore canonical tests (agent must not be able to weaken the gate)
+    await deps.reassertTests(cwd, task);
+
+    // 8. Run the acceptance gate (with retry/flake detection)
+    gateResult = await deps.gate(cwd, task.gateTestCmd, ctx.reruns);
+  } finally {
+    // Always reclaim the workspace (clones + node_modules are large).
+    await deps.cleanup(cwd);
+  }
 
   const durationMs = Date.now() - startMs;
 
@@ -98,7 +124,10 @@ export async function runOne(
     censored,
     competingFailure,
     compactionEvents: parsed.compactionEvents,
+    vibedriftToolCalls: parsed.vibedriftToolCalls,
     startedAt,
     durationMs,
+    diff: captured.diff,
+    diffTruncated: captured.truncated,
   };
 }

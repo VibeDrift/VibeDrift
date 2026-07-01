@@ -1,0 +1,1442 @@
+[
+  {
+    "gid": "p0",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "projectHash",
+      "path": "src/core/baseline.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    },
+    "fnB": {
+      "name": "projectHash",
+      "path": "src/core/history.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    }
+  },
+  {
+    "gid": "p1",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9639,
+    "struct": 0.4688,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "detectConvention",
+      "path": "src/analyzers/naming.ts",
+      "body": "\n  if (/^[A-Z][A-Z0-9_]+$/.test(name)) return \"SCREAMING_SNAKE\";\n  if (/^[A-Z][a-zA-Z0-9]*$/.test(name)) return \"PascalCase\";\n  if (/^[a-z][a-zA-Z0-9]*$/.test(name)) return \"camelCase\";\n  if (/^[a-z][a-z0-9_]*$/.test(name)) return \"snake_case\";\n  return null;\n}"
+    },
+    "fnB": {
+      "name": "classifyName",
+      "path": "src/drift/convention-oscillation.ts",
+      "body": "\n  if (/^[A-Z][A-Z0-9_]+$/.test(name)) return \"SCREAMING_SNAKE\";\n  if (/^[A-Z][a-zA-Z0-9]*$/.test(name)) return \"PascalCase\";\n  if (/^[a-z][a-zA-Z0-9]*$/.test(name) && /[A-Z]/.test(name)) return \"camelCase\";\n  if (/^[a-z][a-z0-9_]*$/.test(name) && name.includes(\"_\")) return \"snake_case\";\n  if (/^[a-z][a-z0-9-]*$/.test(name) && name.includes(\"-\")) return \"kebab-case\";\n  if (/^[a-z][a-z0-9]*$/.test(name)) return \"camelCase\"; // single-word lowercase = camelCase\n  return null;\n}"
+    }
+  },
+  {
+    "gid": "p2",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.8596,
+    "struct": 0.0488,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "pickIntentHint",
+      "path": "src/drift/utils.ts",
+      "body": "\n  const hints = ctx.intentHints ?? [];\n  const matching = hints.filter((h) => h.category === category && h.confidence >= confidenceFloor);\n  if (matching.length === 0) return null;\n  // Highest confidence wins. Ties broken by earlier source (dedupe already\n  // applied that rule during parse, but apply again defensively).\n  return matching.reduce((best, h) => (h.confidence > best.confidence ? h : best), matching[0]);\n}"
+    },
+    "fnB": {
+      "name": "topHintFor",
+      "path": "src/tools-core/tools/validate-change.ts",
+      "body": "\n  let best: IntentHint | null = null;\n  for (const h of hints) {\n    if (h.category !== category) continue;\n    if (!best || h.confidence > best.confidence) best = h;\n  }\n  return best;\n}"
+    }
+  },
+  {
+    "gid": "p3",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "shannonEntropy",
+      "path": "src/analyzers/naming.ts",
+      "body": "\n  const total = counts.reduce((a, b) => a + b, 0);\n  if (total === 0) return 0;\n  let H = 0;\n  for (const c of counts) {\n    if (c === 0) continue;\n    const p = c / total;\n    H -= p * Math.log2(p);\n  }\n  return H;\n}"
+    },
+    "fnB": {
+      "name": "shannonEntropy",
+      "path": "src/drift/utils.ts",
+      "body": "\n  const total = counts.reduce((a, b) => a + b, 0);\n  if (total === 0) return 0;\n  let H = 0;\n  for (const c of counts) {\n    if (c === 0) continue;\n    const p = c / total;\n    H -= p * Math.log2(p);\n  }\n  return H;\n}"
+    }
+  },
+  {
+    "gid": "p4",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "projectDir",
+      "path": "src/core/findings-cache.ts",
+      "body": "\n  return join(ROOT_DIR, projectHash(rootDir));\n}"
+    },
+    "fnB": {
+      "name": "projectDir",
+      "path": "src/core/history.ts",
+      "body": "\n  return join(ROOT_DIR, projectHash(rootDir));\n}"
+    }
+  },
+  {
+    "gid": "p5",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9883,
+    "struct": 0.7917,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "isSourceFile",
+      "path": "src/drift/export-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/|index\\.)/i.test(path)) return false;\n  return true;\n}"
+    },
+    "fnB": {
+      "name": "isSourceFile",
+      "path": "src/drift/import-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    }
+  },
+  {
+    "gid": "p6",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9682,
+    "struct": 0.7143,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "xml",
+      "path": "src/output/docx.ts",
+      "body": "\n  return s.replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\");\n}"
+    },
+    "fnB": {
+      "name": "esc",
+      "path": "src/output/html.ts",
+      "body": "\n  return s.replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\");\n}"
+    }
+  },
+  {
+    "gid": "p7",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9605,
+    "struct": 0.6452,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "semverGreater",
+      "path": "src/cli/commands/update.ts",
+      "body": "\n  const pa = a.split(\".\").map(Number);\n  const pb = b.split(\".\").map(Number);\n  for (let i = 0; i < 3; i++) {\n    const x = pa[i] ?? 0;\n    const y = pb[i] ?? 0;\n    if (x > y) return true;\n    if (x < y) return false;\n  }\n  return false;\n}"
+    },
+    "fnB": {
+      "name": "semverGreater",
+      "path": "src/core/update-check.ts",
+      "body": "\n  const pa = a.split(\".\").map((p) => parseInt(p, 10) || 0);\n  const pb = b.split(\".\").map((p) => parseInt(p, 10) || 0);\n  for (let i = 0; i < 3; i++) {\n    const x = pa[i] ?? 0;\n    const y = pb[i] ?? 0;\n    if (x > y) return true;\n    if (x < y) return false;\n  }\n  return false;\n}"
+    }
+  },
+  {
+    "gid": "p8",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9883,
+    "struct": 0.7917,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "isSourceFile",
+      "path": "src/drift/export-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/|index\\.)/i.test(path)) return false;\n  return true;\n}"
+    },
+    "fnB": {
+      "name": "isAnalyzableSource",
+      "path": "src/drift/utils.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    }
+  },
+  {
+    "gid": "p9",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9412,
+    "struct": 0.3158,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "topImpact",
+      "path": "src/output/context-md.ts",
+      "body": "\n  return [...findings]\n    .filter((f) => (f.consistencyImpact ?? 0) > 0)\n    .sort((a, b) => (b.consistencyImpact ?? 0) - (a.consistencyImpact ?? 0))\n    .slice(0, n);\n}"
+    },
+    "fnB": {
+      "name": "topImpactFindings",
+      "path": "src/output/html.ts",
+      "body": "\n  return [...result.findings]\n    .filter((f) => typeof f.consistencyImpact === \"number\" && f.consistencyImpact > 0)\n    .sort((a, b) => (b.consistencyImpact ?? 0) - (a.consistencyImpact ?? 0))\n    .slice(0, n);\n}"
+    }
+  },
+  {
+    "gid": "p10",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9883,
+    "struct": 0.7917,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "isSourceFile",
+      "path": "src/drift/async-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    },
+    "fnB": {
+      "name": "isSourceFile",
+      "path": "src/drift/export-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/|index\\.)/i.test(path)) return false;\n  return true;\n}"
+    }
+  },
+  {
+    "gid": "p11",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "grade",
+      "path": "src/ml-client/coherence.ts",
+      "body": "\n  const pct = max > 0 ? (score / max) * 100 : 0;\n  if (pct >= 90) return \"A\";\n  if (pct >= 75) return \"B\";\n  if (pct >= 50) return \"C\";\n  if (pct >= 25) return \"D\";\n  return \"F\";\n}"
+    },
+    "fnB": {
+      "name": "getGrade",
+      "path": "src/ml-client/summarize.ts",
+      "body": "\n  const pct = max > 0 ? (score / max) * 100 : 0;\n  if (pct >= 90) return \"A\";\n  if (pct >= 75) return \"B\";\n  if (pct >= 50) return \"C\";\n  if (pct >= 25) return \"D\";\n  return \"F\";\n}"
+    }
+  },
+  {
+    "gid": "p12",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "isSourceFile",
+      "path": "src/drift/async-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    },
+    "fnB": {
+      "name": "isSourceFile",
+      "path": "src/drift/import-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    }
+  },
+  {
+    "gid": "p13",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "projectHash",
+      "path": "src/core/baseline.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    },
+    "fnB": {
+      "name": "projectHash",
+      "path": "src/core/findings-cache.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    }
+  },
+  {
+    "gid": "p14",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9588,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "escapeRegex",
+      "path": "src/analyzers/dead-code.ts",
+      "body": "\n  return str.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n}"
+    },
+    "fnB": {
+      "name": "escapeRegex",
+      "path": "src/codedna/semantic-fingerprint.ts",
+      "body": "\n  return s.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n}"
+    }
+  },
+  {
+    "gid": "p15",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "directoryOf",
+      "path": "src/drift/return-shape-consistency.ts",
+      "body": "\n  const idx = filePath.lastIndexOf(\"/\");\n  return idx === -1 ? \".\" : filePath.slice(0, idx);\n}"
+    },
+    "fnB": {
+      "name": "directoryOf",
+      "path": "src/drift/utils.ts",
+      "body": "\n  const idx = filePath.lastIndexOf(\"/\");\n  return idx === -1 ? \".\" : filePath.slice(0, idx);\n}"
+    }
+  },
+  {
+    "gid": "p16",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "isSourceFile",
+      "path": "src/drift/async-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    },
+    "fnB": {
+      "name": "isAnalyzableSource",
+      "path": "src/drift/utils.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    }
+  },
+  {
+    "gid": "p17",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "projectHash",
+      "path": "src/core/findings-cache.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    },
+    "fnB": {
+      "name": "projectHash",
+      "path": "src/core/history.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    }
+  },
+  {
+    "gid": "p18",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.9371,
+    "struct": 0.5714,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "xml",
+      "path": "src/output/docx.ts",
+      "body": "\n  return s.replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\");\n}"
+    },
+    "fnB": {
+      "name": "esc2",
+      "path": "src/output/html.ts",
+      "body": " return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }"
+    }
+  },
+  {
+    "gid": "p19",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 0.8844,
+    "struct": 0.1707,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "categoryLabel",
+      "path": "src/output/fix-prompt.ts",
+      "body": "\n  const tags = f.tags ?? [];\n  const driftTag = tags.find((t) => t.endsWith(\"_consistency\") || t.endsWith(\"_posture\") || t.endsWith(\"_duplication\") || t.endsWith(\"_conventions\") || t.endsWith(\"_scaffolding\") || t.endsWith(\"_style\") || t.endsWith(\"_patterns\"));\n  if (driftTag) return driftTag.replace(/_/g, \" \");\n  return f.analyzerId;\n}"
+    },
+    "fnB": {
+      "name": "categoryFor",
+      "path": "src/output/html.ts",
+      "body": "\n  // Derive a human-readable category from tags or analyzerId\n  const driftTag = f.tags?.find((t) => t !== \"drift\" && t !== \"cross-file\" && t !== \"codedna\" && t !== \"ml\" && t !== \"temporal-pivot\" && !t.startsWith(\"high\") && !t.startsWith(\"critical\") && !t.startsWith(\"moderate\"));\n  if (driftTag) return driftTag.replace(/_/g, \" \");\n  return f.analyzerId;\n}"
+    }
+  },
+  {
+    "gid": "p20",
+    "repo": "vibedrift-public",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "isSourceFile",
+      "path": "src/drift/import-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    },
+    "fnB": {
+      "name": "isAnalyzableSource",
+      "path": "src/drift/utils.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/)/i.test(path)) return false;\n  return true;\n}"
+    }
+  },
+  {
+    "gid": "p21",
+    "repo": "vibedrift-public",
+    "band": "C_mid",
+    "cosine": 0.7204,
+    "struct": 0.4667,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "cachePath",
+      "path": "src/core/git-metadata.ts",
+      "body": "\n  const hash = createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n  return join(CACHE_DIR, `${hash}.json`);\n}"
+    },
+    "fnB": {
+      "name": "projectHash",
+      "path": "src/core/history.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    }
+  },
+  {
+    "gid": "p22",
+    "repo": "vibedrift-public",
+    "band": "C_mid",
+    "cosine": 0.8344,
+    "struct": 0.2133,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "csvSequenceSimilarities",
+      "path": "src/output/csv.ts",
+      "body": "\n  if (!dna.sequenceSimilarities?.length) return [];\n  const lines: string[] = [];\n  lines.push(\"CODE DNA: OPERATION SEQUENCE MATCHES\");\n  lines.push(row(\"Function A\", \"File A\", \"Function B\", \"File B\", \"Similarity %\"));\n  for (const s of dna.sequenceSimilarities) {\n    lines.push(row(\n      s.functionA.name, s.functionA.relativePath || s.functionA.file,\n      s.functionB.name, s.functionB.relativePath || s.functionB.file,\n      Math.round(s.similarity * 100),\n    ));\n  }\n  lines.push(\"\");\n  return lines;\n}"
+    },
+    "fnB": {
+      "name": "docxDnaSequences",
+      "path": "src/output/docx.ts",
+      "body": "\n  if (!dna.sequenceSimilarities?.length) return [];\n  const parts: string[] = [];\n  parts.push(para(\"Operation Sequence Matches\", \"Heading2\"));\n  for (const s of dna.sequenceSimilarities) {\n    parts.push(para(`  ${Math.round(s.similarity * 100)}% match: ${s.functionA.name}() in ${s.functionA.relativePath || s.functionA.file} \u2194 ${s.functionB.name}() in ${s.functionB.relativePath || s.functionB.file}`));\n  }\n  parts.push(para(\"\"));\n  return parts;\n}"
+    }
+  },
+  {
+    "gid": "p23",
+    "repo": "vibedrift-public",
+    "band": "C_mid",
+    "cosine": 0.8069,
+    "struct": 0.1444,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "csvDeviations",
+      "path": "src/output/csv.ts",
+      "body": "\n  if (!dna.deviationJustifications?.length) return [];\n  const lines: string[] = [];\n  lines.push(\"CODE DNA: DEVIATION ANALYSIS\");\n  lines.push(row(\"File\", \"Deviating Pattern\", \"Dominant Pattern\", \"Verdict\", \"Score\"));\n  for (const dj of dna.deviationJustifications) {\n    lines.push(row(\n      dj.relativePath || dj.file, dj.deviatingPattern, dj.dominantPattern,\n      dj.verdict, Math.round(dj.justificationScore * 100),\n    ));\n  }\n  lines.push(\"\");\n  return lines;\n}"
+    },
+    "fnB": {
+      "name": "docxDnaDeviations",
+      "path": "src/output/docx.ts",
+      "body": "\n  if (!dna.deviationJustifications?.length) return [];\n  const parts: string[] = [];\n  parts.push(para(\"Deviation Justification Analysis\", \"Heading2\"));\n  for (const dj of dna.deviationJustifications) {\n    const verdict = dj.verdict === \"likely_justified\" ? \"JUSTIFIED\" : dj.verdict === \"likely_accidental\" ? \"ACCIDENTAL\" : \"UNCERTAIN\";\n    parts.push(para(`  [${verdict}] ${dj.relativePath || dj.file}: uses ${dj.deviatingPattern} vs project ${dj.dominantPattern} (score: ${Math.round(dj.justificationScore * 100)}%)`));\n  }\n  parts.push(para(\"\"));\n  return parts;\n}"
+    }
+  },
+  {
+    "gid": "p24",
+    "repo": "vibedrift-public",
+    "band": "C_mid",
+    "cosine": 0.7268,
+    "struct": 0.1028,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "csvAiSummary",
+      "path": "src/output/csv.ts",
+      "body": "\n  if ((result.deepInsights ?? []).length === 0) return [];\n  const lines: string[] = [];\n  lines.push(\"DEEP ANALYSIS INSIGHTS\");\n  lines.push(row(\"Category\", \"Severity\", \"Title\", \"Description\", \"Related Files\", \"Recommendation\"));\n  for (const ins of result.deepInsights) {\n    lines.push(row(\n      ins.category, ins.severity, ins.title, ins.description,\n      ins.relatedFiles.join(\"; \"), ins.recommendation ?? \"\",\n    ));\n  }\n  return lines;\n}"
+    },
+    "fnB": {
+      "name": "buildDocxDeepInsights",
+      "path": "src/output/docx.ts",
+      "body": "\n  if ((result.deepInsights ?? []).length === 0) return \"\";\n\n  const parts: string[] = [];\n  parts.push(para(\"7. DEEP ANALYSIS INSIGHTS (AI-POWERED)\", \"Heading1\"));\n  for (const ins of result.deepInsights) {\n    const sevStr = ins.severity === \"error\" ? \"CRITICAL\" : ins.severity === \"warning\" ? \"WARNING\" : \"INFO\";\n    parts.push(para(`[${sevStr}] ${ins.title}`, \"Heading2\"));\n    parts.push(para(ins.description));\n    if (ins.relatedFiles.length > 0) parts.push(para(`  Files: ${ins.relatedFiles.join(\", \")}`));\n    if (ins.recommendation) {\n      parts.push(boldPara(\"Recommendation:\", \"00D4FF\"));\n      parts.push(para(`  ${ins.recommendation}`));\n    }\n    parts.push(para(\"\"));\n  }\n  parts.push(hr());\n  return parts.join(\"\\n    \");\n}"
+    }
+  },
+  {
+    "gid": "p25",
+    "repo": "vibedrift-public",
+    "band": "C_mid",
+    "cosine": 0.7391,
+    "struct": 0.1429,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "shortPath",
+      "path": "src/output/html.ts",
+      "body": "\n  const parts = p.split(\"/\");\n  return parts.length > 3 ? \".../\" + parts.slice(-2).join(\"/\") : p;\n}"
+    },
+    "fnB": {
+      "name": "shortPath",
+      "path": "src/output/tease.ts",
+      "body": "\n  const parts = p.split(\"/\").filter(Boolean);\n  if (parts.length <= 2) return parts.join(\"/\");\n  return parts.slice(-2).join(\"/\");\n}"
+    }
+  },
+  {
+    "gid": "p26",
+    "repo": "vibedrift-public",
+    "band": "C_mid",
+    "cosine": 0.7507,
+    "struct": 0.0162,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "extractBody",
+      "path": "src/analyzers/duplicates.ts",
+      "body": "\n  const ch = content[openBraceIndex];\n\n  if (ch === \"{\") {\n    let depth = 1;\n    let i = openBraceIndex + 1;\n    while (i < content.length && depth > 0) {\n      if (content[i] === \"{\") depth++;\n      else if (content[i] === \"}\") depth--;\n      i++;\n    }\n    return content.slice(openBraceIndex, i);\n  }\n\n  if (ch === \":\") {\n    const lines = content.slice(openBraceIndex + 1).split(\"\\n\");\n    const bodyLines: string[] = [];\n    let baseIndent = -1;\n    for (const line of lines) {\n      if (line.trim() === \"\") { bodyLines.push(line); continue; }\n      const indent = line.search(/\\S/);\n      if (baseIndent === -1) baseIndent = indent;\n      if (indent >= baseIndent) bodyLines.push(line);\n      else break;\n    }\n    return bodyLines.join(\"\\n\");\n  }\n\n  return \"\";\n}\n\nfunction extractFunctions(content: string, file: string): FunctionRecord[] {\n  const out: FunctionRecord[] = [];\n  const patterns = [\n    /(?:export\\s+)?(?:async\\s+)?function\\s+(\\w+)\\s*\\([^)]*\\)\\s*\\{/g,\n    /(?:export\\s+)?const\\s+(\\w+)\\s*=\\s*(?:async\\s+)?\\([^)]*\\)\\s*=>\\s*\\{/g,\n    /def\\s+(\\w+)\\s*\\([^)]*\\)\\s*:/g,\n    /func\\s+(?:\\([^)]*\\)\\s+)?(\\w+)\\s*\\([^)]*\\)\\s*(?:\\([^)]*\\)\\s*)?\\{/g,\n    /(?:pub\\s+)?(?:async\\s+)?fn\\s+(\\w+)\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*(?:->[^{]*)?\\{/g,\n  ];\n\n  for (const pattern of patterns) {\n    const regex = new RegExp(pattern.source, pattern.flags);\n    let match;\n    while ((match = regex.exec(content)) !== null) {\n      const funcName = match[1];\n      const startIndex = match.index;\n      const line = content.slice(0, startIndex).split(\"\\n\").length;\n      const body = extractBody(content, startIndex + match[0].length - 1);\n      if (body.length < 20) continue;\n\n      const sig = buildSignature(body);\n      if (sig.tokens.length < 15) continue;\n\n      out.push({\n        file,\n        line,\n        funcName,\n        tokens: sig.tokens,\n        signature: sig.signature,\n      });\n    }\n  }\n\n  return out;\n}\n\nconst FLAG_THRESHOLD = 0.7;\n\nexport const duplicatesAnalyzer: Analyzer = {\n  id: \"duplicates\",\n  name: \"Code Duplication\",\n  category: \"redundancy\",\n  requiresAST: false,\n  applicableLanguages: \"all\",\n  // Bumped when detection changes. Invalidates the S1 findings cache.\n  version: 3,\n\n  async analyze(ctx: AnalysisContext): Promise<Finding[]> {\n    const findings: Finding[] = [];\n    const allFunctions: FunctionRecord[] = [];\n\n    for (const file of ctx.files) {\n      if (!file.language) continue;\n      allFunctions.push(...extractFunctions(file.content, file.relativePath));\n    }\n\n    if (allFunctions.length < 2) return findings;\n\n    const signatures = allFunctions.map((f) => f.signature);\n    const candidates = findLshCandidatePairs(signatures);\n\n    const duplicatePairs: { a: FunctionRecord; b: FunctionRecord; similarity: number }[] = [];\n    for (const key of candidates) {\n      const [aStr, bStr] = key.split(\"-\");\n      const a = allFunctions[parseInt(aStr, 10)];\n      const b = allFunctions[parseInt(bStr, 10)];\n      if (a.file === b.file) continue;\n\n      const shorter = Math.min(a.tokens.length, b.tokens.length);\n      const longer = Math.max(a.tokens.length, b.tokens.length);\n      if (shorter / longer < 0.6) continue;\n\n      const sim = lcsSimilarity(a.tokens, b.tokens);\n      if (sim >= FLAG_THRESHOLD) {\n        duplicatePairs.push({ a, b, similarity: sim });\n      }\n    }\n\n    if (duplicatePairs.length === 0) return findings;\n\n    const seenPairs = new Set<string>();\n    const uniquePairs = duplicatePairs\n      .sort((x, y) => y.similarity - x"
+    },
+    "fnB": {
+      "name": "extractFunctionBodies",
+      "path": "src/drift/return-shape-consistency.ts",
+      "body": "\n  const content = file.content;\n\n  // One pattern per language \u2014 we don't need to know which matched, just\n  // where functions start and what they're called.\n  const functionPattern =\n    /(?:(?:async\\s+)?function\\s+(\\w+)|(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:async\\s+)?(?:\\([^)]*\\)|[a-zA-Z_]\\w*)\\s*=>|def\\s+(\\w+)|func\\s+(?:\\([^)]*\\)\\s+)?(\\w+)|(?:pub\\s+)?(?:async\\s+)?fn\\s+(\\w+))/g;\n\n  const starts: { name: string; index: number; line: number }[] = [];\n  let match;\n  while ((match = functionPattern.exec(content)) !== null) {\n    const name = match[1] || match[2] || match[3] || match[4] || match[5];\n    if (!name) continue;\n    const line = getLineNumber(content, match.index);\n    starts.push({ name, index: match.index, line });\n  }\n\n  const out: FunctionExtraction[] = [];\n  for (let i = 0; i < starts.length; i++) {\n    const start = starts[i];\n    const end = i + 1 < starts.length ? starts[i + 1].index : content.length;\n    out.push({\n      file: file.path,\n      name: start.name,\n      line: start.line,\n      bodySlice: content.slice(start.index, end),\n    });\n  }\n  return out;\n}"
+    }
+  },
+  {
+    "gid": "p27",
+    "repo": "vibedrift-public",
+    "band": "C_mid",
+    "cosine": 0.7204,
+    "struct": 0.4667,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "projectHash",
+      "path": "src/core/findings-cache.ts",
+      "body": "\n  return createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n}"
+    },
+    "fnB": {
+      "name": "cachePath",
+      "path": "src/core/git-metadata.ts",
+      "body": "\n  const hash = createHash(\"sha256\").update(rootDir).digest(\"hex\").slice(0, 16);\n  return join(CACHE_DIR, `${hash}.json`);\n}"
+    }
+  },
+  {
+    "gid": "p28",
+    "repo": "vibedrift-public",
+    "band": "B_062",
+    "cosine": 0.686,
+    "struct": 0.0662,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "extractFunctions",
+      "path": "src/analyzers/duplicates.ts",
+      "body": "\n  const out: FunctionRecord[] = [];\n  const patterns = [\n    /(?:export\\s+)?(?:async\\s+)?function\\s+(\\w+)\\s*\\([^)]*\\)\\s*\\{/g,\n    /(?:export\\s+)?const\\s+(\\w+)\\s*=\\s*(?:async\\s+)?\\([^)]*\\)\\s*=>\\s*\\{/g,\n    /def\\s+(\\w+)\\s*\\([^)]*\\)\\s*:/g,\n    /func\\s+(?:\\([^)]*\\)\\s+)?(\\w+)\\s*\\([^)]*\\)\\s*(?:\\([^)]*\\)\\s*)?\\{/g,\n    /(?:pub\\s+)?(?:async\\s+)?fn\\s+(\\w+)\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*(?:->[^{]*)?\\{/g,\n  ];\n\n  for (const pattern of patterns) {\n    const regex = new RegExp(pattern.source, pattern.flags);\n    let match;\n    while ((match = regex.exec(content)) !== null) {\n      const funcName = match[1];\n      const startIndex = match.index;\n      const line = content.slice(0, startIndex).split(\"\\n\").length;\n      const body = extractBody(content, startIndex + match[0].length - 1);\n      if (body.length < 20) continue;\n\n      const sig = buildSignature(body);\n      if (sig.tokens.length < 15) continue;\n\n      out.push({\n        file,\n        line,\n        funcName,\n        tokens: sig.tokens,\n        signature: sig.signature,\n      });\n    }\n  }\n\n  return out;\n}\n\nconst FLAG_THRESHOLD = 0.7;\n\nexport const duplicatesAnalyzer: Analyzer = {\n  id: \"duplicates\",\n  name: \"Code Duplication\",\n  category: \"redundancy\",\n  requiresAST: false,\n  applicableLanguages: \"all\",\n  // Bumped when detection changes. Invalidates the S1 findings cache.\n  version: 3,\n\n  async analyze(ctx: AnalysisContext): Promise<Finding[]> {\n    const findings: Finding[] = [];\n    const allFunctions: FunctionRecord[] = [];\n\n    for (const file of ctx.files) {\n      if (!file.language) continue;\n      allFunctions.push(...extractFunctions(file.content, file.relativePath));\n    }\n\n    if (allFunctions.length < 2) return findings;\n\n    const signatures = allFunctions.map((f) => f.signature);\n    const candidates = findLshCandidatePairs(signatures);\n\n    const duplicatePairs: { a: FunctionRecord; b: FunctionRecord; similarity: number }[] = [];\n    for (const key of candidates) {\n      const [aStr, bStr] = key.split(\"-\");\n      const a = allFunctions[parseInt(aStr, 10)];\n      const b = allFunctions[parseInt(bStr, 10)];\n      if (a.file === b.file) continue;\n\n      const shorter = Math.min(a.tokens.length, b.tokens.length);\n      const longer = Math.max(a.tokens.length, b.tokens.length);\n      if (shorter / longer < 0.6) continue;\n\n      const sim = lcsSimilarity(a.tokens, b.tokens);\n      if (sim >= FLAG_THRESHOLD) {\n        duplicatePairs.push({ a, b, similarity: sim });\n      }\n    }\n\n    if (duplicatePairs.length === 0) return findings;\n\n    const seenPairs = new Set<string>();\n    const uniquePairs = duplicatePairs\n      .sort((x, y) => y.similarity - x.similarity)\n      .filter((p) => {\n        const key = [\n          p.a.file + \":\" + p.a.funcName,\n          p.b.file + \":\" + p.b.funcName,\n        ].sort().join(\"|\");\n        if (seenPairs.has(key)) return false;\n        seenPairs.add(key);\n        return true;\n      });\n\n    findings.push({\n      analyzerId: \"duplicates\",\n      severity: uniquePairs.length > 5 ? \"error\" : \"warning\",\n      confidence: 0.75,\n      message: `${uniquePairs.length} pair(s) of duplicate/near-duplicate functions detected`,\n      locations: uniquePairs.slice(0, 10).flatMap((p) => {\n        const sim = Math.round(p.similarity * 100);\n        const aLabel = p.a.funcName === p.b.funcName\n          ? `${p.a.file}:${p.a.funcName}()`\n          : `${p.a.funcName}()`;\n        const bLabel = p.b.funcName === p.a.funcName\n          ? `${p.b.file}:${p.b.funcName}()`\n    "
+    },
+    "fnB": {
+      "name": "extractFunctionsFromFile",
+      "path": "src/codedna/function-extractor.ts",
+      "body": "\n  const functions: ExtractedFunction[] = [];\n  if (!file.language) return functions;\n\n  const patterns = getLanguagePatterns(file.language);\n\n  for (const pattern of patterns) {\n    const regex = new RegExp(pattern.source, pattern.flags);\n    let match;\n    while ((match = regex.exec(file.content)) !== null) {\n      const name = match[1];\n      const paramsStr = match[2];\n      const startIndex = match.index + match[0].length;\n      const line = file.content.slice(0, match.index).split(\"\\n\").length;\n\n      const body = extractBody(file.content, startIndex, file.language);\n      if (body.length < 10) continue;\n\n      const params = paramsStr.trim() ? paramsStr.split(\",\").map((p) => p.trim()) : [];\n      const declarationCode = (file.content.split(\"\\n\")[line - 1] ?? \"\").trim();\n      const tokens = tokenizeBody(body);\n      if (tokens.length < 5) continue;\n\n      functions.push({\n        name,\n        file: file.path,\n        relativePath: file.relativePath,\n        line,\n        language: file.language,\n        params,\n        paramCount: params.length,\n        rawBody: body,\n        declarationCode,\n        domainCategory: detectDomainCategory(name, body),\n        bodyTokens: tokens,\n        bodyTokenCount: tokens.length,\n        bodyHash: simpleHash(tokens),\n      });\n    }\n  }\n\n  return functions;\n}"
+    }
+  },
+  {
+    "gid": "p29",
+    "repo": "vibedrift-public",
+    "band": "B_062",
+    "cosine": 0.6405,
+    "struct": 0.0385,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "buildStaticFindings",
+      "path": "src/output/html.ts",
+      "body": "\n  // Hygiene findings = analyzers not grounded in a dominance baseline\n  // (complexity, dead-code, TODOs, generic security regex, outdated deps,\n  // empty catches, language idioms). These do NOT feed the Vibe Drift\n  // Score and render in a clearly-labeled separate pane so users still\n  // see them without confusing them with drift signal. Uses the\n  // canonical kind lookup rather than a tag heuristic \u2014 a drift analyzer\n  // that forgets to set the \"drift\" tag would otherwise leak here.\n  const hygieneFindings = result.findings.filter((f) => getAnalyzerKind(f.analyzerId) === \"hygiene\");\n  if (hygieneFindings.length === 0) return \"\";\n\n  const sorted = [...hygieneFindings].sort((a, b) => {\n    const sev = { error: 0, warning: 1, info: 2 };\n    return (sev[a.severity as keyof typeof sev] ?? 2) - (sev[b.severity as keyof typeof sev] ?? 2);\n  });\n\n  function findingRow(f: typeof sorted[0]): string {\n    const sColor = f.severity === \"error\" ? \"var(--drift-orange)\" : f.severity === \"warning\" ? \"var(--drift-amber)\" : \"var(--info-blue)\";\n    const loc = f.locations[0];\n    return `<tr>\n      <td style=\"padding:6px 10px;border-bottom:1px solid var(--border-subtle)\"><span class=\"sev-badge\" style=\"background:${sColor};font-size:10px\">${f.severity === \"error\" ? \"ERROR\" : f.severity === \"warning\" ? \"WARN\" : \"INFO\"}</span></td>\n      <td style=\"padding:6px 10px;border-bottom:1px solid var(--border-subtle);font-size:12px;color:var(--text-tertiary)\">${esc(f.analyzerId)}</td>\n      <td style=\"padding:6px 10px;border-bottom:1px solid var(--border-subtle);font-size:13px;color:var(--text-primary)\">${esc(f.message.slice(0, 80))}${f.message.length > 80 ? \"...\" : \"\"}</td>\n      <td class=\"mono\" style=\"padding:6px 10px;border-bottom:1px solid var(--border-subtle);font-size:11px;color:var(--text-secondary);white-space:nowrap\">${loc ? esc(shortPath(loc.file)) + (loc.line ? \":\" + loc.line : \"\") : \"\"}</td>\n      <td class=\"mono\" style=\"padding:6px 10px;border-bottom:1px solid var(--border-subtle);font-size:11px;color:var(--text-tertiary)\">${Math.round(f.confidence * 100)}%</td>\n    </tr>`;\n  }\n\n  const visibleRows = sorted.slice(0, 30).map(findingRow).join(\"\");\n  const hiddenRows = sorted.length > 30 ? sorted.slice(30).map(findingRow).join(\"\") : \"\";\n\n  const overflowSection = hiddenRows\n    ? `<details style=\"margin-top:4px\">\n        <summary style=\"cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text-tertiary);list-style:none;display:flex;align-items:center;gap:6px\">\n          <span class=\"chevron\">&#9654;</span> ${sorted.length - 30} more findings\n        </summary>\n        <table style=\"width:100%;border-collapse:collapse;font-size:13px\"><tbody>${hiddenRows}</tbody></table>\n      </details>`\n    : \"\";\n\n  const hygieneScorePill = result.maxHygieneScore > 0\n    ? `<span class=\"mono\" style=\"font-size:11px;font-weight:600;color:var(--text-secondary);margin-left:8px;padding:2px 8px;border:1px solid var(--border);border-radius:0\">Hygiene ${result.hygieneScore}/${result.maxHygieneScore}</span>`\n    : \"\";\n\n  return `<details class=\"section\" id=\"evidence-static\" style=\"padding:0\">\n  <summary style=\"cursor:pointer;padding:20px 28px;list-style:none;display:flex;align-items:center;gap:8px\">\n    <span class=\"chevron\" style=\"font-size:11px\">&#9654;</span>\n    <span class=\"label\" style=\"margin:0\">HYGIENE FINDINGS <span style=\"font-size:11px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-tertiary);margin-left:8px\">not part of Vibe Drift S"
+    },
+    "fnB": {
+      "name": "renderHygienePane",
+      "path": "src/output/terminal.ts",
+      "body": "\n  const hygieneFindings = result.findings.filter(\n    (f) => getAnalyzerKind(f.analyzerId) === \"hygiene\",\n  );\n  if (hygieneFindings.length === 0) return [];\n\n  const lines: string[] = [];\n  lines.push(chalk.bold.yellow(\"\\u2500\\u2500 Hygiene findings (not part of Vibe Drift Score) \\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\"));\n  lines.push(chalk.dim(\"  Generic hygiene checks \u2014 complexity, dead code, TODOs, generic\"));\n  lines.push(chalk.dim(\"  security and dependency issues. These feed the Hygiene Score\"));\n  lines.push(chalk.dim(`  (${result.hygieneScore.toFixed(0)}/${result.maxHygieneScore}), not the drift composite.`));\n  lines.push(\"\");\n\n  for (const cat of ALL_CATEGORIES) {\n    const config = CATEGORY_CONFIG[cat];\n    const s = result.hygieneScores[cat];\n    if (!s.applicable) continue; // Skip N/A hygiene categories silently\n\n    const hygieneIds = config.analyzers.filter((a) => a.kind === \"hygiene\").map((a) => a.id);\n    const catFindings = hygieneFindings.filter((f) => hygieneIds.includes(f.analyzerId));\n    if (catFindings.length === 0) continue; // Don't show empty hygiene categories\n\n    lines.push(...renderFindingsForCategory(\n      config.name,\n      true,\n      catFindings,\n      \"No hygiene issues\",\n    ));\n  }\n  return lines;\n}"
+    }
+  },
+  {
+    "gid": "p30",
+    "repo": "vibedrift-public",
+    "band": "B_062",
+    "cosine": 0.7174,
+    "struct": 0.0586,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "extractFunctionsRegex",
+      "path": "src/analyzers/complexity.ts",
+      "body": "\n  const functionPattern = /(?:(?:async\\s+)?function\\s+(\\w+)|(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:async\\s+)?(?:\\([^)]*\\)|[a-zA-Z_]\\w*)\\s*=>|def\\s+(\\w+)|func\\s+(\\w+)|fn\\s+(\\w+))/g;\n\n  const starts: { name: string; index: number; line: number }[] = [];\n  let match;\n  while ((match = functionPattern.exec(content)) !== null) {\n    const name = match[1] || match[2] || match[3] || match[4] || match[5];\n    const line = content.slice(0, match.index).split(\"\\n\").length;\n    starts.push({ name, index: match.index, line });\n  }\n\n  const functions: FunctionInfo[] = [];\n  for (let i = 0; i < starts.length; i++) {\n    const start = starts[i];\n    const bodyEnd = i + 1 < starts.length ? starts[i + 1].index : content.length;\n    const body = content.slice(start.index, bodyEnd);\n    const complexity = computeCognitiveRegex(body);\n    const lineCount = body.split(\"\\n\").length;\n    functions.push({ name: start.name, file, line: start.line, complexity, lineCount });\n  }\n\n  return functions;\n}"
+    },
+    "fnB": {
+      "name": "extractFunctionsFromFile",
+      "path": "src/codedna/function-extractor.ts",
+      "body": "\n  const functions: ExtractedFunction[] = [];\n  if (!file.language) return functions;\n\n  const patterns = getLanguagePatterns(file.language);\n\n  for (const pattern of patterns) {\n    const regex = new RegExp(pattern.source, pattern.flags);\n    let match;\n    while ((match = regex.exec(file.content)) !== null) {\n      const name = match[1];\n      const paramsStr = match[2];\n      const startIndex = match.index + match[0].length;\n      const line = file.content.slice(0, match.index).split(\"\\n\").length;\n\n      const body = extractBody(file.content, startIndex, file.language);\n      if (body.length < 10) continue;\n\n      const params = paramsStr.trim() ? paramsStr.split(\",\").map((p) => p.trim()) : [];\n      const declarationCode = (file.content.split(\"\\n\")[line - 1] ?? \"\").trim();\n      const tokens = tokenizeBody(body);\n      if (tokens.length < 5) continue;\n\n      functions.push({\n        name,\n        file: file.path,\n        relativePath: file.relativePath,\n        line,\n        language: file.language,\n        params,\n        paramCount: params.length,\n        rawBody: body,\n        declarationCode,\n        domainCategory: detectDomainCategory(name, body),\n        bodyTokens: tokens,\n        bodyTokenCount: tokens.length,\n        bodyHash: simpleHash(tokens),\n      });\n    }\n  }\n\n  return functions;\n}"
+    }
+  },
+  {
+    "gid": "p31",
+    "repo": "vibedrift-public",
+    "band": "B_062",
+    "cosine": 0.6239,
+    "struct": 0.0106,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "extractFunctions",
+      "path": "src/analyzers/complexity.ts",
+      "body": "\n  const functions: FunctionInfo[] = [];\n  const functionTypes = new Set([\n    \"function_declaration\", \"method_definition\", \"arrow_function\",\n    \"function_definition\", \"method_declaration\",  // Python, Go\n    \"function_item\", \"impl_item\",                 // Rust\n  ]);\n\n  function walk(n: SyntaxNode) {\n    if (functionTypes.has(n.type)) {\n      const nameNode = n.childForFieldName(\"name\");\n      const name = nameNode?.text ?? \"(anonymous)\";\n      const startLine = n.startPosition.row + 1;\n      const lineCount = n.endPosition.row - n.startPosition.row + 1;\n      const complexity = computeCognitiveAST(n, language);\n\n      functions.push({ name, file, line: startLine, complexity, lineCount });\n    }\n    for (let i = 0; i < n.childCount; i++) {\n      walk(n.child(i)!);\n    }\n  }\n\n  walk(node);\n  return functions;\n}"
+    },
+    "fnB": {
+      "name": "extractFunctionsFromFile",
+      "path": "src/codedna/function-extractor.ts",
+      "body": "\n  const functions: ExtractedFunction[] = [];\n  if (!file.language) return functions;\n\n  const patterns = getLanguagePatterns(file.language);\n\n  for (const pattern of patterns) {\n    const regex = new RegExp(pattern.source, pattern.flags);\n    let match;\n    while ((match = regex.exec(file.content)) !== null) {\n      const name = match[1];\n      const paramsStr = match[2];\n      const startIndex = match.index + match[0].length;\n      const line = file.content.slice(0, match.index).split(\"\\n\").length;\n\n      const body = extractBody(file.content, startIndex, file.language);\n      if (body.length < 10) continue;\n\n      const params = paramsStr.trim() ? paramsStr.split(\",\").map((p) => p.trim()) : [];\n      const declarationCode = (file.content.split(\"\\n\")[line - 1] ?? \"\").trim();\n      const tokens = tokenizeBody(body);\n      if (tokens.length < 5) continue;\n\n      functions.push({\n        name,\n        file: file.path,\n        relativePath: file.relativePath,\n        line,\n        language: file.language,\n        params,\n        paramCount: params.length,\n        rawBody: body,\n        declarationCode,\n        domainCategory: detectDomainCategory(name, body),\n        bodyTokens: tokens,\n        bodyTokenCount: tokens.length,\n        bodyHash: simpleHash(tokens),\n      });\n    }\n  }\n\n  return functions;\n}"
+    }
+  },
+  {
+    "gid": "p32",
+    "repo": "vibedrift-public",
+    "band": "B_042",
+    "cosine": 0.4904,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "shouldIgnore",
+      "path": "src/cli/commands/watch.ts",
+      "body": "\n  const parts = relPath.split(/[\\\\/]/);\n  for (const seg of parts) {\n    if (IGNORE_SEGMENTS.includes(seg)) return true;\n  }\n  for (const ext of IGNORE_EXTENSIONS) {\n    if (relPath.endsWith(ext)) return true;\n  }\n  return false;\n}"
+    },
+    "fnB": {
+      "name": "isSourceFile",
+      "path": "src/drift/export-consistency.ts",
+      "body": "\n  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\\.test\\.|\\.spec\\.)/i.test(path)) return false;\n  if (/(?:\\.config\\.|\\.d\\.ts$|node_modules|dist\\/|build\\/|index\\.)/i.test(path)) return false;\n  return true;\n}"
+    }
+  },
+  {
+    "gid": "p33",
+    "repo": "vibedrift-public",
+    "band": "B_042",
+    "cosine": 0.4295,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "renderDocxReport",
+      "path": "src/output/docx.ts",
+      "body": "\n  const entries: ZipEntry[] = [\n    { name: \"[Content_Types].xml\", data: Buffer.from(contentTypes(), \"utf-8\") },\n    { name: \"_rels/.rels\", data: Buffer.from(rootRels(), \"utf-8\") },\n    { name: \"word/_rels/document.xml.rels\", data: Buffer.from(docRels(), \"utf-8\") },\n    { name: \"word/styles.xml\", data: Buffer.from(styles(), \"utf-8\") },\n    { name: \"word/document.xml\", data: Buffer.from(buildDocumentXml(result), \"utf-8\") },\n  ];\n  return buildZip(entries);\n}"
+    },
+    "fnB": {
+      "name": "exportDOCX",
+      "path": "src/output/html.ts",
+      "body": "\n  const d = window.__VIBEDRIFT_DATA;\n  if (!d) { alert('Report data not available'); return; }\n\n  let html = '<html xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:w=\"urn:schemas-microsoft-com:office:word\"><head><meta charset=\"utf-8\"><style>';\n  html += 'body{font-family:Calibri,sans-serif;font-size:11pt;color:#222;margin:40px}';\n  html += 'h1{font-size:20pt;color:#0B0F15;border-bottom:2px solid #00D4FF;padding-bottom:8px;margin-top:28px}';\n  html += 'h2{font-size:14pt;color:#333;margin-top:20px}';\n  html += 'h3{font-size:12pt;color:#555;margin-top:14px}';\n  html += 'table{border-collapse:collapse;width:100%;margin:10px 0}';\n  html += 'th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:10pt}';\n  html += 'th{background:#f0f4f8;font-weight:600}';\n  html += '.sev-critical{color:#dc2626;font-weight:700} .sev-warning{color:#d97706;font-weight:700} .sev-info{color:#2563eb}';\n  html += '.intent{background:#ecfdf5;border-left:3px solid #10b981;padding:8px 12px;margin:6px 0}';\n  html += '.drift{background:#fff7ed;border-left:3px solid #f97316;padding:8px 12px;margin:6px 0}';\n  html += '.rec{background:#f0f9ff;border-left:3px solid #0ea5e9;padding:8px 12px;margin:6px 0}';\n  html += 'code{font-family:Consolas,monospace;font-size:9pt;background:#f5f5f5;padding:1px 4px}';\n  html += '.page-break{page-break-before:always}';\n  html += '</style></head><body>';\n\n  html += '<div style=\"text-align:center;margin-bottom:30px\">';\n  html += '<h1 style=\"border:none;font-size:28pt;color:#00D4FF\">VIBEDRIFT REPORT</h1>';\n  html += '<p style=\"font-size:16pt;color:#333\">' + esc2(d.project) + '</p>';\n  html += '<p>' + d.fileCount + ' files &middot; ' + formatCount(d.totalLines) + ' LOC &middot; Score: <strong>' + d.score + '/' + d.maxScore + '</strong></p>';\n  html += '</div>';\n\n  html += buildDocxFindingsHtml(d);\n  html += buildDocxScoresHtml(d);\n\n  html += '<hr><p style=\"color:#999;font-size:9pt\">Generated by VibeDrift v' + d.version + ' | ' + d.fileCount + ' files | No data sent externally</p>';\n  html += '</body></html>';\n\n  const blob = new Blob([html], { type: 'application/vnd.ms-word' });\n  const a = document.createElement('a');\n  a.href = URL.createObjectURL(blob);\n  a.download = d.project + '-vibedrift.doc';\n  a.click();\n  URL.revokeObjectURL(a.href);\n}"
+    }
+  },
+  {
+    "gid": "p34",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/cyclicTypesRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/edgeCaseRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "gid": "p35",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "getValidRequestBody",
+      "path": "packages/openapi/test/routers/descriptionsRouter-heyapi/core/utils.gen.ts",
+      "body": "\n  const hasBody = options.body !== undefined;\n  const isSerializedBody = hasBody && options.bodySerializer;\n\n  if (isSerializedBody) {\n    if ('serializedBody' in options) {\n      const hasSerializedBody =\n        options.serializedBody !== undefined && options.serializedBody !== '';\n\n      return hasSerializedBody ? options.serializedBody : null;\n    }\n\n    // not all clients implement a serializedBody property (i.e., client-axios)\n    return options.body !== '' ? options.body : null;\n  }\n\n  // plain/text body\n  if (hasBody) {\n    return options.body;\n  }\n\n  // no body was provided\n  return undefined;\n}"
+    },
+    "fnB": {
+      "name": "getValidRequestBody",
+      "path": "packages/openapi/test/routers/errorFormatterRouter-heyapi/core/utils.gen.ts",
+      "body": "\n  const hasBody = options.body !== undefined;\n  const isSerializedBody = hasBody && options.bodySerializer;\n\n  if (isSerializedBody) {\n    if ('serializedBody' in options) {\n      const hasSerializedBody =\n        options.serializedBody !== undefined && options.serializedBody !== '';\n\n      return hasSerializedBody ? options.serializedBody : null;\n    }\n\n    // not all clients implement a serializedBody property (i.e., client-axios)\n    return options.body !== '' ? options.body : null;\n  }\n\n  // plain/text body\n  if (hasBody) {\n    return options.body;\n  }\n\n  // no body was provided\n  return undefined;\n}"
+    }
+  },
+  {
+    "gid": "p36",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 0.8953,
+    "struct": 0.4615,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "DiscussionsExportPage",
+      "path": "packages/react-query/test/polymorphism.test.tsx",
+      "body": "\n        const utils = trpc.useUtils();\n\n        const [currentExport, setCurrentExport] = useState<number | null>(null);\n        const invalidate = useMutation({\n          mutationFn: () => utils.invalidate(),\n        });\n\n        return (\n          <>\n            <StartExportButton\n              route={trpc.github.discussions.export}\n              utils={utils.github.discussions.export}\n              onExportStarted={setCurrentExport}\n            />\n\n            <RefreshExportsListButton\n              mutate={invalidate.mutate}\n              isPending={invalidate.isPending}\n            />\n\n            <ExportStatus\n              status={trpc.github.discussions.export.status}\n              currentExport={currentExport}\n            />\n\n            <ExportsList list={trpc.github.discussions.export.list} />\n          </>\n        );\n      }"
+    },
+    "fnB": {
+      "name": "IssuesExportPage",
+      "path": "packages/tanstack-react-query/test/polymorphism.test.tsx",
+      "body": "\n        const trpc = useTRPC();\n        const client = useQueryClient();\n\n        const [currentExport, setCurrentExport] = useState<number | null>(null);\n        const invalidate = useMutation({\n          mutationFn: () => client.invalidateQueries(trpc.github.pathFilter()),\n        });\n\n        return (\n          <>\n            <StartExportButton\n              route={trpc.github.issues.export}\n              onExportStarted={setCurrentExport}\n            />\n\n            <RefreshExportsListButton\n              mutate={invalidate.mutate}\n              isPending={invalidate.isPending}\n            />\n\n            <ExportStatus\n              status={trpc.github.issues.export.status}\n              currentExport={currentExport}\n            />\n\n            <ExportsList list={trpc.github.issues.export.list} />\n          </>\n        );\n      }"
+    }
+  },
+  {
+    "gid": "p37",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "headersEntries",
+      "path": "packages/openapi/test/routers/errorFormatterRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  const entries: Array<[string, string]> = [];\n  headers.forEach((value, key) => {\n    entries.push([key, value]);\n  });\n  return entries;\n}"
+    },
+    "fnB": {
+      "name": "headersEntries",
+      "path": "packages/openapi/test/routers/superjsonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  const entries: Array<[string, string]> = [];\n  headers.forEach((value, key) => {\n    entries.push([key, value]);\n  });\n  return entries;\n}"
+    }
+  },
+  {
+    "gid": "p38",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeSearchParams",
+      "path": "examples/openapi-codegen/src/client/generated/core/queryKeySerializer.gen.ts",
+      "body": "\n  const entries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b));\n  const result: Record<string, JsonValue> = {};\n\n  for (const [key, value] of entries) {\n    const existing = result[key];\n    if (existing === undefined) {\n      result[key] = value;\n      continue;\n    }\n\n    if (Array.isArray(existing)) {\n      (existing as string[]).push(value);\n    } else {\n      result[key] = [existing, value];\n    }\n  }\n\n  return result;\n}"
+    },
+    "fnB": {
+      "name": "serializeSearchParams",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/queryKeySerializer.gen.ts",
+      "body": "\n  const entries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b));\n  const result: Record<string, JsonValue> = {};\n\n  for (const [key, value] of entries) {\n    const existing = result[key];\n    if (existing === undefined) {\n      result[key] = value;\n      continue;\n    }\n\n    if (Array.isArray(existing)) {\n      (existing as string[]).push(value);\n    } else {\n      result[key] = [existing, value];\n    }\n  }\n\n  return result;\n}"
+    }
+  },
+  {
+    "gid": "p39",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "abortHandler",
+      "path": "packages/openapi/test/routers/appRouter-heyapi/core/serverSentEvents.gen.ts",
+      "body": "\n          try {\n            reader.cancel();\n          } catch {\n            // noop\n          }\n        }"
+    },
+    "fnB": {
+      "name": "abortHandler",
+      "path": "packages/openapi/test/routers/nodeModulesJsDocRouter-heyapi/core/serverSentEvents.gen.ts",
+      "body": "\n          try {\n            reader.cancel();\n          } catch {\n            // noop\n          }\n        }"
+    }
+  },
+  {
+    "gid": "p40",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "beforeRequest",
+      "path": "packages/openapi/test/routers/appRouter-heyapi/client/client.gen.ts",
+      "body": "\n    const opts = {\n      ..._config,\n      ...options,\n      fetch: options.fetch ?? _config.fetch ?? globalThis.fetch,\n      headers: mergeHeaders(_config.headers, options.headers),\n      serializedBody: undefined as string | undefined,\n    };\n\n    if (opts.security) {\n      await setAuthParams({\n        ...opts,\n        security: opts.security,\n      });\n    }\n\n    if (opts.requestValidator) {\n      await opts.requestValidator(opts);\n    }\n\n    if (opts.body !== undefined && opts.bodySerializer) {\n      opts.serializedBody = opts.bodySerializer(opts.body) as string | undefined;\n    }\n\n    // remove Content-Type header if body is empty to avoid sending invalid requests\n    if (opts.body === undefined || opts.serializedBody === '') {\n      opts.headers.delete('Content-Type');\n    }\n\n    const url = buildUrl(opts);\n\n    return { opts, url };\n  }"
+    },
+    "fnB": {
+      "name": "beforeRequest",
+      "path": "packages/openapi/test/routers/mongoEjsonRouter-heyapi/client/client.gen.ts",
+      "body": "\n    const opts = {\n      ..._config,\n      ...options,\n      fetch: options.fetch ?? _config.fetch ?? globalThis.fetch,\n      headers: mergeHeaders(_config.headers, options.headers),\n      serializedBody: undefined as string | undefined,\n    };\n\n    if (opts.security) {\n      await setAuthParams({\n        ...opts,\n        security: opts.security,\n      });\n    }\n\n    if (opts.requestValidator) {\n      await opts.requestValidator(opts);\n    }\n\n    if (opts.body !== undefined && opts.bodySerializer) {\n      opts.serializedBody = opts.bodySerializer(opts.body) as string | undefined;\n    }\n\n    // remove Content-Type header if body is empty to avoid sending invalid requests\n    if (opts.body === undefined || opts.serializedBody === '') {\n      opts.headers.delete('Content-Type');\n    }\n\n    const url = buildUrl(opts);\n\n    return { opts, url };\n  }"
+    }
+  },
+  {
+    "gid": "p41",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "separatorArrayExplode",
+      "path": "packages/openapi/test/routers/appRouter-heyapi/core/pathSerializer.gen.ts",
+      "body": "\n  switch (style) {\n    case 'label':\n      return '.';\n    case 'matrix':\n      return ';';\n    case 'simple':\n      return ',';\n    default:\n      return '&';\n  }\n}"
+    },
+    "fnB": {
+      "name": "separatorObjectExplode",
+      "path": "packages/openapi/test/routers/cyclicTypesRouter-heyapi/core/pathSerializer.gen.ts",
+      "body": "\n  switch (style) {\n    case 'label':\n      return '.';\n    case 'matrix':\n      return ';';\n    case 'simple':\n      return ',';\n    default:\n      return '&';\n  }\n}"
+    }
+  },
+  {
+    "gid": "p42",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "checkForExistence",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!name) {\n    return false;\n  }\n  if (\n    options.headers.has(name) ||\n    options.query?.[name] ||\n    options.headers.get('Cookie')?.includes(`${name}=`)\n  ) {\n    return true;\n  }\n  return false;\n}"
+    },
+    "fnB": {
+      "name": "checkForExistence",
+      "path": "packages/openapi/test/routers/descriptionsRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!name) {\n    return false;\n  }\n  if (\n    options.headers.has(name) ||\n    options.query?.[name] ||\n    options.headers.get('Cookie')?.includes(`${name}=`)\n  ) {\n    return true;\n  }\n  return false;\n}"
+    }
+  },
+  {
+    "gid": "p43",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/appRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "gid": "p44",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 0.8817,
+    "struct": 0.5882,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "createContext",
+      "path": "examples/next-prisma-websockets-starter/src/server/context.ts",
+      "body": "\n  const session = await getSession(opts);\n\n  console.log('createContext for', session?.user?.name ?? 'unknown user');\n\n  return {\n    session,\n  };\n}"
+    },
+    "fnB": {
+      "name": "createContext",
+      "path": "examples/next-sse-chat/src/server/context.ts",
+      "body": "\n  const session = await auth();\n\n  console.log('createContext for', session?.user?.name ?? 'unknown user');\n\n  return {\n    session,\n  };\n}"
+    }
+  },
+  {
+    "gid": "p45",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "setAuthParams",
+      "path": "examples/openapi-codegen/src/client/generated/client/utils.gen.ts",
+      "body": "\n  for (const auth of security) {\n    if (checkForExistence(options, auth.name)) {\n      continue;\n    }\n\n    const token = await getAuthToken(auth, options.auth);\n\n    if (!token) {\n      continue;\n    }\n\n    const name = auth.name ?? 'Authorization';\n\n    switch (auth.in) {\n      case 'query':\n        if (!options.query) {\n          options.query = {};\n        }\n        options.query[name] = token;\n        break;\n      case 'cookie':\n        options.headers.append('Cookie', `${name}=${token}`);\n        break;\n      case 'header':\n      default:\n        options.headers.set(name, token);\n        break;\n    }\n  }\n}"
+    },
+    "fnB": {
+      "name": "setAuthParams",
+      "path": "packages/openapi/test/routers/cyclicTypesRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  for (const auth of security) {\n    if (checkForExistence(options, auth.name)) {\n      continue;\n    }\n\n    const token = await getAuthToken(auth, options.auth);\n\n    if (!token) {\n      continue;\n    }\n\n    const name = auth.name ?? 'Authorization';\n\n    switch (auth.in) {\n      case 'query':\n        if (!options.query) {\n          options.query = {};\n        }\n        options.query[name] = token;\n        break;\n      case 'cookie':\n        options.headers.append('Cookie', `${name}=${token}`);\n        break;\n      case 'header':\n      default:\n        options.headers.set(name, token);\n        break;\n    }\n  }\n}"
+    }
+  },
+  {
+    "gid": "p46",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "getParseAs",
+      "path": "packages/openapi/test/routers/descriptionsRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!contentType) {\n    // If no Content-Type header is provided, the best we can do is return the raw response body,\n    // which is effectively the same as the 'stream' option.\n    return 'stream';\n  }\n\n  const cleanContent = contentType.split(';')[0]?.trim();\n\n  if (!cleanContent) {\n    return;\n  }\n\n  if (cleanContent.startsWith('application/json') || cleanContent.endsWith('+json')) {\n    return 'json';\n  }\n\n  if (cleanContent === 'multipart/form-data') {\n    return 'formData';\n  }\n\n  if (\n    ['application/', 'audio/', 'image/', 'video/'].some((type) => cleanContent.startsWith(type))\n  ) {\n    return 'blob';\n  }\n\n  if (cleanContent.startsWith('text/')) {\n    return 'text';\n  }\n\n  return;\n}"
+    },
+    "fnB": {
+      "name": "getParseAs",
+      "path": "packages/openapi/test/routers/nodeModulesJsDocRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!contentType) {\n    // If no Content-Type header is provided, the best we can do is return the raw response body,\n    // which is effectively the same as the 'stream' option.\n    return 'stream';\n  }\n\n  const cleanContent = contentType.split(';')[0]?.trim();\n\n  if (!cleanContent) {\n    return;\n  }\n\n  if (cleanContent.startsWith('application/json') || cleanContent.endsWith('+json')) {\n    return 'json';\n  }\n\n  if (cleanContent === 'multipart/form-data') {\n    return 'formData';\n  }\n\n  if (\n    ['application/', 'audio/', 'image/', 'video/'].some((type) => cleanContent.startsWith(type))\n  ) {\n    return 'blob';\n  }\n\n  if (cleanContent.startsWith('text/')) {\n    return 'text';\n  }\n\n  return;\n}"
+    }
+  },
+  {
+    "gid": "p47",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "querySerializer",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n    const search: string[] = [];\n    if (queryParams && typeof queryParams === 'object') {\n      for (const name in queryParams) {\n        const value = queryParams[name];\n\n        if (value === undefined || value === null) {\n          continue;\n        }\n\n        const options = parameters[name] || args;\n\n        if (Array.isArray(value)) {\n          const serializedArray = serializeArrayParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'form',\n            value,\n            ...options.array,\n          });\n          if (serializedArray) search.push(serializedArray);\n        } else if (typeof value === 'object') {\n          const serializedObject = serializeObjectParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'deepObject',\n            value: value as Record<string, unknown>,\n            ...options.object,\n          });\n          if (serializedObject) search.push(serializedObject);\n        } else {\n          const serializedPrimitive = serializePrimitiveParam({\n            allowReserved: options.allowReserved,\n            name,\n            value: value as string,\n          });\n          if (serializedPrimitive) search.push(serializedPrimitive);\n        }\n      }\n    }\n    return search.join('&');\n  }"
+    },
+    "fnB": {
+      "name": "querySerializer",
+      "path": "packages/openapi/test/routers/cyclicTypesRouter-heyapi/client/utils.gen.ts",
+      "body": "\n    const search: string[] = [];\n    if (queryParams && typeof queryParams === 'object') {\n      for (const name in queryParams) {\n        const value = queryParams[name];\n\n        if (value === undefined || value === null) {\n          continue;\n        }\n\n        const options = parameters[name] || args;\n\n        if (Array.isArray(value)) {\n          const serializedArray = serializeArrayParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'form',\n            value,\n            ...options.array,\n          });\n          if (serializedArray) search.push(serializedArray);\n        } else if (typeof value === 'object') {\n          const serializedObject = serializeObjectParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'deepObject',\n            value: value as Record<string, unknown>,\n            ...options.object,\n          });\n          if (serializedObject) search.push(serializedObject);\n        } else {\n          const serializedPrimitive = serializePrimitiveParam({\n            allowReserved: options.allowReserved,\n            name,\n            value: value as string,\n          });\n          if (serializedPrimitive) search.push(serializedPrimitive);\n        }\n      }\n    }\n    return search.join('&');\n  }"
+    }
+  },
+  {
+    "gid": "p48",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "checkForExistence",
+      "path": "packages/openapi/test/routers/descriptionsRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!name) {\n    return false;\n  }\n  if (\n    options.headers.has(name) ||\n    options.query?.[name] ||\n    options.headers.get('Cookie')?.includes(`${name}=`)\n  ) {\n    return true;\n  }\n  return false;\n}"
+    },
+    "fnB": {
+      "name": "checkForExistence",
+      "path": "packages/openapi/test/routers/mongoEjsonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!name) {\n    return false;\n  }\n  if (\n    options.headers.has(name) ||\n    options.query?.[name] ||\n    options.headers.get('Cookie')?.includes(`${name}=`)\n  ) {\n    return true;\n  }\n  return false;\n}"
+    }
+  },
+  {
+    "gid": "p49",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "mergeConfigs",
+      "path": "packages/openapi/test/routers/mongoEjsonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  const config = { ...a, ...b };\n  if (config.baseUrl?.endsWith('/')) {\n    config.baseUrl = config.baseUrl.substring(0, config.baseUrl.length - 1);\n  }\n  config.headers = mergeHeaders(a.headers, b.headers);\n  return config;\n}"
+    },
+    "fnB": {
+      "name": "mergeConfigs",
+      "path": "packages/openapi/test/routers/nodeModulesJsDocRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  const config = { ...a, ...b };\n  if (config.baseUrl?.endsWith('/')) {\n    config.baseUrl = config.baseUrl.substring(0, config.baseUrl.length - 1);\n  }\n  config.headers = mergeHeaders(a.headers, b.headers);\n  return config;\n}"
+    }
+  },
+  {
+    "gid": "p50",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializePrimitiveParam",
+      "path": "examples/openapi-codegen/src/client/generated/core/pathSerializer.gen.ts",
+      "body": "\n  if (value === undefined || value === null) {\n    return '';\n  }\n\n  if (typeof value === 'object') {\n    throw new Error(\n      'Deeply-nested arrays/objects aren\u2019t supported. Provide your own `querySerializer()` to handle these.',\n    );\n  }\n\n  return `${name}=${allowReserved ? value : encodeURIComponent(value)}`;\n}"
+    },
+    "fnB": {
+      "name": "serializePrimitiveParam",
+      "path": "packages/openapi/test/routers/appRouter-heyapi/core/pathSerializer.gen.ts",
+      "body": "\n  if (value === undefined || value === null) {\n    return '';\n  }\n\n  if (typeof value === 'object') {\n    throw new Error(\n      'Deeply-nested arrays/objects aren\u2019t supported. Provide your own `querySerializer()` to handle these.',\n    );\n  }\n\n  return `${name}=${allowReserved ? value : encodeURIComponent(value)}`;\n}"
+    }
+  },
+  {
+    "gid": "p51",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/errorFormatterRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/nodeModulesJsDocRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "gid": "p52",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 0.8506,
+    "struct": 0.2946,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "MyComponent",
+      "path": "packages/react-query/test/queryOptions.test.tsx",
+      "body": "\n      const trpc = useTRPC();\n      const queryClient = useQueryClient();\n\n      infiniteQueryOptions;\n      const queryOptions = trpc.post.list.infiniteQueryOptions(\n        {},\n        {\n          getNextPageParam(lastPage) {\n            return lastPage.next;\n          },\n          select(opts) {\n            return {\n              ...opts,\n              pages: opts.pages.map((page) => {\n                return {\n                  ...page,\n                  items: page.items,\n                  ___selected: true as const,\n                };\n              }),\n            };\n          },\n        },\n      );\n      const query1 = useInfiniteQuery(queryOptions);\n      expect(queryOptions.trpc.path).toBe('post.list');\n      if (!query1.data) {\n        return <>...</>;\n      }\n\n      expectTypeOf<\n        InfiniteData<\n          {\n            items: typeof fixtureData;\n            next?: number | undefined;\n          },\n          number | null\n        >\n      >(query1.data);\n\n      expectTypeOf(query1.data.pages[0]?.___selected).toEqualTypeOf<\n        true | undefined\n      >();\n\n      return (\n        <>\n          <button\n            data-testid=\"fetchMore\"\n            onClick={() => {\n              query1.fetchNextPage();\n            }}\n          >\n            Fetch more\n          </button>\n          <button\n            data-testid=\"prefetch\"\n            onClick={async () => {\n              const fetched =\n                await queryClient.fetchInfiniteQuery(queryOptions);\n              expectTypeOf<{\n                pages: {\n                  items: typeof fixtureData;\n                  next?: number | undefined;\n                }[];\n                pageParams: (number | null)[];\n              }>(fetched);\n              expect(\n                fetched.pageParams.some((p) => typeof p === 'undefined'),\n              ).toBeFalsy();\n            }}\n          >\n            Fetch\n          </button>\n          <pre>{JSON.stringify(query1.data ?? 'n/a', null, 4)}</pre>\n        </>\n      );\n    }"
+    },
+    "fnB": {
+      "name": "MyComponent",
+      "path": "packages/tanstack-react-query/test/infiniteQueryOptions.test.tsx",
+      "body": "\n      const trpc = useTRPC();\n      const queryOptions = trpc.post.list.infiniteQueryOptions(\n        {\n          cursor: 0,\n          foo: 'bar',\n        },\n        {\n          getNextPageParam(lastPage) {\n            return lastPage.next;\n          },\n        },\n      );\n      const query1 = useInfiniteQuery(queryOptions);\n      expect(queryOptions.trpc.path).toBe('post.list');\n      if (!query1.data) {\n        return <>...</>;\n      }\n\n      return (\n        <>\n          <button\n            data-testid=\"fetchMore\"\n            onClick={() => {\n              query1.fetchNextPage();\n            }}\n          >\n            Fetch more\n          </button>\n          <pre>{JSON.stringify(query1.data ?? 'n/a', null, 4)}</pre>\n        </>\n      );\n    }"
+    }
+  },
+  {
+    "gid": "p53",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "querySerializer",
+      "path": "packages/openapi/test/routers/errorFormatterRouter-heyapi/client/utils.gen.ts",
+      "body": "\n    const search: string[] = [];\n    if (queryParams && typeof queryParams === 'object') {\n      for (const name in queryParams) {\n        const value = queryParams[name];\n\n        if (value === undefined || value === null) {\n          continue;\n        }\n\n        const options = parameters[name] || args;\n\n        if (Array.isArray(value)) {\n          const serializedArray = serializeArrayParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'form',\n            value,\n            ...options.array,\n          });\n          if (serializedArray) search.push(serializedArray);\n        } else if (typeof value === 'object') {\n          const serializedObject = serializeObjectParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'deepObject',\n            value: value as Record<string, unknown>,\n            ...options.object,\n          });\n          if (serializedObject) search.push(serializedObject);\n        } else {\n          const serializedPrimitive = serializePrimitiveParam({\n            allowReserved: options.allowReserved,\n            name,\n            value: value as string,\n          });\n          if (serializedPrimitive) search.push(serializedPrimitive);\n        }\n      }\n    }\n    return search.join('&');\n  }"
+    },
+    "fnB": {
+      "name": "querySerializer",
+      "path": "packages/openapi/test/routers/mongoEjsonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n    const search: string[] = [];\n    if (queryParams && typeof queryParams === 'object') {\n      for (const name in queryParams) {\n        const value = queryParams[name];\n\n        if (value === undefined || value === null) {\n          continue;\n        }\n\n        const options = parameters[name] || args;\n\n        if (Array.isArray(value)) {\n          const serializedArray = serializeArrayParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'form',\n            value,\n            ...options.array,\n          });\n          if (serializedArray) search.push(serializedArray);\n        } else if (typeof value === 'object') {\n          const serializedObject = serializeObjectParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'deepObject',\n            value: value as Record<string, unknown>,\n            ...options.object,\n          });\n          if (serializedObject) search.push(serializedObject);\n        } else {\n          const serializedPrimitive = serializePrimitiveParam({\n            allowReserved: options.allowReserved,\n            name,\n            value: value as string,\n          });\n          if (serializedPrimitive) search.push(serializedPrimitive);\n        }\n      }\n    }\n    return search.join('&');\n  }"
+    }
+  },
+  {
+    "gid": "p54",
+    "repo": "trpc-trpc",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeArrayParam",
+      "path": "packages/openapi/test/routers/descriptionsRouter-heyapi/core/pathSerializer.gen.ts",
+      "body": "\n  if (!explode) {\n    const joinedValues = (\n      allowReserved ? value : value.map((v) => encodeURIComponent(v as string))\n    ).join(separatorArrayNoExplode(style));\n    switch (style) {\n      case 'label':\n        return `.${joinedValues}`;\n      case 'matrix':\n        return `;${name}=${joinedValues}`;\n      case 'simple':\n        return joinedValues;\n      default:\n        return `${name}=${joinedValues}`;\n    }\n  }\n\n  const separator = separatorArrayExplode(style);\n  const joinedValues = value\n    .map((v) => {\n      if (style === 'label' || style === 'simple') {\n        return allowReserved ? v : encodeURIComponent(v as string);\n      }\n\n      return serializePrimitiveParam({\n        allowReserved,\n        name,\n        value: v as string,\n      });\n    })\n    .join(separator);\n  return style === 'label' || style === 'matrix' ? separator + joinedValues : joinedValues;\n}"
+    },
+    "fnB": {
+      "name": "serializeArrayParam",
+      "path": "packages/openapi/test/routers/edgeCaseRouter-heyapi/core/pathSerializer.gen.ts",
+      "body": "\n  if (!explode) {\n    const joinedValues = (\n      allowReserved ? value : value.map((v) => encodeURIComponent(v as string))\n    ).join(separatorArrayNoExplode(style));\n    switch (style) {\n      case 'label':\n        return `.${joinedValues}`;\n      case 'matrix':\n        return `;${name}=${joinedValues}`;\n      case 'simple':\n        return joinedValues;\n      default:\n        return `${name}=${joinedValues}`;\n    }\n  }\n\n  const separator = separatorArrayExplode(style);\n  const joinedValues = value\n    .map((v) => {\n      if (style === 'label' || style === 'simple') {\n        return allowReserved ? v : encodeURIComponent(v as string);\n      }\n\n      return serializePrimitiveParam({\n        allowReserved,\n        name,\n        value: v as string,\n      });\n    })\n    .join(separator);\n  return style === 'label' || style === 'matrix' ? separator + joinedValues : joinedValues;\n}"
+    }
+  },
+  {
+    "gid": "p55",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.7877,
+    "struct": 0.0494,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "createHttpServer",
+      "path": "packages/tests/server/adapters/next.test.ts",
+      "body": "\n  const deferred = createDeferred();\n  const httpServer = http.createServer((req, res) => {\n    const _req = req as any;\n    const _res = res as any;\n\n    _req.query = opts.query;\n\n    Promise.resolve(opts.handler(_req, _res)).then(() => {\n      deferred.resolve();\n    });\n  });\n\n  const server = httpServer.listen(0);\n  const httpPort = (server.address() as AddressInfo).port;\n  const httpUrl = `http://localhost:${httpPort}`;\n\n  return {\n    httpUrl,\n    close: async () => {\n      await deferred.promise;\n      server.close();\n    },\n  };\n}"
+    },
+    "fnB": {
+      "name": "createServer",
+      "path": "packages/tests/server/errors.test.ts",
+      "body": "\n    const server = http.createServer((req, res) => {\n      handler({ req, res });\n    });\n    server.listen(0);\n\n    const port = (server.address() as any).port as number;\n\n    return {\n      url: `http://localhost:${port}`,\n      async close() {\n        await new Promise((resolve) => {\n          server.close(resolve);\n        });\n      },\n    };\n  }"
+    }
+  },
+  {
+    "gid": "p56",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.8218,
+    "struct": 0.3594,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "queryKeyJsonReplacer",
+      "path": "packages/openapi/test/routers/cyclicTypesRouter-heyapi/core/queryKeySerializer.gen.ts",
+      "body": "\n  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {\n    return undefined;\n  }\n  if (typeof value === 'bigint') {\n    return value.toString();\n  }\n  if (value instanceof Date) {\n    return value.toISOString();\n  }\n  return value;\n}"
+    },
+    "fnB": {
+      "name": "serializeQueryKeyValue",
+      "path": "packages/openapi/test/routers/superjsonRouter-heyapi/core/queryKeySerializer.gen.ts",
+      "body": "\n  if (value === null) {\n    return null;\n  }\n\n  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {\n    return value;\n  }\n\n  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {\n    return undefined;\n  }\n\n  if (typeof value === 'bigint') {\n    return value.toString();\n  }\n\n  if (value instanceof Date) {\n    return value.toISOString();\n  }\n\n  if (Array.isArray(value)) {\n    return stringifyToJsonValue(value);\n  }\n\n  if (typeof URLSearchParams !== 'undefined' && value instanceof URLSearchParams) {\n    return serializeSearchParams(value);\n  }\n\n  if (isPlainObject(value)) {\n    return stringifyToJsonValue(value);\n  }\n\n  return undefined;\n}"
+    }
+  },
+  {
+    "gid": "p57",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.8123,
+    "struct": 0.3462,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeUrlSearchParamsPair",
+      "path": "packages/openapi/test/routers/cyclicTypesRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string') {\n    data.append(key, value);\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/nodeModulesJsDocRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "gid": "p58",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.746,
+    "struct": 0.2143,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "App",
+      "path": "packages/react-query/test/abortOnUnmount.test.tsx",
+      "body": "\n    const [client] = useState(() =>\n      proxy.createClient({\n        links: [\n          httpBatchLink({\n            url: httpUrl,\n          }),\n        ],\n      }),\n    );\n    return (\n      <proxy.Provider {...{ queryClient, client }}>\n        <QueryClientProvider client={queryClient}>\n          {props.children}\n        </QueryClientProvider>\n      </proxy.Provider>\n    );\n  }"
+    },
+    "fnB": {
+      "name": "App",
+      "path": "packages/react-query/test/polymorphism.test.tsx",
+      "body": "\n        return (\n          <trpc.Provider\n            {...{ queryClient, client: getUntypedClient(opts.client) }}\n          >\n            <QueryClientProvider client={queryClient}>\n              {props.children}\n            </QueryClientProvider>\n          </trpc.Provider>\n        );\n      }"
+    }
+  },
+  {
+    "gid": "p59",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.7444,
+    "struct": 0.0167,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "App",
+      "path": "examples/minimal-content-types/client/src/App.tsx",
+      "body": "\n  const [queryClient] = useState(() => new QueryClient());\n  const [trpcClient] = useState(() =>\n    trpc.createClient({\n      links: [\n        httpLink({\n          url: 'http://localhost:2022',\n        }),\n      ],\n    }),\n  );\n  return (\n    <trpc.Provider client={trpcClient} queryClient={queryClient}>\n      <QueryClientProvider client={queryClient}>\n        <div\n          style={{\n            display: 'flex',\n            flexDirection: 'column',\n            gap: '10px',\n            width: '10rem',\n          }}\n        >\n          <SendMultipartFormDataButton />\n\n          <SendFileButton />\n        </div>\n      </QueryClientProvider>\n    </trpc.Provider>\n  );\n}"
+    },
+    "fnB": {
+      "name": "App",
+      "path": "packages/react-query/test/createClient.test.tsx",
+      "body": "\n      const [client] = useState(() =>\n        hooks.createClient({\n          links: [\n            httpBatchLink({\n              url: opts.httpUrl,\n            }),\n          ],\n        }),\n      );\n      return (\n        <hooks.Provider {...{ queryClient, client }}>\n          <QueryClientProvider client={queryClient}>\n            {props.children}\n          </QueryClientProvider>\n        </hooks.Provider>\n      );\n    }"
+    }
+  },
+  {
+    "gid": "p60",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.8123,
+    "struct": 0.3462,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeUrlSearchParamsPair",
+      "path": "packages/openapi/test/routers/mongoEjsonRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string') {\n    data.append(key, value);\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/superjsonRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "gid": "p61",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.8123,
+    "struct": 0.3462,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/appRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeUrlSearchParamsPair",
+      "path": "packages/openapi/test/routers/mongoEjsonRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string') {\n    data.append(key, value);\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "gid": "p62",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.8123,
+    "struct": 0.3462,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "serializeUrlSearchParamsPair",
+      "path": "packages/openapi/test/routers/appRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string') {\n    data.append(key, value);\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeFormDataPair",
+      "path": "packages/openapi/test/routers/mongoEjsonRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string' || value instanceof Blob) {\n    data.append(key, value);\n  } else if (value instanceof Date) {\n    data.append(key, value.toISOString());\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "gid": "p63",
+    "repo": "trpc-trpc",
+    "band": "C_mid",
+    "cosine": 0.7394,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": false,
+    "fnA": {
+      "name": "MyComponent",
+      "path": "packages/react-query/test/queryOptions.test.tsx",
+      "body": "\n      const trpc = useTRPC();\n      const queryClient = useQueryClient();\n\n      const queryOptions = trpc.post.list.infiniteQueryOptions(\n        {},\n        {\n          getNextPageParam(lastPage) {\n            return lastPage.next;\n          },\n        },\n      );\n      const query1 = useInfiniteQuery(queryOptions);\n      expect(queryOptions.trpc.path).toBe('post.list');\n      if (!query1.data) {\n        return <>...</>;\n      }\n\n      expectTypeOf<\n        InfiniteData<\n          {\n            items: typeof fixtureData;\n            next?: number | undefined;\n          },\n          number | null\n        >\n      >(query1.data);\n\n      return (\n        <>\n          <button\n            data-testid=\"fetchMore\"\n            onClick={() => {\n              query1.fetchNextPage();\n            }}\n          >\n            Fetch more\n          </button>\n          <button\n            data-testid=\"prefetch\"\n            onClick={async () => {\n              const fetched =\n                await queryClient.fetchInfiniteQuery(queryOptions);\n              expectTypeOf<{\n                pages: {\n                  items: typeof fixtureData;\n                  next?: number | undefined;\n                }[];\n                pageParams: (number | null)[];\n              }>(fetched);\n              expect(\n                fetched.pageParams.some((p) => typeof p === 'undefined'),\n              ).toBeFalsy();\n            }}\n          >\n            Fetch\n          </button>\n          <pre>{JSON.stringify(query1.data ?? 'n/a', null, 4)}</pre>\n        </>\n      );\n    }"
+    },
+    "fnB": {
+      "name": "MyComponent",
+      "path": "packages/react-query/test/useInfiniteQuery.test.tsx",
+      "body": "\n    const q = trpc.paginatedPosts.useInfiniteQuery(\n      {\n        limit: 1,\n      },\n      {\n        getNextPageParam: (lastPage) => lastPage.nextCursor,\n      },\n    );\n\n    expectTypeOf(q.data?.pages[0]!.items).toMatchTypeOf<Post[] | undefined>();\n\n    return q.status === 'pending' ? (\n      <p>Loading...</p>\n    ) : q.status === 'error' ? (\n      <p>Error: {q.error.message}</p>\n    ) : (\n      <>\n        {q.data?.pages.map((group, i) => (\n          <Fragment key={i}>\n            {group.items.map((msg) => (\n              <Fragment key={msg.id}>\n                <div>{msg.title}</div>\n              </Fragment>\n            ))}\n          </Fragment>\n        ))}\n        <div>\n          <button\n            onClick={() => q.fetchNextPage()}\n            disabled={!q.hasNextPage || q.isFetchingNextPage}\n            data-testid=\"loadMore\"\n          >\n            {q.isFetchingNextPage\n              ? 'Loading more...'\n              : q.hasNextPage\n                ? 'Load More'\n                : 'Nothing more to load'}\n          </button>\n        </div>\n        <div>\n          {q.isFetching && !q.isFetchingNextPage ? 'Fetching...' : null}\n        </div>\n      </>\n    );\n  }"
+    }
+  },
+  {
+    "gid": "p64",
+    "repo": "trpc-trpc",
+    "band": "B_062",
+    "cosine": 0.6955,
+    "struct": 0.1854,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": false,
+    "fnA": {
+      "name": "main",
+      "path": "examples/openapi-codegen/src/scripts/codegen.ts",
+      "body": "\n  // Generate the OpenAPI document from the router\n  const doc = await generateOpenAPIDocument(routerPath, {\n    exportName: 'appRouter',\n    title: 'Example API',\n    version: '1.0.0',\n  });\n\n  // Write the spec to disk (useful for debugging / importing into other tools)\n  writeFileSync(specPath, JSON.stringify(doc, null, 2) + '\\n');\n  console.log('OpenAPI spec written to', specPath);\n\n  // Clean and regenerate the SDK\n  rmSync(outputDir, { recursive: true, force: true });\n\n  await createClient({\n    input: specPath,\n    output: outputDir,\n    plugins: [\n      {\n        name: '@hey-api/typescript',\n        '~resolvers': createTRPCHeyApiTypeResolvers(),\n      },\n      {\n        name: '@hey-api/sdk',\n        operations: { strategy: 'single' },\n      },\n    ],\n    logs: { level: 'info' },\n  });\n\n  console.log('SDK generated at', outputDir);\n\n  process.exit(0);\n}"
+    },
+    "fnB": {
+      "name": "codegen",
+      "path": "packages/openapi/test/scripts/codegen.ts",
+      "body": "\n  const routerFiles = getRouterFiles();\n  const existingCache = readCache();\n  const nextCache: CodegenCache = {\n    version: CACHE_VERSION,\n    routers: {},\n  };\n\n  for (const file of routerFiles) {\n    const stem = path.basename(file, '.router.ts');\n    const exportName = getExportName(stem);\n    const routerPath = file;\n    const docPath = path.resolve(routersDir, `${stem}.openapi.json`);\n    const outputDir = path.resolve(routersDir, `${stem}-heyapi`);\n    const routerInputsHash = getRouterInputsHash(routerPath);\n    const artifactsExist = hasExpectedArtifacts(docPath, outputDir);\n\n    nextCache.routers[stem] = routerInputsHash;\n\n    if (\n      existingCache?.version === CACHE_VERSION &&\n      existingCache.routers[stem] === routerInputsHash &&\n      artifactsExist\n    ) {\n      console.log(`[openapi codegen] Cache hit for ${file}, skipping`);\n      continue;\n    }\n\n    rmSync(outputDir, { recursive: true, force: true });\n\n    const doc = await generateOpenAPIDocument(routerPath, { exportName });\n    writeFileSync(docPath, JSON.stringify(doc, null, 2) + '\\n');\n\n    await createClient({\n      input: docPath,\n      output: outputDir,\n      plugins: [\n        {\n          name: '@hey-api/typescript',\n          '~resolvers': createTRPCHeyApiTypeResolvers(),\n        },\n        {\n          name: '@hey-api/sdk',\n          operations: { strategy: 'single' },\n        },\n      ],\n      logs: { level: 'error' },\n    });\n  }\n\n  writeCache(nextCache);\n}"
+    }
+  },
+  {
+    "gid": "p65",
+    "repo": "trpc-trpc",
+    "band": "B_062",
+    "cosine": 0.712,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "isFormData",
+      "path": "packages/client/src/links/internals/contentTypes.ts",
+      "body": "\n  return input instanceof FormData;\n}"
+    },
+    "fnB": {
+      "name": "isFormData",
+      "path": "packages/client/src/links/loggerLink.ts",
+      "body": "\n  if (typeof FormData === 'undefined') {\n    // FormData is not supported\n    return false;\n  }\n  return value instanceof FormData;\n}"
+    }
+  },
+  {
+    "gid": "p66",
+    "repo": "trpc-trpc",
+    "band": "B_062",
+    "cosine": 0.633,
+    "struct": 0.0208,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": false,
+    "fnA": {
+      "name": "main",
+      "path": "examples/express-minimal/src/client.ts",
+      "body": "\n  const client = createTRPCClient<AppRouter>({\n    links: [\n      httpBatchLink({\n        url: 'http://localhost:3000/trpc',\n      }),\n    ],\n  });\n\n  try {\n    const withoutInputQuery = await client.hello.greeting.query();\n    console.log(withoutInputQuery);\n\n    const withInputQuery = await client.hello.greeting.query({ name: 'Alex' });\n    console.log(withInputQuery);\n  } catch (error) {\n    console.error('Error:', error);\n  }\n}"
+    },
+    "fnB": {
+      "name": "main",
+      "path": "examples/vercel-edge-runtime/src/client.ts",
+      "body": "\n  const url = 'http://127.0.0.1:3000/trpc';\n\n  const proxy = createTRPCClient<AppRouter>({\n    links: [loggerLink(), httpBatchLink({ url })],\n  });\n\n  await sleep();\n\n  // parallel queries\n  await Promise.all([\n    //\n    proxy.hello.query(),\n    proxy.hello.query('client'),\n  ]);\n  await sleep();\n\n  const postCreate = await proxy.post.createPost.mutate({\n    title: 'hello client',\n  });\n  console.log('created post', postCreate.title);\n  await sleep();\n\n  const postList = await proxy.post.listPosts.query();\n  console.log('has posts', postList, 'first:', postList[0].title);\n  await sleep();\n\n  console.log('\ud83d\udc4c should be a clean exit if everything is working right');\n}"
+    }
+  },
+  {
+    "gid": "p67",
+    "repo": "trpc-trpc",
+    "band": "B_062",
+    "cosine": 0.6248,
+    "struct": 0.1923,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": false,
+    "fnA": {
+      "name": "createServer",
+      "path": "packages/server/src/adapters/node-http/incomingMessageToRequest.test.ts",
+      "body": "\n  type Handler = (req: Request) => Promise<void>;\n\n  let rejectHandler: null | ((err: any) => void) = null;\n  let resolveHandler: null | (() => void) = null;\n  let handle: Handler | null = null;\n  const server = http.createServer(async (req, res) => {\n    const request = incomingMessageToRequest(req, res, opts);\n\n    await handle!(request).then(resolveHandler).catch(rejectHandler);\n    res.end();\n  });\n  server.listen(0);\n\n  const port = (server.address() as any).port as number;\n\n  return {\n    async close() {\n      await new Promise((resolve) => {\n        server.close(resolve);\n      });\n    },\n    fetch: async (\n      opts: RequestInit & {\n        path?: string;\n      },\n      _handle: (request: Request) => Promise<void>,\n    ) => {\n      handle = _handle;\n\n      const promise = new Promise<void>((resolve, reject) => {\n        resolveHandler = resolve;\n        rejectHandler = reject;\n      });\n\n      await fetch(`http://localhost:${port}${opts.path ?? ''}`, {\n        ...opts,\n      });\n      await promise;\n    },\n  };\n}"
+    },
+    "fnB": {
+      "name": "createServer",
+      "path": "packages/tests/server/regression/issue-3085-bad-responses.test.ts",
+      "body": "\n  const server = http.createServer((req, res) => {\n    handler({ req, res });\n  });\n  server.listen(0);\n\n  const port = (server.address() as any).port as number;\n\n  return {\n    url: `http://localhost:${port}`,\n    async close() {\n      await new Promise((resolve) => {\n        server.close(resolve);\n      });\n    },\n  };\n}"
+    }
+  },
+  {
+    "gid": "p68",
+    "repo": "trpc-trpc",
+    "band": "B_062",
+    "cosine": 0.628,
+    "struct": 0.1306,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": false,
+    "fnA": {
+      "name": "beforeRequest",
+      "path": "packages/openapi/test/routers/errorFormatterRouter-heyapi/client/client.gen.ts",
+      "body": "\n    const opts = {\n      ..._config,\n      ...options,\n      fetch: options.fetch ?? _config.fetch ?? globalThis.fetch,\n      headers: mergeHeaders(_config.headers, options.headers),\n      serializedBody: undefined as string | undefined,\n    };\n\n    if (opts.security) {\n      await setAuthParams({\n        ...opts,\n        security: opts.security,\n      });\n    }\n\n    if (opts.requestValidator) {\n      await opts.requestValidator(opts);\n    }\n\n    if (opts.body !== undefined && opts.bodySerializer) {\n      opts.serializedBody = opts.bodySerializer(opts.body) as string | undefined;\n    }\n\n    // remove Content-Type header if body is empty to avoid sending invalid requests\n    if (opts.body === undefined || opts.serializedBody === '') {\n      opts.headers.delete('Content-Type');\n    }\n\n    const url = buildUrl(opts);\n\n    return { opts, url };\n  }"
+    },
+    "fnB": {
+      "name": "createClient",
+      "path": "packages/openapi/test/routers/nodeModulesJsDocRouter-heyapi/client/client.gen.ts",
+      "body": "\n  let _config = mergeConfigs(createConfig(), config);\n\n  const getConfig = (): Config => ({ ..._config });\n\n  const setConfig = (config: Config): Config => {\n    _config = mergeConfigs(_config, config);\n    return getConfig();\n  };\n\n  const interceptors = createInterceptors<Request, Response, unknown, ResolvedRequestOptions>();\n\n  const beforeRequest = async (options: RequestOptions) => {\n    const opts = {\n      ..._config,\n      ...options,\n      fetch: options.fetch ?? _config.fetch ?? globalThis.fetch,\n      headers: mergeHeaders(_config.headers, options.headers),\n      serializedBody: undefined as string | undefined,\n    };\n\n    if (opts.security) {\n      await setAuthParams({\n        ...opts,\n        security: opts.security,\n      });\n    }\n\n    if (opts.requestValidator) {\n      await opts.requestValidator(opts);\n    }\n\n    if (opts.body !== undefined && opts.bodySerializer) {\n      opts.serializedBody = opts.bodySerializer(opts.body) as string | undefined;\n    }\n\n    // remove Content-Type header if body is empty to avoid sending invalid requests\n    if (opts.body === undefined || opts.serializedBody === '') {\n      opts.headers.delete('Content-Type');\n    }\n\n    const url = buildUrl(opts);\n\n    return { opts, url };\n  };\n\n  const request: Client['request'] = async (options) => {\n    // @ts-expect-error\n    const { opts, url } = await beforeRequest(options);\n    const requestInit: ReqInit = {\n      redirect: 'follow',\n      ...opts,\n      body: getValidRequestBody(opts),\n    };\n\n    let request = new Request(url, requestInit);\n\n    for (const fn of interceptors.request.fns) {\n      if (fn) {\n        request = await fn(request, opts);\n      }\n    }\n\n    // fetch must be assigned here, otherwise it would throw the error:\n    // TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation\n    const _fetch = opts.fetch!;\n    let response: Response;\n\n    try {\n      response = await _fetch(request);\n    } catch (error) {\n      // Handle fetch exceptions (AbortError, network errors, etc.)\n      let finalError = error;\n\n      for (const fn of interceptors.error.fns) {\n        if (fn) {\n          finalError = (await fn(error, undefined as any, request, opts)) as unknown;\n        }\n      }\n\n      finalError = finalError || ({} as unknown);\n\n      if (opts.throwOnError) {\n        throw finalError;\n      }\n\n      // Return error response\n      return opts.responseStyle === 'data'\n        ? undefined\n        : {\n            error: finalError,\n            request,\n            response: undefined as any,\n          };\n    }\n\n    for (const fn of interceptors.response.fns) {\n      if (fn) {\n        response = await fn(response, request, opts);\n      }\n    }\n\n    const result = {\n      request,\n      response,\n    };\n\n    if (response.ok) {\n      const parseAs =\n        (opts.parseAs === 'auto'\n          ? getParseAs(response.headers.get('Content-Type'))\n          : opts.parseAs) ?? 'json';\n\n      if (response.status === 204 || response.headers.get('Content-Length') === '0') {\n        let emptyData: any;\n        switch (parseAs) {\n          case 'arrayBuffer':\n          case 'blob':\n          case 'text':\n            emptyData = await response[parseAs]();\n            break;\n          case 'formData':\n            emptyData = new FormData();\n            break;\n          case 'stream':\n            emptyData = response.body;\n            break;\n          case 'json':\n          default:\n            emptyData = {};\n            break;\n        }"
+    }
+  },
+  {
+    "gid": "p69",
+    "repo": "trpc-trpc",
+    "band": "B_052",
+    "cosine": 0.5838,
+    "struct": 0.037,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": false,
+    "fnA": {
+      "name": "MyComponent",
+      "path": "packages/react-query/test/useSubscription.test.tsx",
+      "body": "\n      const result = ctx.client.onEventIterable.useSubscription(10);\n\n      queryResult.push({\n        ...result,\n      });\n\n      return (\n        <>\n          <>status:{result.status}</>\n          <>data:{result.data}</>\n          {/* reset button */}\n          <button\n            onClick={() => {\n              result.reset();\n            }}\n            data-testid=\"reset\"\n          >\n            reset\n          </button>\n        </>\n      );\n    }"
+    },
+    "fnB": {
+      "name": "MyComponent",
+      "path": "packages/tanstack-react-query/test/useSubscription.test.tsx",
+      "body": "\n      const trpc = useTRPC();\n      const result = useSubscription(\n        trpc.onEventIterable.subscriptionOptions(input, {\n          onData: (data) => {\n            expectTypeOf(data).toMatchTypeOf<number>();\n          },\n        }),\n      );\n\n      return (\n        <>\n          <div>status:{result.status}</div>\n          <div>error:{result.error?.message}</div>\n          <div>data:{result.data ?? 'NO_DATA'}</div>\n        </>\n      );\n    }"
+    }
+  },
+  {
+    "gid": "p70",
+    "repo": "trpc-trpc",
+    "band": "B_042",
+    "cosine": 0.4685,
+    "struct": 0.1071,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": false,
+    "fnA": {
+      "name": "setupSdk",
+      "path": "packages/openapi/test/heyapi.test.ts",
+      "body": "\n      const server = http.createServer(\n        createHTTPHandler({ router: ErrorFormatterRouter }),\n      );\n      await new Promise<void>((resolve) => server.listen(0, resolve));\n      const baseUrl = `http://localhost:${(server.address() as { port: number }).port}`;\n\n      configureTRPCHeyApiClient(errorFormatterClient, { baseUrl });\n\n      return makeAsyncResource(\n        { sdk: new ErrorFormatterSdk({ client: errorFormatterClient }) },\n        () => new Promise<void>((resolve) => server.close(() => resolve())),\n      );\n    }"
+    },
+    "fnB": {
+      "name": "createServer",
+      "path": "packages/tests/server/errors.test.ts",
+      "body": "\n    const server = http.createServer((req, res) => {\n      handler({ req, res });\n    });\n    server.listen(0);\n\n    const port = (server.address() as any).port as number;\n\n    return {\n      url: `http://localhost:${port}`,\n      async close() {\n        await new Promise((resolve) => {\n          server.close(resolve);\n        });\n      },\n    };\n  }"
+    }
+  },
+  {
+    "gid": "p71",
+    "repo": "trpc-trpc",
+    "band": "B_042",
+    "cosine": 0.5118,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": false,
+    "fnA": {
+      "name": "querySerializer",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n    const search: string[] = [];\n    if (queryParams && typeof queryParams === 'object') {\n      for (const name in queryParams) {\n        const value = queryParams[name];\n\n        if (value === undefined || value === null) {\n          continue;\n        }\n\n        const options = parameters[name] || args;\n\n        if (Array.isArray(value)) {\n          const serializedArray = serializeArrayParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'form',\n            value,\n            ...options.array,\n          });\n          if (serializedArray) search.push(serializedArray);\n        } else if (typeof value === 'object') {\n          const serializedObject = serializeObjectParam({\n            allowReserved: options.allowReserved,\n            explode: true,\n            name,\n            style: 'deepObject',\n            value: value as Record<string, unknown>,\n            ...options.object,\n          });\n          if (serializedObject) search.push(serializedObject);\n        } else {\n          const serializedPrimitive = serializePrimitiveParam({\n            allowReserved: options.allowReserved,\n            name,\n            value: value as string,\n          });\n          if (serializedPrimitive) search.push(serializedPrimitive);\n        }\n      }\n    }\n    return search.join('&');\n  }"
+    },
+    "fnB": {
+      "name": "searchParams",
+      "path": "www/src/utils/searchParams.ts",
+      "body": "\n  return Object.entries(obj)\n    .map(([key, value]) => {\n      const values = isArray(value) ? value : [value];\n\n      return values.map((v) => `${key}=${encodeURIComponent(v)}`).join('&');\n    })\n    .join('&');\n}"
+    }
+  }
+]

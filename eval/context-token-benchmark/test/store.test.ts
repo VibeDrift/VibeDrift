@@ -26,6 +26,7 @@ function makeRow(overrides: Partial<RunResult> = {}): RunResult {
     censored: false,
     competingFailure: false,
     compactionEvents: 0,
+    vibedriftToolCalls: 0,
     startedAt: "2026-06-26T00:00:00.000Z",
     durationMs: 1234,
     ...overrides,

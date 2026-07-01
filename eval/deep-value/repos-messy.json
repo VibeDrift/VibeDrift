@@ -1,0 +1,13 @@
+[
+  { "label": "frontend-service", "lang": "typescript", "source": { "git": "https://github.com/nimble-platform/frontend-service.git" } },
+  { "label": "PlaylistGo", "lang": "typescript", "source": { "git": "https://github.com/jasurlive/PlaylistGo.git" } },
+  { "label": "obd-node", "lang": "typescript", "source": { "git": "https://github.com/jacobrsyntaxindustries/obd-node.git" } },
+  { "label": "JSONSchemaDiscovery", "lang": "typescript", "source": { "git": "https://github.com/feekosta/JSONSchemaDiscovery.git" } },
+  { "label": "spaceguard", "lang": "javascript", "source": { "git": "https://github.com/alextselegidis-games/spaceguard.git" } },
+  { "label": "mondo-api", "lang": "javascript", "source": { "git": "https://github.com/MartinBlackburn/mondo-api.git" } },
+  { "label": "todo-ember", "lang": "javascript", "source": { "git": "https://github.com/wellington1993/todo-ember.git" } },
+  { "label": "malware-analysis", "lang": "python", "source": { "git": "https://github.com/umasolution/malware-analysis.git" } },
+  { "label": "Splithunter", "lang": "python", "source": { "git": "https://github.com/tanghaibao/Splithunter.git" } },
+  { "label": "Py16", "lang": "python", "source": { "git": "https://github.com/DanPorter/Py16.git" } },
+  { "label": "kfs", "lang": "go", "source": { "git": "https://github.com/cea-hpc/kfs.git" } }
+]

@@ -26,15 +26,14 @@
 
 // Nothing executes at import time — safe to import.
 
-import { readFile } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { RepoSpec, TaskSpec } from "./types.js";
+import type { Arm, RepoSpec, TaskSpec } from "./types.js";
 import { expandMatrix, orchestrate } from "./orchestrate.js";
 import { runOne } from "./run-one.js";
 import { buildRealDeps } from "./real-deps.js";
+import { loadRepos as loadReposFromDir, loadTasks as loadTasksFromDir } from "./fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -56,6 +55,28 @@ interface CliArgs {
   model: string;
   maxTurns: number;
   reruns: number;
+  /** Arms to run. Default all three; pass --arms C,T for a token-only A/B (no placebo). */
+  arms: Arm[];
+}
+
+const ALL_ARMS: Arm[] = ["C", "P", "T"];
+
+function parseArms(spec: string): Arm[] {
+  const parsed = spec
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  for (const a of parsed) {
+    if (a !== "C" && a !== "P" && a !== "T") {
+      console.error(`Invalid arm "${a}" (expected C, P, or T)`);
+      process.exit(1);
+    }
+  }
+  if (parsed.length === 0) {
+    console.error("--arms must list at least one of C,P,T");
+    process.exit(1);
+  }
+  return parsed as Arm[];
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -70,7 +91,8 @@ function parseArgs(argv: string[]): CliArgs {
         `  --concurrency <N>   (default: 3)\n` +
         `  --model <id>        (default: claude-opus-4-8)\n` +
         `  --max-turns <N>     (default: 30)\n` +
-        `  --reruns <N>        (default: 2)\n`,
+        `  --reruns <N>        (default: 2)\n` +
+        `  --arms <C,P,T>      (default: C,P,T; use C,T for a token-only A/B)\n`,
     );
     process.exit(1);
   }
@@ -82,6 +104,7 @@ function parseArgs(argv: string[]): CliArgs {
   let model = "claude-opus-4-8";
   let maxTurns = 30;
   let reruns = 2;
+  let arms: Arm[] = ALL_ARMS;
 
   for (let i = 1; i < args.length; i++) {
     switch (args[i]) {
@@ -103,6 +126,9 @@ function parseArgs(argv: string[]): CliArgs {
       case "--reruns":
         reruns = parseInt(args[++i] ?? String(reruns), 10);
         break;
+      case "--arms":
+        arms = parseArms(args[++i] ?? "");
+        break;
       default:
         console.error(`Unknown flag: ${args[i]}`);
         process.exit(1);
@@ -117,6 +143,7 @@ function parseArgs(argv: string[]): CliArgs {
     model,
     maxTurns,
     reruns,
+    arms,
   };
 }
 
@@ -126,48 +153,36 @@ function parseArgs(argv: string[]): CliArgs {
 
 /** Load repos.json from fixtures/. Exits with a clear error if absent. */
 async function loadRepos(): Promise<RepoSpec[]> {
-  const path = join(FIXTURES_DIR, "repos.json");
-  let raw: string;
   try {
-    raw = await readFile(path, "utf-8");
+    return await loadReposFromDir(FIXTURES_DIR);
   } catch {
     console.error(
-      `[benchmark] fixtures/repos.json not found at ${path}.\n` +
+      `[benchmark] fixtures/repos.json not found under ${FIXTURES_DIR}.\n` +
         `Fixtures arrive in Phase 2 — run the Phase 2 assembly steps first.`,
     );
     process.exit(1);
   }
-  return JSON.parse(raw) as RepoSpec[];
 }
 
 /** Load all *.json files from fixtures/tasks/. Exits with a clear error if absent. */
 async function loadTasks(): Promise<TaskSpec[]> {
-  const tasksDir = join(FIXTURES_DIR, "tasks");
-  let entries: string[];
+  let tasks: TaskSpec[];
   try {
-    entries = await readdir(tasksDir);
+    tasks = await loadTasksFromDir(FIXTURES_DIR);
   } catch {
     console.error(
-      `[benchmark] fixtures/tasks/ not found at ${tasksDir}.\n` +
+      `[benchmark] fixtures/tasks/ not found under ${FIXTURES_DIR}.\n` +
         `Fixtures arrive in Phase 2 — run the Phase 2 assembly steps first.`,
     );
     process.exit(1);
   }
-
-  const tasks: TaskSpec[] = [];
-  for (const entry of entries.filter((e) => e.endsWith(".json"))) {
-    const raw = await readFile(join(tasksDir, entry), "utf-8");
-    tasks.push(JSON.parse(raw) as TaskSpec);
-  }
-
   if (tasks.length === 0) {
     console.error(
-      `[benchmark] No task JSON files found in ${tasksDir}.\n` +
+      `[benchmark] No task JSON files found under ${FIXTURES_DIR}/tasks.\n` +
         `Fixtures arrive in Phase 2 — run the Phase 2 assembly steps first.`,
     );
     process.exit(1);
   }
-
   return tasks;
 }
 
@@ -189,9 +204,12 @@ async function main(): Promise<void> {
   const repos = await loadRepos();
   const tasks = await loadTasks();
 
-  // Expand the full matrix
-  const items = expandMatrix(repos, tasks, cliArgs.replicates);
-  console.log(`[benchmark] Matrix: ${items.length} runs total`);
+  // Expand the matrix, then keep only the requested arms.
+  const armSet = new Set(cliArgs.arms);
+  const items = expandMatrix(repos, tasks, cliArgs.replicates).filter((i) => armSet.has(i.arm));
+  console.log(
+    `[benchmark] Matrix: ${items.length} runs total (arms=${cliArgs.arms.join(",")})`,
+  );
 
   // Per-token USD rates for the PINNED model (claude-opus-4-8). Source: Anthropic
   // official pricing table (platform.claude.com/docs/.../pricing), fetched

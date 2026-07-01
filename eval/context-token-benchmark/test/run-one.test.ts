@@ -22,7 +22,6 @@ const REPO: RepoSpec = {
   gitUrl: "https://github.com/example/repo1",
   sha: "abc123",
   testCmd: "npm test",
-  placeboFrom: "repo2",
   postCutoff: false,
 };
 
@@ -51,6 +50,7 @@ const CTX: RunOneContext = {
  */
 const FAKE_STDOUT_TURNS_2 = [
   '{"type":"message_start","message":{"id":"msg-1","type":"message","role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":500,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__vibedrift__get_dominant_pattern","input":{}}]}}',
   '{"type":"result","subtype":"success","usage":{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"total_cost_usd":0.0275,"num_turns":2}',
 ].join("\n");
 
@@ -76,21 +76,31 @@ function makeDeps(overrides: {
     callLog,
     prepareWorkspace: async (_repo, _arm, _replicate) => {
       callLog.push("prepareWorkspace");
-      return { cwd: "/tmp/fake-cwd", ownContextMd: "# own context", placeboContextMd: "# placebo" };
+      return { cwd: "/tmp/fake-cwd" };
     },
-    applyArm: async (_cwd, _arm, _own, _placebo) => {
+    applyArm: async (_cwd, _arm) => {
       callLog.push("applyArm");
     },
     applyTestsPatch: async (_cwd, _task) => {
       callLog.push("applyTestsPatch");
     },
-    runAgent: async (_cwd, _task, _modelId, _maxTurns) => {
+    runAgent: async (_cwd, _task, _arm, _modelId, _maxTurns) => {
       callLog.push("runAgent");
       return overrides.stdout;
+    },
+    captureDiff: async (_cwd, _task, _arm) => {
+      callLog.push("captureDiff");
+      return { diff: "--- a/src/x.ts\n+++ b/src/x.ts\n@@\n+fake", truncated: false };
+    },
+    reassertTests: async (_cwd, _task) => {
+      callLog.push("reassertTests");
     },
     gate: async (_cwd, _cmd, _reruns) => {
       callLog.push("gate");
       return overrides.gateResult;
+    },
+    cleanup: async (_cwd) => {
+      callLog.push("cleanup");
     },
   };
 }
@@ -149,6 +159,14 @@ describe("runOne", () => {
       expect(result.modelId).toBe("claude-opus-4-8");
     });
 
+    it("flows vibedriftToolCalls through from parsed stdout", async () => {
+      const deps = makeDeps({ gateResult: { passed: true, flaky: false, attempts: 1 }, stdout: FAKE_STDOUT_TURNS_2 });
+      const result = await runOne(REPO, TASK, "T", 0, CTX, deps);
+
+      // FAKE_STDOUT_TURNS_2 contains one mcp__vibedrift__* tool_use block.
+      expect(result.vibedriftToolCalls).toBe(1);
+    });
+
     it("includes repoId, taskId, arm, replicate", async () => {
       const deps = makeDeps({ gateResult: { passed: true, flaky: false, attempts: 1 }, stdout: FAKE_STDOUT_TURNS_2 });
       const result = await runOne(REPO, TASK, "C", 3, CTX, deps);
@@ -168,8 +186,19 @@ describe("runOne", () => {
         "applyArm",
         "applyTestsPatch",
         "runAgent",
+        "captureDiff",
+        "reassertTests",
         "gate",
+        "cleanup",
       ]);
+    });
+
+    it("captures the blinded diff into the result", async () => {
+      const deps = makeDeps({ gateResult: { passed: true, flaky: false, attempts: 1 }, stdout: FAKE_STDOUT_TURNS_2 });
+      const result = await runOne(REPO, TASK, "T", 0, CTX, deps);
+
+      expect(result.diff).toBe("--- a/src/x.ts\n+++ b/src/x.ts\n@@\n+fake");
+      expect(result.diffTruncated).toBe(false);
     });
 
     it("startedAt is an ISO string and durationMs is a non-negative number", async () => {

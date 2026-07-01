@@ -17,7 +17,6 @@ const REPO_A: RepoSpec = {
   gitUrl: "https://github.com/example/repo-a",
   sha: "aaa111",
   testCmd: "npm test",
-  placeboFrom: "repo-b",
   postCutoff: false,
 };
 
@@ -27,7 +26,6 @@ const REPO_B: RepoSpec = {
   gitUrl: "https://github.com/example/repo-b",
   sha: "bbb222",
   testCmd: "pytest",
-  placeboFrom: "repo-a",
   postCutoff: true,
 };
 
@@ -77,6 +75,7 @@ function makeResult(item: MatrixItem): RunResult {
     censored: false,
     competingFailure: false,
     compactionEvents: 0,
+    vibedriftToolCalls: 0,
     startedAt: new Date().toISOString(),
     durationMs: 100,
   };
@@ -228,7 +227,7 @@ describe("armOrder", () => {
 
   it("different replicate generally yields a different ordering", () => {
     // Not a strict guarantee on any single pair — but over 10 replicates
-    // at least two must differ (probability of all identical is (1/6)^9 ≈ 0).
+    // at least two must differ (with 2 arms, P(all identical) = (1/2)^9 ≈ 0).
     const orders = Array.from({ length: 10 }, (_, r) =>
       armOrder("task-a1", r).join(""),
     );
@@ -273,7 +272,7 @@ describe("armOrder", () => {
 
 describe("orchestrate", () => {
   it("runs all items when no prior results exist and returns correct summary", async () => {
-    const items = expandMatrix([REPO_A], [TASK_A1], 2); // 6 items
+    const items = expandMatrix([REPO_A], [TASK_A1], 2); // 6 items (3 arms)
     const called: string[] = [];
 
     const summary = await orchestrate(items, {
@@ -294,7 +293,7 @@ describe("orchestrate", () => {
   });
 
   it("skips items already present in the results file (resume)", async () => {
-    const items = expandMatrix([REPO_A], [TASK_A1], 2); // 6 items
+    const items = expandMatrix([REPO_A], [TASK_A1], 2); // 6 items (3 arms)
 
     // Pre-seed 2 results
     const preSeeded = items.slice(0, 2);
@@ -321,10 +320,10 @@ describe("orchestrate", () => {
   });
 
   it("summary.skipped equals number of pre-seeded runIds", async () => {
-    const items = expandMatrix([REPO_A], [TASK_A1, TASK_A2], 1); // 6 items
+    const items = expandMatrix([REPO_A], [TASK_A1, TASK_A2], 1); // 6 items (2 tasks × 3 arms)
 
-    // Pre-seed 5 of 6
-    for (const item of items.slice(0, 5)) {
+    // Pre-seed 3 of 6
+    for (const item of items.slice(0, 3)) {
       await appendResult(resultsPath, makeResult(item));
     }
 
@@ -334,13 +333,13 @@ describe("orchestrate", () => {
       runOne: fakeRunOne,
     });
 
-    expect(summary.skipped).toBe(5);
-    expect(summary.ran).toBe(1);
+    expect(summary.skipped).toBe(3);
+    expect(summary.ran).toBe(3);
     expect(summary.total).toBe(6);
   });
 
   it("returns all-skipped summary when all items are already done", async () => {
-    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items
+    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items (3 arms)
     for (const item of items) {
       await appendResult(resultsPath, makeResult(item));
     }
@@ -363,7 +362,7 @@ describe("orchestrate", () => {
 
   it("appends each completed result to the JSONL file", async () => {
     const { loadResults } = await import("../src/store.js");
-    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items
+    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items (3 arms)
 
     await orchestrate(items, {
       resultsPath,
@@ -381,7 +380,7 @@ describe("orchestrate", () => {
   });
 
   it("respects concurrency: observed max in-flight never exceeds the limit", async () => {
-    const items = expandMatrix([REPO_A], [TASK_A1, TASK_A2], 2); // 12 items
+    const items = expandMatrix([REPO_A], [TASK_A1, TASK_A2], 2); // 8 items
     let inFlight = 0;
     let maxObserved = 0;
     const CONCURRENCY = 3;
@@ -406,7 +405,7 @@ describe("orchestrate", () => {
 
   it("all non-skipped items complete and are appended even at concurrency=1", async () => {
     const { loadResults } = await import("../src/store.js");
-    const items = expandMatrix([REPO_A, REPO_B], [TASK_A1, TASK_B1], 1); // 6 items
+    const items = expandMatrix([REPO_A, REPO_B], [TASK_A1, TASK_B1], 1); // 6 items (2 tasks × 3 arms)
 
     await orchestrate(items, {
       resultsPath,
@@ -419,7 +418,7 @@ describe("orchestrate", () => {
   });
 
   it("concurrency=1 enforces serial execution", async () => {
-    const items = expandMatrix([REPO_A], [TASK_A1, TASK_A2], 1); // 6 items
+    const items = expandMatrix([REPO_A], [TASK_A1, TASK_A2], 1); // 4 items
     let inFlight = 0;
     let maxObserved = 0;
 
@@ -439,7 +438,7 @@ describe("orchestrate", () => {
   });
 
   it("concurrency larger than item count runs all items in one batch", async () => {
-    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items
+    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items (3 arms)
     let callCount = 0;
 
     await orchestrate(items, {
@@ -468,7 +467,7 @@ describe("orchestrate", () => {
 
   it("concurrency=0 is clamped to 1 and still completes all items", async () => {
     const { loadResults } = await import("../src/store.js");
-    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items
+    const items = expandMatrix([REPO_A], [TASK_A1], 1); // 3 items (3 arms)
 
     const summary = await orchestrate(items, {
       resultsPath,
@@ -484,10 +483,10 @@ describe("orchestrate", () => {
   });
 
   it("runOne is NOT called for any item matching a pre-seeded runId", async () => {
-    const items = expandMatrix([REPO_A, REPO_B], [TASK_A1, TASK_B1], 2); // 12 items
+    const items = expandMatrix([REPO_A, REPO_B], [TASK_A1, TASK_B1], 2); // 12 items (2 tasks × 3 arms × 2 reps)
 
     // Pre-seed 4 random items
-    const toSeed = [items[0], items[3], items[7], items[11]];
+    const toSeed = [items[0], items[3], items[5], items[7]];
     for (const item of toSeed) {
       await appendResult(resultsPath, makeResult(item));
     }
@@ -512,6 +511,6 @@ describe("orchestrate", () => {
     for (const id of calledIds) {
       expect(seededIds.has(id)).toBe(false);
     }
-    expect(calledIds).toHaveLength(8);
+    expect(calledIds).toHaveLength(8); // 12 total − 4 pre-seeded
   });
 });

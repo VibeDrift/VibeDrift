@@ -1,0 +1,642 @@
+[
+  {
+    "gid": "p0",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.9487,
+    "struct": 0.8451,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "handleSubmit",
+      "path": "src/components/ContactForm.tsx",
+      "body": "\n    e.preventDefault();\n    setResult(\"idle\");\n    startTransition(async () => {\n      try {\n        const res = await fetch(\"/api/contact\", {\n          method: \"POST\",\n          headers: { \"Content-Type\": \"application/json\" },\n          body: JSON.stringify({\n            name: name.trim(),\n            email: email.trim(),\n            company: company.trim() || undefined,\n            type,\n            message: message.trim(),\n          }),\n        });\n        if (res.ok) {\n          setResult(\"ok\");\n          setTimeout(onClose, 3000);\n        } else {\n          const body = await res.json().catch(() => ({}));\n          setResult((body as { error?: string }).error ?? \"Something went wrong\");\n        }\n      } catch {\n        setResult(\"Network error, please try again\");\n      }\n    });\n  }"
+    },
+    "fnB": {
+      "name": "handleSubmit",
+      "path": "src/components/ContactPageForm.tsx",
+      "body": "\n    e.preventDefault();\n    setResult(\"idle\");\n    startTransition(async () => {\n      try {\n        const res = await fetch(\"/api/contact\", {\n          method: \"POST\",\n          headers: { \"Content-Type\": \"application/json\" },\n          body: JSON.stringify({\n            name: name.trim(),\n            email: email.trim(),\n            company: company.trim() || undefined,\n            type,\n            message: message.trim(),\n          }),\n        });\n        if (res.ok) {\n          setResult(\"ok\");\n          setName(\"\");\n          setEmail(\"\");\n          setCompany(\"\");\n          setMessage(\"\");\n        } else {\n          const body = await res.json().catch(() => ({}));\n          setResult((body as { error?: string }).error ?? \"Something went wrong\");\n        }\n      } catch {\n        setResult(\"Network error, please try again\");\n      }\n    });\n  }"
+    }
+  },
+  {
+    "gid": "p1",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "DiscordIcon",
+      "path": "src/components/DiscordIcon.tsx",
+      "body": "\n  return (\n    <svg width={size} height={size} viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\">\n      <path d=\"M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.6 12.6 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.291.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.009c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.891.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z\" />\n    </svg>\n  );\n}"
+    },
+    "fnB": {
+      "name": "DiscordGlyph",
+      "path": "src/components/Footer.tsx",
+      "body": "\n  return (\n    <svg width={size} height={size} viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\">\n      <path d=\"M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.6 12.6 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.291.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.009c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.891.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z\" />\n    </svg>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p2",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.9986,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "getStripe",
+      "path": "src/app/api/billing/portal/route.ts",
+      "body": "\n  if (stripeClient) return stripeClient;\n  const key = process.env.STRIPE_SECRET_KEY;\n  if (!key) throw new Error(\"STRIPE_SECRET_KEY is not set\");\n  stripeClient = new Stripe(key);\n  return stripeClient;\n}"
+    },
+    "fnB": {
+      "name": "getStripe",
+      "path": "src/app/api/webhooks/stripe/route.ts",
+      "body": "\n  if (stripeClient) return stripeClient;\n  const key = process.env.STRIPE_SECRET_KEY;\n  if (!key) {\n    throw new Error(\"STRIPE_SECRET_KEY is not set\");\n  }\n  stripeClient = new Stripe(key);\n  return stripeClient;\n}"
+    }
+  },
+  {
+    "gid": "p3",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.8627,
+    "struct": 0.7059,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatDate",
+      "path": "src/app/dashboard/settings/page.tsx",
+      "body": "\n  if (!iso) return \", \";\n  return new Date(iso).toLocaleDateString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n  });\n}"
+    },
+    "fnB": {
+      "name": "formatDate",
+      "path": "src/components/dashboard/TokenManager.tsx",
+      "body": "\n  if (!iso) return \"never\";\n  return new Date(iso).toLocaleDateString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n  });\n}"
+    }
+  },
+  {
+    "gid": "p4",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.8702,
+    "struct": 0.5882,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Bullet",
+      "path": "src/app/blog/from-detection-to-prevention/page.tsx",
+      "body": "\n  return (\n    <li style={liStyle}>\n      <span style={{ position: \"absolute\", left: 0, color: \"var(--y)\" }}>+</span>\n      {children}\n    </li>\n  );\n}"
+    },
+    "fnB": {
+      "name": "Bullet",
+      "path": "src/components/blog/kit.tsx",
+      "body": "\n  return (\n    <li style={blogStyles.li}>\n      <span style={{ position: \"absolute\", left: 0, color: \"var(--y)\" }}>+</span>\n      {children}\n    </li>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p5",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.9317,
+    "struct": 0.1746,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "CopyButton",
+      "path": "src/components/dashboard/CopyButton.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n\n  async function handleClick() {\n    if (copied) return;\n    try {\n      await navigator.clipboard.writeText(text);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1500);\n    } catch {\n      // Clipboard may be blocked in some contexts; fail silently\n    }\n  }\n\n  return (\n    <button\n      type=\"button\"\n      onClick={handleClick}\n      className={`font-mono cursor-pointer transition-colors ${className}`}\n      style={{\n        fontSize: \"12px\",\n        padding: \"3px 8px\",\n        color: copied ? \"var(--g)\" : \"var(--t)\",\n        background: \"var(--s1)\",\n        border: \"1px solid var(--bd)\",\n        borderRadius: \"0\",\n        letterSpacing: \"0.5px\",\n        textTransform: \"uppercase\",\n      }}\n    >\n      {copied ? \"Copied!\" : `[${label}]`}\n    </button>\n  );\n}"
+    },
+    "fnB": {
+      "name": "CopyBtn",
+      "path": "src/components/dashboard/ScanReport.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n  async function handleClick() {\n    try {\n      await navigator.clipboard.writeText(text);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1800);\n    } catch { /* */ }\n  }\n  return (\n    <button\n      onClick={handleClick}\n      style={{\n        background: copied ? C.intentGreen : \"transparent\",\n        border: `1px solid ${copied ? C.intentGreen : C.border}`,\n        color: copied ? C.bgPage : C.textSecondary,\n        padding: \"4px 10px\",\n        fontSize: \"11px\",\n        fontWeight: 600,\n        fontFamily: \"inherit\",\n        cursor: \"pointer\",\n        letterSpacing: \"0.3px\",\n        textTransform: \"uppercase\" as const,\n        transition: \"background 150ms, color 150ms\",\n        opacity: ghost && !copied ? 0.65 : 1,\n      }}\n    >\n      {copied ? \"Copied!\" : label}\n    </button>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p6",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Section",
+      "path": "src/app/dashboard/billing/page.tsx",
+      "body": "\n  return (\n    <div>\n      <div className=\"k mb-2\">{title}</div>\n      {subtitle && (\n        <div\n          className=\"font-mono mb-4\"\n          style={{ fontSize: \"13px\", color: \"var(--d)\", lineHeight: 1.6 }}\n        >\n          {subtitle}\n        </div>\n      )}\n      <div\n        style={{\n          borderTop: \"1px solid var(--bd)\",\n          paddingTop: \"18px\",\n        }}\n      >\n        {children}\n      </div>\n    </div>\n  );\n}"
+    },
+    "fnB": {
+      "name": "Section",
+      "path": "src/app/dashboard/settings/page.tsx",
+      "body": "\n  return (\n    <div>\n      <div className=\"k mb-2\">{title}</div>\n      {subtitle && (\n        <div\n          className=\"font-mono mb-4\"\n          style={{ fontSize: \"13px\", color: \"var(--d)\", lineHeight: 1.6 }}\n        >\n          {subtitle}\n        </div>\n      )}\n      <div\n        style={{\n          borderTop: \"1px solid var(--bd)\",\n          paddingTop: \"18px\",\n        }}\n      >\n        {children}\n      </div>\n    </div>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p7",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.8622,
+    "struct": 0.4667,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "getStripe",
+      "path": "src/app/api/checkout/route.ts",
+      "body": "\n  if (stripeClient) return stripeClient;\n  const key = process.env.STRIPE_SECRET_KEY;\n  if (!key) {\n    throw new Error(\"STRIPE_SECRET_KEY is not set\");\n  }\n  stripeClient = new Stripe(key);\n  return stripeClient;\n}"
+    },
+    "fnB": {
+      "name": "getStripe",
+      "path": "src/lib/dashboard/actions.ts",
+      "body": "\n  if (_stripe) return _stripe;\n  const key = process.env.STRIPE_SECRET_KEY;\n  if (!key) throw new Error(\"STRIPE_SECRET_KEY is not set\");\n  _stripe = new Stripe(key);\n  return _stripe;\n}"
+    }
+  },
+  {
+    "gid": "p8",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.8624,
+    "struct": 0.5071,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "GET",
+      "path": "src/app/api/r/[token]/html/route.ts",
+      "body": "\n  const { token } = await params;\n  if (!token || token.length < 16) {\n    return NextResponse.json({ error: \"invalid token\" }, { status: 404 });\n  }\n\n  const mode = request.nextUrl.searchParams.get(\"mode\") === \"detailed\" ? \"detailed\" : \"summary\";\n\n  const sb = createSupabaseServiceClient();\n  const { data, error } = await sb\n    .from(\"scans\")\n    .select(\"report_html,result_json,project_name,project_hash\")\n    .eq(\"share_token\", token)\n    .limit(1);\n  if (error) {\n    console.error(\"[r/html] lookup failed:\", error.message);\n    return NextResponse.json({ error: \"database error\" }, { status: 500 });\n  }\n  const scan = data?.[0] as\n    | { report_html: string | null; result_json: Record<string, unknown> | null; project_name: string | null; project_hash: string }\n    | undefined;\n\n  let html: string | null = null;\n\n  if (scan?.result_json) {\n    try {\n      // @ts-expect-error, @vibedrift/cli/render has no .d.ts yet\n      const { renderHtmlReport } = await import(\"@vibedrift/cli/render\");\n      const displayName = scan.project_name || scan.project_hash?.slice(0, 12) || \"project\";\n      const adapted = adaptResultJson(scan.result_json, displayName);\n      html = renderHtmlReport(adapted, mode, {\n        summaryUrl: `/api/r/${token}/html`,\n        detailedUrl: `/api/r/${token}/html?mode=detailed`,\n      });\n    } catch (e) {\n      console.error(\"[r/html] render from result_json failed:\", e);\n    }\n  }\n\n  if (!html && scan?.report_html) {\n    html = scan.report_html;\n  }\n\n  if (!html) {\n    return NextResponse.json({ error: \"not found\" }, { status: 404 });\n  }\n\n  return new NextResponse(html, {\n    status: 200,\n    headers: {\n      \"Content-Type\": \"text/html; charset=utf-8\",\n      \"Cache-Control\": \"public, max-age=300\",\n      \"Content-Security-Policy\":\n        \"default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; style-src 'unsafe-inline'; img-src * data:; connect-src 'self' https://vibedrift-api.fly.dev\",\n    },\n  });\n}"
+    },
+    "fnB": {
+      "name": "GET",
+      "path": "src/app/api/scans/[id]/html/route.ts",
+      "body": "\n  const { id } = await params;\n  const mode = request.nextUrl.searchParams.get(\"mode\") === \"detailed\" ? \"detailed\" : \"summary\";\n\n  const auth = await createSupabaseServerClient();\n  const {\n    data: { user },\n  } = await auth.auth.getUser();\n  if (!user?.email) {\n    return NextResponse.json({ error: \"unauthorized\" }, { status: 401 });\n  }\n\n  const sb = createSupabaseServiceClient();\n\n  const { data: userRows } = await sb\n    .from(\"users\")\n    .select(\"id\")\n    .eq(\"email\", user.email.toLowerCase())\n    .limit(1);\n  const userId = (userRows?.[0] as { id: string } | undefined)?.id;\n  if (!userId) {\n    return NextResponse.json({ error: \"account not provisioned\" }, { status: 404 });\n  }\n\n  // Render from result_json for consistent UI. Falls back to report_html\n  // only if rendering fails (e.g. incompatible result_json schema).\n  const { data: scanRows, error } = await sb\n    .from(\"scans\")\n    .select(\"report_html,result_json,project_name,project_hash\")\n    .eq(\"id\", id)\n    .eq(\"user_id\", userId)\n    .limit(1);\n  if (error) {\n    console.error(\"[scans/html] select failed:\", error.message);\n    return NextResponse.json({ error: \"database error\" }, { status: 500 });\n  }\n\n  const scan = scanRows?.[0] as { report_html: string | null; result_json: Record<string, unknown> | null; project_name: string | null; project_hash: string } | undefined;\n\n  let html: string | null = null;\n\n  // Try rendering from result_json with adapter\n  if (scan?.result_json) {\n    try {\n      // @ts-expect-error, @vibedrift/cli/render has no .d.ts yet\n      const { renderHtmlReport } = await import(\"@vibedrift/cli/render\");\n      // Use project_name from DB column (privacy-safe) or short hash\n      const displayName = scan.project_name || scan.project_hash?.slice(0, 12) || \"project\";\n      const adapted = adaptResultJson(scan.result_json, displayName);\n      html = renderHtmlReport(adapted, mode, {\n        summaryUrl: `/api/scans/${id}/html`,\n        detailedUrl: `/api/scans/${id}/html?mode=detailed`,\n      });\n    } catch (e) {\n      console.error(\"[scans/html] render from result_json failed:\", e);\n    }\n  }\n\n  // Fallback to stored HTML if rendering failed\n  if (!html && scan?.report_html) {\n    html = scan.report_html;\n  }\n\n  if (!html) {\n    return NextResponse.json(\n      { error: \"no report data available for this scan\" },\n      { status: 404 },\n    );\n  }\n\n  return new NextResponse(html, {\n    status: 200,\n    headers: {\n      \"Content-Type\": \"text/html; charset=utf-8\",\n      \"Cache-Control\": \"private, no-cache\",\n      \"Content-Security-Policy\":\n        \"default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; style-src 'unsafe-inline'; img-src * data:; connect-src 'self' https://vibedrift-api.fly.dev\",\n    },\n  });\n}"
+    }
+  },
+  {
+    "gid": "p9",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.932,
+    "struct": 0.4545,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatDate",
+      "path": "src/app/admin/contacts/page.tsx",
+      "body": "\n  return new Date(iso).toLocaleDateString(\"en-US\", { month: \"short\", day: \"numeric\", hour: \"numeric\", minute: \"2-digit\" });\n}"
+    },
+    "fnB": {
+      "name": "formatScanDate",
+      "path": "src/components/dashboard/ScanDetailTabs.tsx",
+      "body": "\n  return new Date(iso).toLocaleString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n    hour: \"numeric\",\n    minute: \"2-digit\",\n    hour12: true,\n  });\n}"
+    }
+  },
+  {
+    "gid": "p10",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.934,
+    "struct": 0.5,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "toggleSort",
+      "path": "src/app/admin/corpus/CorpusReposExplorer.tsx",
+      "body": "\n    if (sortKey === k) {\n      setSortDir((d) => (d === \"asc\" ? \"desc\" : \"asc\"));\n    } else {\n      setSortKey(k);\n      // text columns default ascending; numeric columns default descending\n      setSortDir(k === \"full_name\" || k === \"primary_language\" ? \"asc\" : \"desc\");\n    }\n  }"
+    },
+    "fnB": {
+      "name": "toggleSort",
+      "path": "src/app/admin/marketing/MarketingTable.tsx",
+      "body": "\n    if (sortKey === k) setSortDir((d) => (d === \"asc\" ? \"desc\" : \"asc\"));\n    else { setSortKey(k); setSortDir(k === \"full_name\" || k === \"language\" || k === \"stratum\" || k === \"license\" ? \"asc\" : \"desc\"); }\n  }"
+    }
+  },
+  {
+    "gid": "p11",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.8783,
+    "struct": 0.5625,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "handleClick",
+      "path": "src/components/dashboard/CopyButton.tsx",
+      "body": "\n    if (copied) return;\n    try {\n      await navigator.clipboard.writeText(text);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1500);\n    } catch {\n      // Clipboard may be blocked in some contexts; fail silently\n    }\n  }"
+    },
+    "fnB": {
+      "name": "handleClick",
+      "path": "src/components/dashboard/ScanReport.tsx",
+      "body": "\n    try {\n      await navigator.clipboard.writeText(text);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1800);\n    } catch { /* */ }\n  }"
+    }
+  },
+  {
+    "gid": "p12",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.9977,
+    "struct": 0.9252,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "adaptResultJson",
+      "path": "src/app/api/r/[token]/html/route.ts",
+      "body": "\n  const fileCount = (stored.fileCount as number) ?? 0;\n  const language = (stored.language as { dominant?: string })?.dominant ?? (stored.language as string) ?? \"unknown\";\n  const findings = (stored.findings ?? []) as unknown[];\n  const driftFindings = (stored.driftFindings ?? []) as unknown[];\n  const perFileScoresRaw = (stored.perFileScores ?? {}) as Record<string, unknown>;\n  const score = (stored.score as { composite?: number })?.composite ?? (stored.score as number) ?? 0;\n  const perFileScores = new Map(Object.entries(perFileScoresRaw));\n  const filesArray = (stored.files ?? []) as unknown[];\n  const totalLines = filesArray.reduce((sum: number, f: unknown) => {\n    const file = f as { lineCount?: number };\n    return sum + (file?.lineCount ?? 0);\n  }, 0);\n\n  return {\n    context: {\n      rootDir: displayName ? `/${displayName}` : \"/project\",\n      files: filesArray,\n      packageJson: null,\n      goMod: null,\n      cargoToml: null,\n      requirementsTxt: null,\n      envExample: null,\n      totalLines,\n      languageBreakdown: new Map([[language, { files: fileCount, lines: totalLines }]]),\n      dominantLanguage: language,\n    },\n    findings,\n    driftFindings,\n    driftScores: stored.driftScores ?? {},\n    scores: stored.scores ?? {},\n    compositeScore: score,\n    maxCompositeScore: 100,\n    teaseMessages: (stored.teaseMessages ?? []) as string[],\n    deepInsights: (stored.deepInsights ?? []) as unknown[],\n    scanTimeMs: (stored.scanTimeMs as number) ?? 0,\n    perFileScores,\n    codeDnaResult: stored.codeDnaResult ?? null,\n    aiSummary: stored.aiSummary ?? undefined,\n  };\n}"
+    },
+    "fnB": {
+      "name": "adaptResultJson",
+      "path": "src/app/api/scans/[id]/html/route.ts",
+      "body": "\n  const fileCount = (stored.fileCount as number) ?? 0;\n  const language = (stored.language as { dominant?: string })?.dominant ?? (stored.language as string) ?? \"unknown\";\n  const findings = (stored.findings ?? []) as unknown[];\n  const driftFindings = (stored.driftFindings ?? []) as unknown[];\n  const perFileScoresRaw = (stored.perFileScores ?? {}) as Record<string, unknown>;\n  const score = (stored.score as { composite?: number })?.composite ?? (stored.score as number) ?? 0;\n\n  // Reconstruct perFileScores as a Map-like entries array\n  const perFileEntries = Object.entries(perFileScoresRaw);\n  const perFileScores = new Map(perFileEntries);\n\n  // Build minimal context\n  const filesArray = (stored.files ?? []) as unknown[];\n  const totalLines = filesArray.reduce((sum: number, f: unknown) => {\n    const file = f as { lineCount?: number };\n    return sum + (file?.lineCount ?? 0);\n  }, 0);\n\n  return {\n    context: {\n      rootDir: displayName ? `/${displayName}` : \"/project\",\n      files: filesArray,\n      packageJson: null,\n      goMod: null,\n      cargoToml: null,\n      requirementsTxt: null,\n      envExample: null,\n      totalLines,\n      languageBreakdown: new Map([[language, { files: fileCount, lines: totalLines }]]),\n      dominantLanguage: language,\n    },\n    findings,\n    driftFindings,\n    driftScores: stored.driftScores ?? {},\n    scores: stored.scores ?? {},\n    compositeScore: score,\n    maxCompositeScore: 100,\n    teaseMessages: (stored.teaseMessages ?? []) as string[],\n    deepInsights: (stored.deepInsights ?? []) as unknown[],\n    scanTimeMs: (stored.scanTimeMs as number) ?? 0,\n    perFileScores,\n    codeDnaResult: stored.codeDnaResult ?? null,\n    aiSummary: stored.aiSummary ?? undefined,\n  };\n}"
+    }
+  },
+  {
+    "gid": "p13",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.9914,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "adminContext",
+      "path": "src/lib/admin/actions.ts",
+      "body": "\n  userId: string;\n  email: string;\n}"
+    },
+    "fnB": {
+      "name": "authContext",
+      "path": "src/lib/dashboard/actions.ts",
+      "body": " userId: string; email: string }"
+    }
+  },
+  {
+    "gid": "p14",
+    "repo": "vibedrift-landing-page",
+    "band": "C_high",
+    "cosine": 0.9646,
+    "struct": 0.0258,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "CopilotIcon",
+      "path": "src/components/CopilotIcon.tsx",
+      "body": "\n  return (\n    <svg width={size} height={size} viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\">\n      <path d=\"M23.922 16.997C23.061 18.492 18.063 22.02 12 22.02 5.937 22.02.939 18.492.078 16.997A.641.641 0 0 1 0 16.741v-2.869a.883.883 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.098 10.098 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952C7.255 2.937 9.248 1.98 11.978 1.98c2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.841.841 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256Zm-11.75-5.992h-.344a4.359 4.359 0 0 1-.355.508c-.77.947-1.918 1.492-3.508 1.492-1.725 0-2.989-.359-3.782-1.259a2.137 2.137 0 0 1-.085-.104L4 11.746v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.359 4.359 0 0 1-.355-.508Zm2.328 3.25c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm-5 0c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm3.313-6.185c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z\" />\n    </svg>\n  );\n}"
+    },
+    "fnB": {
+      "name": "DiscordIcon",
+      "path": "src/components/DiscordIcon.tsx",
+      "body": "\n  return (\n    <svg width={size} height={size} viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\">\n      <path d=\"M20.317 4.369a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.6 12.6 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.291.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.009c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.891.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z\" />\n    </svg>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p15",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7362,
+    "struct": 0.0655,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "BlogPost",
+      "path": "src/app/blog/from-detection-to-prevention/page.tsx",
+      "body": "\n  return (\n    <>\n      <Navbar />\n      <main style={pageStyle}>\n        <article>\n          <Link\n            href=\"/blog\"\n            className=\"font-mono\"\n            style={{ fontSize: \"12px\", color: \"var(--d)\", letterSpacing: \"1px\" }}\n          >\n            \u2190 All posts\n          </Link>\n          <div\n            className=\"k\"\n            style={{ marginTop: \"20px\", marginBottom: \"12px\", color: \"var(--y)\", letterSpacing: \"2px\" }}\n          >\n            BLOG \u00b7 BUILDING VIBEDRIFT\n          </div>\n          <h1 style={h1Style}>{TITLE}</h1>\n          <div\n            style={{\n              fontSize: \"12px\",\n              color: \"var(--d)\",\n              marginBottom: \"36px\",\n              letterSpacing: \"1px\",\n            }}\n          >\n            June 9, 2026 \u00b7 ~11 min read\n          </div>\n\n          <p style={pStyle}>\n            A year ago the hard part of building software was writing the code,\n            but today, for a growing share of teams, the code mostly writes\n            itself. The agent scaffolds the handler, fills in the test, and wires\n            the route, so what used to take an afternoon now takes a prompt.\n          </p>\n          <p style={pStyle}>\n            That means the bottleneck has moved. It isn&apos;t generation anymore,\n            it&apos;s{\" \"}\n            <strong style={{ color: \"var(--w)\" }}>coherence</strong>, the question\n            of whether the thousandth thing the agent generated still agrees with\n            the first nine hundred and ninety-nine. And coherence is exactly what\n            a stateless agent is worst at, because every fresh session starts with\n            no memory of the conventions your codebase spent months establishing.\n            The agent makes reasonable choices, they just aren&apos;t{\" \"}\n            <em>your</em> choices, and over enough sessions the codebase quietly\n            stops agreeing with itself.\n          </p>\n          <p style={pStyle}>\n            We named that gap{\" \"}\n            <Link href=\"/blog/your-ai-codebase-is-drifting\" style={{ color: \"var(--y)\" }}>\n              drift\n            </Link>{\" \"}\n            and built a scanner to measure it. This post is about the next move,\n            which is getting the agent to check for drift{\" \"}\n            <em>before</em> it writes a line rather than after it ships.\n          </p>\n\n          <h2 style={h2Style}>Two halves of the same problem</h2>\n          <p style={pStyle}>\n            Almost everything aimed at AI-coding quality so far falls into one of\n            two buckets.\n          </p>\n          <ul style={ulStyle}>\n            <Bullet>\n              <strong style={{ color: \"var(--w)\" }}>Input systems</strong>, like\n              Claude memory, Cursor rules, Copilot context, or your{\" \"}\n              <code style={inlineCodeStyle}>CLAUDE.md</code>, feed the model\n              context so it generates better code and make the agent more likely\n              to do the right thing in the first place.\n            </Bullet>\n            <Bullet>\n              <strong style={{ color: \"var(--w)\" }}>Output systems</strong>, like\n              linters, PR review bots, and drift scanners such as VibeDrift,\n              inspect the code that actually shipped and tell you where it went\n              wrong.\n            </Bullet>\n          </ul>\n          <p style={pStyle}>\n            Both are necessary, but neither is sufficient, because they share a\n            blind spot, which is{\" \"}\n           "
+    },
+    "fnB": {
+      "name": "BlogPost",
+      "path": "src/app/blog/your-ai-codebase-is-drifting/page.tsx",
+      "body": "\n  return (\n    <>\n      <Navbar />\n      <main style={pageStyle}>\n        <article>\n          <Link\n            href=\"/blog\"\n            className=\"font-mono\"\n            style={{ fontSize: \"12px\", color: \"var(--d)\", letterSpacing: \"1px\" }}\n          >\n            \u2190 All posts\n          </Link>\n          <div className=\"k\" style={{ marginTop: \"20px\", marginBottom: \"12px\", color: \"var(--y)\", letterSpacing: \"2px\" }}>\n            BLOG \u00b7 BUILDING VIBEDRIFT\n          </div>\n          <h1 style={h1Style}>{TITLE}</h1>\n          <div\n            style={{\n              fontSize: \"12px\",\n              color: \"var(--d)\",\n              marginBottom: \"36px\",\n              letterSpacing: \"1px\",\n            }}\n          >\n            April 14, 2026 \u00b7 ~8 min read\n          </div>\n\n          <h2 style={h2Style}>The bug you can&apos;t grep for</h2>\n\n          <p style={pStyle}>\n            I was going through my handlers last month. All written with Claude\n            and Cursor over a few weeks. Something felt wrong but I couldn&apos;t\n            name it.\n          </p>\n          <p style={pStyle}>Then I looked closer.</p>\n          <p style={pStyle}>\n            <code style={inlineCodeStyle}>userHandler.ts</code> called{\" \"}\n            <code style={inlineCodeStyle}>requireAuth(req)</code> on line 3,\n            validated input against a schema, and threw a typed{\" \"}\n            <code style={inlineCodeStyle}>NotFoundError</code> if the record was\n            missing. Clean. Intentional. Consistent with every other handler in\n            the project.\n          </p>\n          <p style={pStyle}>\n            <code style={inlineCodeStyle}>orderHandler.ts</code>, written in a\n            different session a week later, had no auth check. No input\n            validation. And instead of throwing a typed error, it returned{\" \"}\n            <code style={inlineCodeStyle}>{\"{ status: 404, error: 'not found' }\"}</code>{\" \"}\n            as a plain object.\n          </p>\n          <p style={pStyle}>\n            Both compiled. Both passed tests. Both passed every linter. But one\n            handler followed three behavioral conventions that the other\n            completely ignored. Not because I changed my mind. Because the AI\n            started a fresh session and made different decisions about how the\n            application should behave.\n          </p>\n          <p style={pStyle}>That is drift.</p>\n\n          <h2 style={h2Style}>Drift is not what you think it is</h2>\n\n          <p style={pStyle}>\n            Most people hear &quot;code drift&quot; and think duplicated\n            functions or inconsistent naming. Those are symptoms. Drift is\n            something deeper.\n          </p>\n          <p style={pStyle}>\n            Drift is the behavioral deviation between what your codebase\n            intends to do and what the AI actually introduced. It is the delta\n            between the established workflow of your application and the\n            assumptions the AI made in a session where it had no memory of that\n            workflow.\n          </p>\n          <p style={pStyle}>\n            When a human developer joins a team, they read the existing code,\n            absorb the patterns, and follow them. When an AI coding tool starts\n            a new session, it has zero memory of what was established before.\n            It doesn&apos;t know your project uses typed errors. It doesn&apos;t\n            know every handler validates input. It doesn&apos;t know auth"
+    }
+  },
+  {
+    "gid": "p16",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7588,
+    "struct": 0.1096,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Cmd",
+      "path": "src/app/guide/GuideContent.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n  return (\n    <div style={{ marginBottom: \"10px\", maxWidth: \"520px\" }}>\n      {label && <div className=\"font-mono\" style={{ fontSize: \"10px\", color: \"var(--d)\", marginBottom: \"4px\" }}>{label}</div>}\n      <div style={{ background: S.bg2, border: `1px solid ${S.bd}`, borderRadius: \"7px\", padding: \"11px 14px\", display: \"flex\", alignItems: \"center\", justifyContent: \"space-between\" }}>\n        <code className=\"font-mono\" style={{ fontSize: \"12px\", color: \"var(--t)\" }}>\n          <span style={{ color: \"var(--y)\", marginRight: \"6px\" }}>$</span>{cmd}\n        </code>\n        <div style={{ display: \"flex\", alignItems: \"center\", gap: \"8px\" }}>\n          {tag && (\n            <span className=\"font-mono\" style={{ fontSize: \"8px\", padding: \"2px 6px\", borderRadius: \"3px\", letterSpacing: \"0.5px\", textTransform: \"uppercase\", background: tag === \"free\" ? S.gd : S.yd, color: tag === \"free\" ? \"var(--g)\" : \"var(--y)\" }}>\n              {tag === \"free\" ? \"Free\" : \"Deep scan\"}\n            </span>\n          )}\n          <button\n            onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}\n            className=\"font-mono\"\n            style={{ fontSize: \"9px\", color: copied ? \"var(--g)\" : \"var(--d)\", background: \"rgba(255,255,255,0.04)\", padding: \"3px 8px\", borderRadius: \"3px\", border: \"none\", cursor: \"pointer\" }}\n          >\n            {copied ? \"Copied!\" : \"Copy\"}\n          </button>\n        </div>\n      </div>\n    </div>\n  );\n}"
+    },
+    "fnB": {
+      "name": "CommandCopy",
+      "path": "src/components/CommandCopy.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n\n  const copy = () => {\n    navigator.clipboard.writeText(COMMAND);\n    setCopied(true);\n    setTimeout(() => setCopied(false), 1500);\n  };\n\n  return (\n    <button\n      type=\"button\"\n      onClick={copy}\n      className=\"font-mono text-left\"\n      style={{\n        width: \"100%\",\n        maxWidth: \"440px\",\n        background: \"var(--s1)\",\n        border: \"1px solid var(--bd)\",\n        borderRadius: \"8px\",\n        padding: \"14px 16px\",\n        fontSize: \"13px\",\n        cursor: \"pointer\",\n        lineHeight: 1.7,\n        display: \"flex\",\n        alignItems: \"center\",\n        justifyContent: \"space-between\",\n        gap: \"12px\",\n      }}\n      aria-label=\"Copy the VibeDrift command\"\n    >\n      <span style={{ color: \"var(--t)\" }}>\n        <span style={{ color: \"var(--y)\" }}>$</span> {COMMAND}\n      </span>\n      <span\n        style={{\n          fontSize: \"10px\",\n          flexShrink: 0,\n          color: copied ? \"var(--g)\" : \"var(--d)\",\n        }}\n      >\n        {copied ? \"copied!\" : \"[click to copy]\"}\n      </span>\n    </button>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p17",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7677,
+    "struct": 0.5769,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "copy",
+      "path": "src/components/dashboard/ScanDetailTabs.tsx",
+      "body": "\n    if (!url) return;\n    try {\n      await navigator.clipboard.writeText(url);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1500);\n    } catch {\n      setError(\"Could not copy to clipboard\");\n    }\n  }"
+    },
+    "fnB": {
+      "name": "handleCopy",
+      "path": "src/components/dashboard/TokenManager.tsx",
+      "body": "\n    if (!justCreated) return;\n    try {\n      await navigator.clipboard.writeText(justCreated.raw);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1500);\n    } catch {\n      setError(\"Could not copy to clipboard\");\n    }\n  }"
+    }
+  },
+  {
+    "gid": "p18",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7588,
+    "struct": 0.04,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Image",
+      "path": "src/app/blog/stop-claude-code-drift/opengraph-image.tsx",
+      "body": "\n  return blogCover(\"Claude Code is drifting your repo. Here's how to stop it.\", \"CLAUDE CODE\");\n}"
+    },
+    "fnB": {
+      "name": "Image",
+      "path": "src/app/blog/your-ai-codebase-is-drifting/opengraph-image.tsx",
+      "body": "\n  return blogCover(\"Your AI-written codebase is drifting. Here's how to measure it.\", \"BUILDING VIBEDRIFT\");\n}"
+    }
+  },
+  {
+    "gid": "p19",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7746,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Section",
+      "path": "src/app/dashboard/billing/page.tsx",
+      "body": "\n  return (\n    <div>\n      <div className=\"k mb-2\">{title}</div>\n      {subtitle && (\n        <div\n          className=\"font-mono mb-4\"\n          style={{ fontSize: \"13px\", color: \"var(--d)\", lineHeight: 1.6 }}\n        >\n          {subtitle}\n        </div>\n      )}\n      <div\n        style={{\n          borderTop: \"1px solid var(--bd)\",\n          paddingTop: \"18px\",\n        }}\n      >\n        {children}\n      </div>\n    </div>\n  );\n}"
+    },
+    "fnB": {
+      "name": "Section",
+      "path": "src/app/privacy/page.tsx",
+      "body": "\n  return (\n    <div style={{ marginBottom: \"28px\" }}>\n      <h2 style={{ fontSize: \"16px\", fontWeight: 700, color: \"var(--w)\", marginBottom: \"8px\" }}>\n        {title}\n      </h2>\n      {children}\n    </div>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p20",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.8164,
+    "struct": 0.0579,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "NpmGlyph",
+      "path": "src/components/Footer.tsx",
+      "body": "\n  return (\n    <svg width={size} height={size} viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\">\n      <path d=\"M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0H1.763zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113V5.323z\" />\n    </svg>\n  );\n}"
+    },
+    "fnB": {
+      "name": "WindsurfIcon",
+      "path": "src/components/WindsurfIcon.tsx",
+      "body": "\n  return (\n    <svg width={size} height={size} viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\">\n      <path d=\"M23.55 5.067c-1.2038-.002-2.1806.973-2.1806 2.1765v4.8676c0 .972-.8035 1.7594-1.7597 1.7594-.568 0-1.1352-.286-1.4718-.7659l-4.9713-7.1003c-.4125-.5896-1.0837-.941-1.8103-.941-1.1334 0-2.1533.9635-2.1533 2.153v4.8957c0 .972-.7969 1.7594-1.7596 1.7594-.57 0-1.1363-.286-1.4728-.7658L.4076 5.1598C.2822 4.9798 0 5.0688 0 5.2882v4.2452c0 .2147.0656.4228.1884.599l5.4748 7.8183c.3234.462.8006.8052 1.3509.9298 1.3771.313 2.6446-.747 2.6446-2.0977v-4.893c0-.972.7875-1.7593 1.7596-1.7593h.003a1.798 1.798 0 0 1 1.4718.7658l4.9723 7.0994c.4135.5905 1.05.941 1.8093.941 1.1587 0 2.1515-.9645 2.1515-2.153v-4.8948c0-.972.7875-1.7594 1.7596-1.7594h.194a.22.22 0 0 0 .2204-.2202v-4.622a.22.22 0 0 0-.2203-.2203Z\" />\n    </svg>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p21",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7622,
+    "struct": 0.1905,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "scoreColor",
+      "path": "src/app/admin/corpus/CorpusReposExplorer.tsx",
+      "body": "\n  if (score == null) return \"var(--d)\";\n  if (score >= 80) return \"var(--g)\";\n  if (score >= 60) return \"var(--y)\";\n  return \"var(--r)\";\n}"
+    },
+    "fnB": {
+      "name": "healthColor",
+      "path": "src/app/admin/marketing/MarketingTable.tsx",
+      "body": "\n  if (h == null) return \"var(--d)\";\n  if (h >= 0.95) return \"var(--g)\";\n  if (h >= 0.9) return \"var(--y)\";\n  return \"var(--r)\";\n}"
+    }
+  },
+  {
+    "gid": "p22",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7426,
+    "struct": 0.0769,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "CommandRow",
+      "path": "src/app/dashboard/setup/page.tsx",
+      "body": "\n  return (\n    <div className=\"mb-3\">\n      <div\n        className=\"font-mono\"\n        style={{ fontSize: \"12px\", color: \"var(--d)\", marginBottom: \"4px\" }}\n      >\n        # {comment}\n      </div>\n      <div\n        className=\"flex items-center gap-2 group\"\n        style={{\n          background: \"var(--s1)\",\n          border: \"1px solid var(--bd)\",\n          borderRadius: \"0\",\n          padding: \"8px 12px\",\n        }}\n      >\n        <span style={{ color: \"var(--y)\", fontSize: \"14px\" }}>$</span>\n        <code\n          className=\"font-mono flex-1 overflow-x-auto\"\n          style={{ fontSize: \"14px\", color: \"var(--w)\", whiteSpace: \"nowrap\" }}\n        >\n          {command}\n        </code>\n        <CopyButton text={command} />\n      </div>\n    </div>\n  );\n}"
+    },
+    "fnB": {
+      "name": "Cmd",
+      "path": "src/app/guide/GuideContent.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n  return (\n    <div style={{ marginBottom: \"10px\", maxWidth: \"520px\" }}>\n      {label && <div className=\"font-mono\" style={{ fontSize: \"10px\", color: \"var(--d)\", marginBottom: \"4px\" }}>{label}</div>}\n      <div style={{ background: S.bg2, border: `1px solid ${S.bd}`, borderRadius: \"7px\", padding: \"11px 14px\", display: \"flex\", alignItems: \"center\", justifyContent: \"space-between\" }}>\n        <code className=\"font-mono\" style={{ fontSize: \"12px\", color: \"var(--t)\" }}>\n          <span style={{ color: \"var(--y)\", marginRight: \"6px\" }}>$</span>{cmd}\n        </code>\n        <div style={{ display: \"flex\", alignItems: \"center\", gap: \"8px\" }}>\n          {tag && (\n            <span className=\"font-mono\" style={{ fontSize: \"8px\", padding: \"2px 6px\", borderRadius: \"3px\", letterSpacing: \"0.5px\", textTransform: \"uppercase\", background: tag === \"free\" ? S.gd : S.yd, color: tag === \"free\" ? \"var(--g)\" : \"var(--y)\" }}>\n              {tag === \"free\" ? \"Free\" : \"Deep scan\"}\n            </span>\n          )}\n          <button\n            onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}\n            className=\"font-mono\"\n            style={{ fontSize: \"9px\", color: copied ? \"var(--g)\" : \"var(--d)\", background: \"rgba(255,255,255,0.04)\", padding: \"3px 8px\", borderRadius: \"3px\", border: \"none\", cursor: \"pointer\" }}\n          >\n            {copied ? \"Copied!\" : \"Copy\"}\n          </button>\n        </div>\n      </div>\n    </div>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p23",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.8091,
+    "struct": 0.3158,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatDate",
+      "path": "src/components/dashboard/IntentDriftChart.tsx",
+      "body": "\n  const d = new Date(iso);\n  return d.toLocaleDateString(\"en-US\", { month: \"short\", day: \"numeric\" });\n}"
+    },
+    "fnB": {
+      "name": "formatDate",
+      "path": "src/components/dashboard/TokenManager.tsx",
+      "body": "\n  if (!iso) return \"never\";\n  return new Date(iso).toLocaleDateString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n  });\n}"
+    }
+  },
+  {
+    "gid": "p24",
+    "repo": "vibedrift-landing-page",
+    "band": "C_mid",
+    "cosine": 0.7694,
+    "struct": 0.0536,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "CommandCopy",
+      "path": "src/components/CommandCopy.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n\n  const copy = () => {\n    navigator.clipboard.writeText(COMMAND);\n    setCopied(true);\n    setTimeout(() => setCopied(false), 1500);\n  };\n\n  return (\n    <button\n      type=\"button\"\n      onClick={copy}\n      className=\"font-mono text-left\"\n      style={{\n        width: \"100%\",\n        maxWidth: \"440px\",\n        background: \"var(--s1)\",\n        border: \"1px solid var(--bd)\",\n        borderRadius: \"8px\",\n        padding: \"14px 16px\",\n        fontSize: \"13px\",\n        cursor: \"pointer\",\n        lineHeight: 1.7,\n        display: \"flex\",\n        alignItems: \"center\",\n        justifyContent: \"space-between\",\n        gap: \"12px\",\n      }}\n      aria-label=\"Copy the VibeDrift command\"\n    >\n      <span style={{ color: \"var(--t)\" }}>\n        <span style={{ color: \"var(--y)\" }}>$</span> {COMMAND}\n      </span>\n      <span\n        style={{\n          fontSize: \"10px\",\n          flexShrink: 0,\n          color: copied ? \"var(--g)\" : \"var(--d)\",\n        }}\n      >\n        {copied ? \"copied!\" : \"[click to copy]\"}\n      </span>\n    </button>\n  );\n}"
+    },
+    "fnB": {
+      "name": "CopyBtn",
+      "path": "src/components/dashboard/ScanReport.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n  async function handleClick() {\n    try {\n      await navigator.clipboard.writeText(text);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1800);\n    } catch { /* */ }\n  }\n  return (\n    <button\n      onClick={handleClick}\n      style={{\n        background: copied ? C.intentGreen : \"transparent\",\n        border: `1px solid ${copied ? C.intentGreen : C.border}`,\n        color: copied ? C.bgPage : C.textSecondary,\n        padding: \"4px 10px\",\n        fontSize: \"11px\",\n        fontWeight: 600,\n        fontFamily: \"inherit\",\n        cursor: \"pointer\",\n        letterSpacing: \"0.3px\",\n        textTransform: \"uppercase\" as const,\n        transition: \"background 150ms, color 150ms\",\n        opacity: ghost && !copied ? 0.65 : 1,\n      }}\n    >\n      {copied ? \"Copied!\" : label}\n    </button>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p25",
+    "repo": "vibedrift-landing-page",
+    "band": "B_062",
+    "cosine": 0.6729,
+    "struct": 0.125,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "fullTimestamp",
+      "path": "src/app/admin/marketing/MarketingTable.tsx",
+      "body": "\n  if (!iso) return \"Not recorded\";\n  const d = new Date(iso);\n  return isNaN(d.getTime()) ? \"Not recorded\" : d.toLocaleString(\"en-US\", { year: \"numeric\", month: \"short\", day: \"numeric\", hour: \"2-digit\", minute: \"2-digit\" });\n}"
+    },
+    "fnB": {
+      "name": "formatScanDate",
+      "path": "src/components/dashboard/ScanDetailTabs.tsx",
+      "body": "\n  return new Date(iso).toLocaleString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n    hour: \"numeric\",\n    minute: \"2-digit\",\n    hour12: true,\n  });\n}"
+    }
+  },
+  {
+    "gid": "p26",
+    "repo": "vibedrift-landing-page",
+    "band": "B_062",
+    "cosine": 0.6748,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Image",
+      "path": "src/app/blog/stop-claude-code-drift/opengraph-image.tsx",
+      "body": "\n  return blogCover(\"Claude Code is drifting your repo. Here's how to stop it.\", \"CLAUDE CODE\");\n}"
+    },
+    "fnB": {
+      "name": "Image",
+      "path": "src/app/blog/why-ai-code-passes-review-but-breaks/opengraph-image.tsx",
+      "body": "\n  return blogCover(\"Why AI-generated code passes review but breaks your codebase\", \"AI CODE QUALITY\");\n}"
+    }
+  },
+  {
+    "gid": "p27",
+    "repo": "vibedrift-landing-page",
+    "band": "B_062",
+    "cosine": 0.7173,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Image",
+      "path": "src/app/blog/cursor-rules-vs-mcp/opengraph-image.tsx",
+      "body": "\n  return blogCover(\"Cursor rules vs MCP: why config files aren't enough\", \"MCP\");\n}"
+    },
+    "fnB": {
+      "name": "Image",
+      "path": "src/app/blog/what-is-an-mcp-server/opengraph-image.tsx",
+      "body": "\n  return blogCover(\"What is an MCP server? A practical guide for coding agents\", \"MCP\");\n}"
+    }
+  },
+  {
+    "gid": "p28",
+    "repo": "vibedrift-landing-page",
+    "band": "B_062",
+    "cosine": 0.6746,
+    "struct": 0.2083,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatDate",
+      "path": "src/app/blog/page.tsx",
+      "body": "\n  const d = new Date(iso + \"T12:00:00Z\");\n  return d.toLocaleDateString(\"en-US\", { month: \"long\", day: \"numeric\", year: \"numeric\" });\n}"
+    },
+    "fnB": {
+      "name": "formatDate",
+      "path": "src/app/dashboard/settings/page.tsx",
+      "body": "\n  if (!iso) return \", \";\n  return new Date(iso).toLocaleDateString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n  });\n}"
+    }
+  },
+  {
+    "gid": "p29",
+    "repo": "vibedrift-landing-page",
+    "band": "B_062",
+    "cosine": 0.6722,
+    "struct": 0.381,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatDate",
+      "path": "src/app/blog/page.tsx",
+      "body": "\n  const d = new Date(iso + \"T12:00:00Z\");\n  return d.toLocaleDateString(\"en-US\", { month: \"long\", day: \"numeric\", year: \"numeric\" });\n}"
+    },
+    "fnB": {
+      "name": "formatDate",
+      "path": "src/app/dashboard/billing/page.tsx",
+      "body": "\n  if (!iso) return \", \";\n  return new Date(iso).toLocaleDateString(\"en-US\", {\n    month: \"long\",\n    day: \"numeric\",\n    year: \"numeric\",\n  });\n}"
+    }
+  },
+  {
+    "gid": "p30",
+    "repo": "vibedrift-landing-page",
+    "band": "B_062",
+    "cosine": 0.6767,
+    "struct": 0.2353,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatDate",
+      "path": "src/app/dashboard/settings/page.tsx",
+      "body": "\n  if (!iso) return \", \";\n  return new Date(iso).toLocaleDateString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n  });\n}"
+    },
+    "fnB": {
+      "name": "formatDate",
+      "path": "src/components/dashboard/ScanTimeline.tsx",
+      "body": "\n  const d = new Date(iso);\n  const date = d.toLocaleDateString(\"en-US\", {\n    month: \"short\",\n    day: \"numeric\",\n    year: \"numeric\",\n  });\n  const time = d.toLocaleTimeString(\"en-US\", {\n    hour: \"numeric\",\n    minute: \"2-digit\",\n    hour12: true,\n  });\n  return `${date} \u00b7 ${time}`;\n}"
+    }
+  },
+  {
+    "gid": "p31",
+    "repo": "vibedrift-landing-page",
+    "band": "B_042",
+    "cosine": 0.4269,
+    "struct": 0.0307,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Cmd",
+      "path": "src/app/guide/GuideContent.tsx",
+      "body": "\n  const [copied, setCopied] = useState(false);\n  return (\n    <div style={{ marginBottom: \"10px\", maxWidth: \"520px\" }}>\n      {label && <div className=\"font-mono\" style={{ fontSize: \"10px\", color: \"var(--d)\", marginBottom: \"4px\" }}>{label}</div>}\n      <div style={{ background: S.bg2, border: `1px solid ${S.bd}`, borderRadius: \"7px\", padding: \"11px 14px\", display: \"flex\", alignItems: \"center\", justifyContent: \"space-between\" }}>\n        <code className=\"font-mono\" style={{ fontSize: \"12px\", color: \"var(--t)\" }}>\n          <span style={{ color: \"var(--y)\", marginRight: \"6px\" }}>$</span>{cmd}\n        </code>\n        <div style={{ display: \"flex\", alignItems: \"center\", gap: \"8px\" }}>\n          {tag && (\n            <span className=\"font-mono\" style={{ fontSize: \"8px\", padding: \"2px 6px\", borderRadius: \"3px\", letterSpacing: \"0.5px\", textTransform: \"uppercase\", background: tag === \"free\" ? S.gd : S.yd, color: tag === \"free\" ? \"var(--g)\" : \"var(--y)\" }}>\n              {tag === \"free\" ? \"Free\" : \"Deep scan\"}\n            </span>\n          )}\n          <button\n            onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}\n            className=\"font-mono\"\n            style={{ fontSize: \"9px\", color: copied ? \"var(--g)\" : \"var(--d)\", background: \"rgba(255,255,255,0.04)\", padding: \"3px 8px\", borderRadius: \"3px\", border: \"none\", cursor: \"pointer\" }}\n          >\n            {copied ? \"Copied!\" : \"Copy\"}\n          </button>\n        </div>\n      </div>\n    </div>\n  );\n}"
+    },
+    "fnB": {
+      "name": "handleClick",
+      "path": "src/components/dashboard/CopyButton.tsx",
+      "body": "\n    if (copied) return;\n    try {\n      await navigator.clipboard.writeText(text);\n      setCopied(true);\n      setTimeout(() => setCopied(false), 1500);\n    } catch {\n      // Clipboard may be blocked in some contexts; fail silently\n    }\n  }"
+    }
+  }
+]

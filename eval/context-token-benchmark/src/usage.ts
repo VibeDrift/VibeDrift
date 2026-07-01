@@ -26,6 +26,8 @@ export interface ParsedUsage {
   turns: number;
   /** Model id from first message_start.message.model, then system-init .model, else null. */
   modelId: string | null;
+  /** Count of mcp__vibedrift__* tool_use blocks across the session. */
+  vibedriftToolCalls: number;
 }
 
 /**
@@ -51,6 +53,12 @@ export function parseClaudeUsage(stdout: string): ParsedUsage {
   const allObjects: Record<string, unknown>[] = [];
   const effectiveEvents: Record<string, unknown>[] = [];
 
+  // Count of mcp__vibedrift__* tool_use blocks anywhere in the parsed stream.
+  // Each line's top-level parsed object is walked recursively (which also covers
+  // any nested .event), so we walk only the top-level object per line to avoid
+  // double-counting.
+  let vibedriftToolCalls = 0;
+
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -63,6 +71,7 @@ export function parseClaudeUsage(stdout: string): ParsedUsage {
     if (typeof obj !== "object" || obj === null) continue;
     const rec = obj as Record<string, unknown>;
     allObjects.push(rec);
+    vibedriftToolCalls += countVibedriftToolUse(rec);
 
     const inner = rec.event;
     if (inner !== null && typeof inner === "object") {
@@ -124,6 +133,7 @@ export function parseClaudeUsage(stdout: string): ParsedUsage {
       compactionEvents,
       turns: typeof resultObj.num_turns === "number" ? resultObj.num_turns : countMessageStarts(allObjects),
       modelId,
+      vibedriftToolCalls,
     };
   }
 
@@ -179,6 +189,7 @@ export function parseClaudeUsage(stdout: string): ParsedUsage {
     compactionEvents,
     turns: messages.length,
     modelId,
+    vibedriftToolCalls,
   };
 }
 
@@ -190,4 +201,34 @@ function toInt(v: unknown): number {
 
 function countMessageStarts(objects: Record<string, unknown>[]): number {
   return objects.filter((o) => o.type === "message_start").length;
+}
+
+/**
+ * Recursively walk a parsed JSON value (objects + arrays) and count every node
+ * that is an object with type === "tool_use" and a string `name` starting with
+ * "mcp__vibedrift__". This catches mcp__vibedrift__* tool_use blocks wherever
+ * they appear (e.g. nested inside assistant events' message.content[] arrays).
+ */
+function countVibedriftToolUse(value: unknown): number {
+  if (Array.isArray(value)) {
+    let count = 0;
+    for (const item of value) count += countVibedriftToolUse(item);
+    return count;
+  }
+  if (typeof value === "object" && value !== null) {
+    const rec = value as Record<string, unknown>;
+    let count = 0;
+    if (
+      rec.type === "tool_use" &&
+      typeof rec.name === "string" &&
+      rec.name.startsWith("mcp__vibedrift__")
+    ) {
+      count++;
+    }
+    for (const key of Object.keys(rec)) {
+      count += countVibedriftToolUse(rec[key]);
+    }
+    return count;
+  }
+  return 0;
 }

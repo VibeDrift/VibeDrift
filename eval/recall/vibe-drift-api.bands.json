@@ -1,0 +1,68 @@
+{
+  "repo": "vibe-drift-api",
+  "functions": 118,
+  "crossFilePairs": 6255,
+  "cosMed": 0.72,
+  "structHigh": 0.95,
+  "candidates": 1,
+  "autoConfirm": 0,
+  "needsLlm": 1,
+  "bands": [
+    {
+      "band": "C_high",
+      "lo": 0.85,
+      "hi": 1.01,
+      "isCandidate": true,
+      "population": 0,
+      "sampled": 0
+    },
+    {
+      "band": "C_mid",
+      "lo": 0.72,
+      "hi": 0.85,
+      "isCandidate": true,
+      "population": 1,
+      "sampled": 1
+    },
+    {
+      "band": "B_062",
+      "lo": 0.62,
+      "hi": 0.72,
+      "isCandidate": false,
+      "population": 13,
+      "sampled": 13
+    },
+    {
+      "band": "B_052",
+      "lo": 0.52,
+      "hi": 0.62,
+      "isCandidate": false,
+      "population": 56,
+      "sampled": 56
+    },
+    {
+      "band": "B_042",
+      "lo": 0.42,
+      "hi": 0.52,
+      "isCandidate": false,
+      "population": 207,
+      "sampled": 100
+    },
+    {
+      "band": "B_032",
+      "lo": 0.32,
+      "hi": 0.42,
+      "isCandidate": false,
+      "population": 662,
+      "sampled": 100
+    },
+    {
+      "band": "B_022",
+      "lo": 0.22,
+      "hi": 0.32,
+      "isCandidate": false,
+      "population": 1859,
+      "sampled": 60
+    }
+  ]
+}

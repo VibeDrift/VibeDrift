@@ -1,0 +1,82 @@
+[
+  {
+    "gid": "p0",
+    "repo": "vibe-drift-api",
+    "band": "C_mid",
+    "cosine": 0.7642,
+    "struct": 0.7857,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "cosine_similarity",
+      "path": "api/models/duplicates.py",
+      "body": "\n    \"\"\"Compute cosine similarity between two vectors.\"\"\"\n    dot = np.dot(a, b)\n    norm_a = np.linalg.norm(a)\n    norm_b = np.linalg.norm(b)\n    if norm_a == 0 or norm_b == 0:\n        return 0.0\n    return float(dot / (norm_a * norm_b))\n\n"
+    },
+    "fnB": {
+      "name": "cosine_similarity",
+      "path": "api/models/intent.py",
+      "body": "\n    dot = np.dot(a, b)\n    norm_a = np.linalg.norm(a)\n    norm_b = np.linalg.norm(b)\n    if norm_a == 0 or norm_b == 0:\n        return 0.0\n    return float(dot / (norm_a * norm_b))\n\n"
+    }
+  },
+  {
+    "gid": "p1",
+    "repo": "vibe-drift-api",
+    "band": "B_062",
+    "cosine": 0.6235,
+    "struct": 0.0387,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "coherence",
+      "path": "api/routes/coherence.py",
+      "body": "\n    \"\"\"Synthesize a ranked coherence audit from a scan's drift + deep findings.\n\n    PAID-ONLY: the deep-scan tier's hero report. Free/anonymous callers are\n    rejected (402 / 401) before any model work; the CLI also withholds the\n    report surface for free plans (defense-in-depth).\n    \"\"\"\n    start = time.time()\n\n    await require_paid(request)\n\n    if not ANTHROPIC_API_KEY:\n        raise HTTPException(status_code=503, detail=\"Anthropic API key not configured\")\n\n    # Nothing to synthesize \u2192 a coherent codebase, no model call (and no charge).\n    if not body.drift_findings and not body.duplicates and not body.intent_lies:\n        return CoherenceReport(\n            coherence_grade=\"A\",\n            coherence_score=95,\n            verdict=\"No drift or deep findings to report \u2014 the codebase is internally consistent as measured.\",\n            processing_time_ms=int((time.time() - start) * 1000),\n        )\n\n    user_message = _build_user_message(body)\n\n    try:\n        from anthropic import Anthropic\n        client = Anthropic(api_key=ANTHROPIC_API_KEY)\n        response = client.messages.create(\n            model=COHERENCE_MODEL,\n            max_tokens=MAX_COHERENCE_TOKENS,\n            system=SYSTEM_PROMPT,\n            messages=[{\"role\": \"user\", \"content\": user_message}],\n        )\n        text = response.content[0].text if response.content else \"\"\n        report = _parse_response(text)\n        stop_reason = getattr(response, \"stop_reason\", None)\n    except Exception as e:\n        logger.error(f\"Coherence synthesis failed: {e}\")\n        raise HTTPException(status_code=500, detail=f\"Synthesis failed: {str(e)}\")\n\n    # An unparseable / truncated model response yields a blank report (grade \"\").\n    # Never let that be silent again \u2014 a swallowed blank rendered as a spurious\n    # \"score 0\" and hid a real truncation bug. Log it loudly with the signals\n    # needed to diagnose (stop_reason + raw length).\n    if stop_reason == \"max_tokens\":\n        logger.warning(\n            \"Coherence output truncated at max_tokens=%d for %s (%d chars) \u2014 raising the cap \"\n            \"or trimming inputs may be needed\",\n            MAX_COHERENCE_TOKENS, body.project, len(text),\n        )\n    if not report.coherence_grade:\n        logger.warning(\n            \"Coherence report empty for %s: stop_reason=%s, raw_len=%d \u2014 response did not \"\n            \"parse into a graded audit\",\n            body.project, stop_reason, len(text),\n        )\n\n    report.processing_time_ms = int((time.time() - start) * 1000)\n    logger.info(\n        f\"Coherence report for {body.project}: grade {report.coherence_grade}, \"\n        f\"{len(report.ranked_issues)} ranked issues\"\n    )\n    return report\n"
+    },
+    "fnB": {
+      "name": "summarize",
+      "path": "api/routes/summarize.py",
+      "body": "\n    \"\"\"Generate an AI executive summary of the scan results.\"\"\"\n    start = time.time()\n\n    await validate_api_key(request)\n\n    if not ANTHROPIC_API_KEY:\n        raise HTTPException(status_code=503, detail=\"Anthropic API key not configured\")\n\n    # Build a focused prompt with just the metrics (no code)\n    drift_lines = []\n    for d in body.driftFindings[:8]:\n        sev = d.get(\"severity\", \"info\").upper()\n        drift_lines.append(f\"  [{sev}] {d.get('finding', '')} ({d.get('consistency', 0)}% consistent)\")\n\n    codedna_info = \"\"\n    if body.codeDnaSummary:\n        cs = body.codeDnaSummary\n        codedna_info = f\"\\nCode DNA: {cs.get('functions', 0)} functions analyzed, {cs.get('fingerprints', 0)} exact duplicates, {cs.get('sequences', 0)} operation sequence matches, {cs.get('taintFlows', 0)} taint flows, {cs.get('deviations', 0)} deviation justifications.\"\n\n    ml_info = \"\"\n    if body.mlSummary:\n        ms = body.mlSummary\n        ml_info = f\"\\nML Analysis: {ms.get('duplicates', 0)} semantic duplicates, {ms.get('intentMismatches', 0)} intent mismatches, {ms.get('anomalies', 0)} pattern anomalies detected.\"\n\n    top_issues_text = \"\"\n    if body.topIssues:\n        top_issues_text = \"\\nTop issues:\\n\" + \"\\n\".join(f\"  - {issue}\" for issue in body.topIssues[:5])\n\n    prompt = f\"\"\"You are a senior software engineer reviewing a VibeDrift scan report. Write a concise executive summary (3-4 sentences max) that tells the developer:"
+    }
+  },
+  {
+    "gid": "p2",
+    "repo": "vibe-drift-api",
+    "band": "B_062",
+    "cosine": 0.6536,
+    "struct": 0.2628,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "coherence",
+      "path": "api/routes/coherence.py",
+      "body": "\n    \"\"\"Synthesize a ranked coherence audit from a scan's drift + deep findings.\n\n    PAID-ONLY: the deep-scan tier's hero report. Free/anonymous callers are\n    rejected (402 / 401) before any model work; the CLI also withholds the\n    report surface for free plans (defense-in-depth).\n    \"\"\"\n    start = time.time()\n\n    await require_paid(request)\n\n    if not ANTHROPIC_API_KEY:\n        raise HTTPException(status_code=503, detail=\"Anthropic API key not configured\")\n\n    # Nothing to synthesize \u2192 a coherent codebase, no model call (and no charge).\n    if not body.drift_findings and not body.duplicates and not body.intent_lies:\n        return CoherenceReport(\n            coherence_grade=\"A\",\n            coherence_score=95,\n            verdict=\"No drift or deep findings to report \u2014 the codebase is internally consistent as measured.\",\n            processing_time_ms=int((time.time() - start) * 1000),\n        )\n\n    user_message = _build_user_message(body)\n\n    try:\n        from anthropic import Anthropic\n        client = Anthropic(api_key=ANTHROPIC_API_KEY)\n        response = client.messages.create(\n            model=COHERENCE_MODEL,\n            max_tokens=MAX_COHERENCE_TOKENS,\n            system=SYSTEM_PROMPT,\n            messages=[{\"role\": \"user\", \"content\": user_message}],\n        )\n        text = response.content[0].text if response.content else \"\"\n        report = _parse_response(text)\n        stop_reason = getattr(response, \"stop_reason\", None)\n    except Exception as e:\n        logger.error(f\"Coherence synthesis failed: {e}\")\n        raise HTTPException(status_code=500, detail=f\"Synthesis failed: {str(e)}\")\n\n    # An unparseable / truncated model response yields a blank report (grade \"\").\n    # Never let that be silent again \u2014 a swallowed blank rendered as a spurious\n    # \"score 0\" and hid a real truncation bug. Log it loudly with the signals\n    # needed to diagnose (stop_reason + raw length).\n    if stop_reason == \"max_tokens\":\n        logger.warning(\n            \"Coherence output truncated at max_tokens=%d for %s (%d chars) \u2014 raising the cap \"\n            \"or trimming inputs may be needed\",\n            MAX_COHERENCE_TOKENS, body.project, len(text),\n        )\n    if not report.coherence_grade:\n        logger.warning(\n            \"Coherence report empty for %s: stop_reason=%s, raw_len=%d \u2014 response did not \"\n            \"parse into a graded audit\",\n            body.project, stop_reason, len(text),\n        )\n\n    report.processing_time_ms = int((time.time() - start) * 1000)\n    logger.info(\n        f\"Coherence report for {body.project}: grade {report.coherence_grade}, \"\n        f\"{len(report.ranked_issues)} ranked issues\"\n    )\n    return report\n"
+    },
+    "fnB": {
+      "name": "fix_prompts",
+      "path": "api/routes/fix_prompts.py",
+      "body": "\n    \"\"\"Synthesize actionable fix prose for a batch of drift findings.\n\n    PAID-ONLY: fix prompts are a Pro/Scale feature. Free and anonymous callers\n    are rejected (402 / 401) before any model work \u2014 the CLI also withholds the\n    local fix-prompt surfaces for free plans, so this is defense-in-depth.\n    \"\"\"\n    start = time.time()\n\n    await require_paid(request)\n\n    if not ANTHROPIC_API_KEY:\n        raise HTTPException(status_code=503, detail=\"Anthropic API key not configured\")\n\n    if not body.items:\n        return FixPromptsResponse(prompts={}, processing_time_ms=0)\n\n    items = body.items[:15]  # cap batch to keep response under token limit\n    user_message = _build_user_message(items)\n\n    try:\n        from anthropic import Anthropic\n        client = Anthropic(api_key=ANTHROPIC_API_KEY)\n        response = client.messages.create(\n            model=\"claude-haiku-4-5-20251001\",\n            max_tokens=4096,  # actionable fixes are longer than the old 180-word blurbs\n            system=SYSTEM_PROMPT,\n            messages=[{\"role\": \"user\", \"content\": user_message}],\n        )\n        text = response.content[0].text if response.content else \"\"\n        prompts = _parse_response(text)\n    except Exception as e:\n        logger.error(f\"Fix-prompt synthesis failed: {e}\")\n        raise HTTPException(status_code=500, detail=f\"Synthesis failed: {str(e)}\")\n\n    elapsed = int((time.time() - start) * 1000)\n    return FixPromptsResponse(prompts=prompts, processing_time_ms=elapsed)\n"
+    }
+  },
+  {
+    "gid": "p3",
+    "repo": "vibe-drift-api",
+    "band": "B_042",
+    "cosine": 0.4839,
+    "struct": 0.049,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "fix_prompts",
+      "path": "api/routes/fix_prompts.py",
+      "body": "\n    \"\"\"Synthesize actionable fix prose for a batch of drift findings.\n\n    PAID-ONLY: fix prompts are a Pro/Scale feature. Free and anonymous callers\n    are rejected (402 / 401) before any model work \u2014 the CLI also withholds the\n    local fix-prompt surfaces for free plans, so this is defense-in-depth.\n    \"\"\"\n    start = time.time()\n\n    await require_paid(request)\n\n    if not ANTHROPIC_API_KEY:\n        raise HTTPException(status_code=503, detail=\"Anthropic API key not configured\")\n\n    if not body.items:\n        return FixPromptsResponse(prompts={}, processing_time_ms=0)\n\n    items = body.items[:15]  # cap batch to keep response under token limit\n    user_message = _build_user_message(items)\n\n    try:\n        from anthropic import Anthropic\n        client = Anthropic(api_key=ANTHROPIC_API_KEY)\n        response = client.messages.create(\n            model=\"claude-haiku-4-5-20251001\",\n            max_tokens=4096,  # actionable fixes are longer than the old 180-word blurbs\n            system=SYSTEM_PROMPT,\n            messages=[{\"role\": \"user\", \"content\": user_message}],\n        )\n        text = response.content[0].text if response.content else \"\"\n        prompts = _parse_response(text)\n    except Exception as e:\n        logger.error(f\"Fix-prompt synthesis failed: {e}\")\n        raise HTTPException(status_code=500, detail=f\"Synthesis failed: {str(e)}\")\n\n    elapsed = int((time.time() - start) * 1000)\n    return FixPromptsResponse(prompts=prompts, processing_time_ms=elapsed)\n"
+    },
+    "fnB": {
+      "name": "summarize",
+      "path": "api/routes/summarize.py",
+      "body": "\n    \"\"\"Generate an AI executive summary of the scan results.\"\"\"\n    start = time.time()\n\n    await validate_api_key(request)\n\n    if not ANTHROPIC_API_KEY:\n        raise HTTPException(status_code=503, detail=\"Anthropic API key not configured\")\n\n    # Build a focused prompt with just the metrics (no code)\n    drift_lines = []\n    for d in body.driftFindings[:8]:\n        sev = d.get(\"severity\", \"info\").upper()\n        drift_lines.append(f\"  [{sev}] {d.get('finding', '')} ({d.get('consistency', 0)}% consistent)\")\n\n    codedna_info = \"\"\n    if body.codeDnaSummary:\n        cs = body.codeDnaSummary\n        codedna_info = f\"\\nCode DNA: {cs.get('functions', 0)} functions analyzed, {cs.get('fingerprints', 0)} exact duplicates, {cs.get('sequences', 0)} operation sequence matches, {cs.get('taintFlows', 0)} taint flows, {cs.get('deviations', 0)} deviation justifications.\"\n\n    ml_info = \"\"\n    if body.mlSummary:\n        ms = body.mlSummary\n        ml_info = f\"\\nML Analysis: {ms.get('duplicates', 0)} semantic duplicates, {ms.get('intentMismatches', 0)} intent mismatches, {ms.get('anomalies', 0)} pattern anomalies detected.\"\n\n    top_issues_text = \"\"\n    if body.topIssues:\n        top_issues_text = \"\\nTop issues:\\n\" + \"\\n\".join(f\"  - {issue}\" for issue in body.topIssues[:5])\n\n    prompt = f\"\"\"You are a senior software engineer reviewing a VibeDrift scan report. Write a concise executive summary (3-4 sentences max) that tells the developer:"
+    }
+  }
+]

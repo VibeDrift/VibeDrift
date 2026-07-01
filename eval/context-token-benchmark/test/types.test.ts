@@ -35,7 +35,6 @@ describe("Core types", () => {
       sha: "abc123def456",
       testCmd: "pytest tests/",
       setupCmd: "pip install -r requirements.txt",
-      placeboFrom: "repo-2",
       postCutoff: false,
     };
     expect(repo.id).toBe("repo-1");
@@ -73,6 +72,7 @@ describe("Core types", () => {
       censored: false,
       competingFailure: false,
       compactionEvents: 2,
+      vibedriftToolCalls: 3,
       startedAt: "2026-06-26T10:00:00Z",
       durationMs: 5000,
     };

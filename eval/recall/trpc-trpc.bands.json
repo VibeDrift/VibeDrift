@@ -1,0 +1,68 @@
+{
+  "repo": "trpc-trpc",
+  "functions": 1203,
+  "crossFilePairs": 719140,
+  "cosMed": 0.72,
+  "structHigh": 0.95,
+  "candidates": 2616,
+  "autoConfirm": 1512,
+  "needsLlm": 1104,
+  "bands": [
+    {
+      "band": "C_high",
+      "lo": 0.85,
+      "hi": 1.01,
+      "isCandidate": true,
+      "population": 1775,
+      "sampled": 24
+    },
+    {
+      "band": "C_mid",
+      "lo": 0.72,
+      "hi": 0.85,
+      "isCandidate": true,
+      "population": 841,
+      "sampled": 24
+    },
+    {
+      "band": "B_062",
+      "lo": 0.62,
+      "hi": 0.72,
+      "isCandidate": false,
+      "population": 1680,
+      "sampled": 60
+    },
+    {
+      "band": "B_052",
+      "lo": 0.52,
+      "hi": 0.62,
+      "isCandidate": false,
+      "population": 6362,
+      "sampled": 60
+    },
+    {
+      "band": "B_042",
+      "lo": 0.42,
+      "hi": 0.52,
+      "isCandidate": false,
+      "population": 18809,
+      "sampled": 100
+    },
+    {
+      "band": "B_032",
+      "lo": 0.32,
+      "hi": 0.42,
+      "isCandidate": false,
+      "population": 50505,
+      "sampled": 100
+    },
+    {
+      "band": "B_022",
+      "lo": 0.22,
+      "hi": 0.32,
+      "isCandidate": false,
+      "population": 137804,
+      "sampled": 60
+    }
+  ]
+}

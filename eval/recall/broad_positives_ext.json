@@ -1,0 +1,2142 @@
+[
+  {
+    "gid": "p0",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 0.8616,
+    "struct": 0.0952,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "clear_cache",
+      "path": "python/vibetensor/cute/runtime.py",
+      "body": "\n    \"\"\"Unload any cached CUDA modules loaded via CuteKernel.\"\"\"\n    with _cache_lock:\n        mods = list(_module_cache.values())\n        _module_cache.clear()\n        _function_cache.clear()\n\n    for mod_h in mods:\n        try:\n            _C._cuda_module_unload(int(mod_h))  # type: ignore[attr-defined]\n        except Exception:\n            # Best-effort only.\n            pass\n\n"
+    },
+    "fnB": {
+      "name": "_flush_module_cache",
+      "path": "python/vibetensor/triton.py",
+      "body": "\n    with _global_lock:\n        for k, (mod_h, _) in list(_module_cache.items()):\n            try:\n                _C._cuda_module_unload(mod_h)  # type: ignore[attr-defined]\n            except Exception:\n                pass\n            _module_cache.pop(k, None)\n        _module_in_use.clear()\n\n"
+    }
+  },
+  {
+    "gid": "p1",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_namedtuple_instance",
+      "path": "python/vibetensor/torch/utils/data/collate.py",
+      "body": "\n    # Heuristic used by PyTorch: a tuple subclass with `_fields`.\n    return isinstance(x, tuple) and hasattr(x, \"_fields\")\n\n"
+    },
+    "fnB": {
+      "name": "_is_namedtuple_instance",
+      "path": "python/vibetensor/torch/utils/data/device_prefetch.py",
+      "body": "\n    # Heuristic used by PyTorch: a tuple subclass with `_fields`.\n    return isinstance(x, tuple) and hasattr(x, \"_fields\")\n\n"
+    }
+  },
+  {
+    "gid": "p2",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_cuda_tensor_like",
+      "path": "python/vibetensor/fabric.py",
+      "body": "\n    dev = getattr(obj, \"device\", None)\n    if not isinstance(dev, (tuple, list)) or len(dev) < 2:\n        return (False, None)\n    try:\n        dev_type = int(dev[0])\n        dev_index = int(dev[1])\n    except Exception:\n        return (False, None)\n    if dev_type in (_KDLCUDA, _KDLCUDAMANAGED):\n        return (True, dev_index)\n    return (False, None)\n\n\n"
+    },
+    "fnB": {
+      "name": "_is_cuda_tensor_like",
+      "path": "python/vibetensor/triton.py",
+      "body": "\n    dev = getattr(obj, \"device\", None)\n    if not isinstance(dev, (tuple, list)) or len(dev) < 2:\n        return (False, None)\n    try:\n        dev_type = int(dev[0])\n        dev_index = int(dev[1])\n    except Exception:\n        return (False, None)\n    if dev_type in (_KDLCUDA, _KDLCUDAMANAGED):\n        return (True, dev_index)\n    return (False, None)\n\n"
+    }
+  },
+  {
+    "gid": "p3",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_cuda_tensor_like",
+      "path": "python/vibetensor/cute/runtime.py",
+      "body": "\n    dev = getattr(obj, \"device\", None)\n    if not isinstance(dev, (tuple, list)) or len(dev) < 2:\n        return (False, None)\n    try:\n        dev_type = int(dev[0])\n        dev_index = int(dev[1])\n    except Exception:\n        return (False, None)\n    if dev_type in (_KDLCUDA, _KDLCUDAMANAGED):\n        return (True, dev_index)\n    return (False, None)\n\n"
+    },
+    "fnB": {
+      "name": "_is_cuda_tensor_like",
+      "path": "python/vibetensor/triton.py",
+      "body": "\n    dev = getattr(obj, \"device\", None)\n    if not isinstance(dev, (tuple, list)) or len(dev) < 2:\n        return (False, None)\n    try:\n        dev_type = int(dev[0])\n        dev_index = int(dev[1])\n    except Exception:\n        return (False, None)\n    if dev_type in (_KDLCUDA, _KDLCUDAMANAGED):\n        return (True, dev_index)\n    return (False, None)\n\n"
+    }
+  },
+  {
+    "gid": "p4",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_cuda_tensor_like",
+      "path": "python/vibetensor/cute/runtime.py",
+      "body": "\n    dev = getattr(obj, \"device\", None)\n    if not isinstance(dev, (tuple, list)) or len(dev) < 2:\n        return (False, None)\n    try:\n        dev_type = int(dev[0])\n        dev_index = int(dev[1])\n    except Exception:\n        return (False, None)\n    if dev_type in (_KDLCUDA, _KDLCUDAMANAGED):\n        return (True, dev_index)\n    return (False, None)\n\n"
+    },
+    "fnB": {
+      "name": "_is_cuda_tensor_like",
+      "path": "python/vibetensor/fabric.py",
+      "body": "\n    dev = getattr(obj, \"device\", None)\n    if not isinstance(dev, (tuple, list)) or len(dev) < 2:\n        return (False, None)\n    try:\n        dev_type = int(dev[0])\n        dev_index = int(dev[1])\n    except Exception:\n        return (False, None)\n    if dev_type in (_KDLCUDA, _KDLCUDAMANAGED):\n        return (True, dev_index)\n    return (False, None)\n\n\n"
+    }
+  },
+  {
+    "gid": "p5",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 0.9983,
+    "struct": 0.9189,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_parse_device",
+      "path": "python/vibetensor/torch/factory.py",
+      "body": "\n    # Returns (dev_type, index) where dev_type in {\"cpu\",\"cuda\"}; index is None for cpu\n    if device is None:\n        return (\"cpu\", None)\n    if isinstance(device, int):\n        # Treat as cuda:<index>\n        if not getattr(_C, \"_has_cuda\", False):\n            raise ValueError(\"CUDA is not available\")\n        di = int(device)\n        if di < 0 or di >= int(_C._cuda_device_count()):  # type: ignore[attr-defined]\n            raise ValueError(\"device index out of range\")\n        return (\"cuda\", di)\n    devs = str(device)\n    if devs == \"cpu\":\n        return (\"cpu\", None)\n    if devs == \"cuda\":\n        if not getattr(_C, \"_has_cuda\", False):\n            raise ValueError(\"CUDA is not available\")\n        cur = int(getattr(_C, \"_cuda_current_device\", lambda: 0)())\n        return (\"cuda\", cur)\n    if devs.startswith(\"cuda:\"):\n        if not getattr(_C, \"_has_cuda\", False):\n            raise ValueError(\"CUDA is not available\")\n        try:\n            idx = int(devs.split(\":\", 1)[1])\n        except Exception:\n            raise ValueError(\"invalid cuda device string\")\n        if idx < 0 or idx >= int(_C._cuda_device_count()):  # type: ignore[attr-defined]\n            raise ValueError(\"device index out of range\")\n        return (\"cuda\", idx)\n    raise ValueError(\"device must be 'cpu', 'cuda', 'cuda:k', or integer index\")\n\n"
+    },
+    "fnB": {
+      "name": "_parse_device",
+      "path": "python/vibetensor/torch/rng.py",
+      "body": "\n    # Returns (dev_type, idx). dev_type in {\"cpu\",\"cuda\"}; idx is None for cpu\n    if device is None:\n        return (\"cpu\", None)\n    if isinstance(device, int):\n        if not getattr(_C, \"_has_cuda\", False):\n            raise ValueError(\"CUDA is not available\")\n        di = int(device)\n        if di < 0 or di >= int(_C._cuda_device_count()):  # type: ignore[attr-defined]\n            raise ValueError(\"device index out of range\")\n        return (\"cuda\", di)\n    devs = str(device)\n    if devs == \"cpu\":\n        return (\"cpu\", None)\n    if devs == \"cuda\":\n        if not getattr(_C, \"_has_cuda\", False) or int(getattr(_C, \"_cuda_device_count\", lambda: 0)()) <= 0:\n            raise ValueError(\"CUDA is not available\")\n        cur = int(getattr(_C, \"_cuda_current_device\", lambda: 0)())\n        return (\"cuda\", cur)\n    if devs.startswith(\"cuda:\"):\n        if not getattr(_C, \"_has_cuda\", False):\n            raise ValueError(\"CUDA is not available\")\n        try:\n            idx = int(devs.split(\":\", 1)[1])\n        except Exception:\n            raise ValueError(\"invalid cuda device string\")\n        if idx < 0 or idx >= int(_C._cuda_device_count()):  # type: ignore[attr-defined]\n            raise ValueError(\"device index out of range\")\n        return (\"cuda\", idx)\n    raise ValueError(\"device must be 'cpu', 'cuda', 'cuda:k', or integer index\")\n\n"
+    }
+  },
+  {
+    "gid": "p6",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 0.8839,
+    "struct": 0.1667,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "is_available",
+      "path": "python/vibetensor/torch/cuda/__init__.py",
+      "body": "\n    \"\"\"Returns a bool indicating if CUDA is currently available.\"\"\"\n    if not getattr(_C, \"_has_cuda\", False):\n        return False\n    try:\n        return int(_C._cuda_device_count()) > 0\n    except Exception:\n        return False\n\n"
+    },
+    "fnB": {
+      "name": "_cuda_available",
+      "path": "python/vibetensor/torch/cuda/graphs.py",
+      "body": "\n    \"\"\"Return True iff CUDA is built and at least one device is present.\"\"\"\n    try:\n        if not getattr(_C, \"_has_cuda\", False):\n            return False\n        count_fn = getattr(_C, \"_cuda_device_count\", None)\n        if count_fn is None:\n            return False\n        return int(count_fn()) > 0\n    except Exception:\n        return False\n\n"
+    }
+  },
+  {
+    "gid": "p7",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 0.8665,
+    "struct": 0.0602,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_as_tensor_sequence",
+      "path": "python/vibetensor/autograd.py",
+      "body": "\n    \"\"\"Normalize `value` to a tuple of `_C.Tensor`.\n\n    - Accepts a single `_C.Tensor` or a `collections.abc.Sequence` of `_C.Tensor`.\n    - Rejects non-sequence iterables (generators, custom iterables) with `TypeError`.\n    - Optionally allows or rejects empty sequences.\n    - Raises TypeError with an \"autograd.backward: ...\"-style prefix when types\n      are wrong.\n    \"\"\"\n\n    # Single tensor fast-path.\n    if _is_vbt_tensor(value):\n        return (value,)\n\n    # Sequence of tensors (excluding string-likes).\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        seq = tuple(value)\n        if not allow_empty and len(seq) == 0:\n            raise RuntimeError(\n                f\"{api_name}: {arg_name} must not be an empty sequence\"\n            )\n\n        for x in seq:\n            if not _is_vbt_tensor(x):\n                raise TypeError(\n                    f\"{api_name}: {arg_name} must be VibeTensor tensors\"\n                )\n        return seq\n\n    # Non-tensor, non-Sequence, or string-like.\n    raise TypeError(f\"{api_name}: {arg_name} must be VibeTensor tensors\")\n\n"
+    },
+    "fnB": {
+      "name": "_as_vbt_tensor_sequence",
+      "path": "python/vibetensor/autograd_functional.py",
+      "body": "\n    \"\"\"Normalize ``value`` to a non-empty tuple of ``_C.Tensor``.\n\n    Delegates container/type checks to :func:`vibetensor.autograd._as_tensor_sequence`,\n    which enforces that ``value`` is either a single ``_C.Tensor`` or a non-empty\n    :class:`collections.abc.Sequence` of ``_C.Tensor`` and rejects other iterables.\n    \"\"\"\n\n    return A._as_tensor_sequence(  # type: ignore[attr-defined]\n        value,\n        api_name=api_name,\n        arg_name=arg_name,\n        allow_empty=False,\n    )\n\n"
+    }
+  },
+  {
+    "gid": "p8",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_namedtuple_instance",
+      "path": "python/vibetensor/torch/utils/data/device_prefetch.py",
+      "body": "\n    # Heuristic used by PyTorch: a tuple subclass with `_fields`.\n    return isinstance(x, tuple) and hasattr(x, \"_fields\")\n\n"
+    },
+    "fnB": {
+      "name": "_is_namedtuple_instance",
+      "path": "python/vibetensor/torch/utils/data/pin_memory.py",
+      "body": "\n    # Heuristic used by PyTorch: a tuple subclass with `_fields`.\n    return isinstance(x, tuple) and hasattr(x, \"_fields\")\n\n"
+    }
+  },
+  {
+    "gid": "p9",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_cpu_tensor",
+      "path": "python/vibetensor/torch/utils/data/device_prefetch.py",
+      "body": "\n    dev = getattr(t, \"device\", None)\n    try:\n        return int(dev[0]) == 1\n    except Exception:\n        # Conservative: treat unknown device formats as non-CPU.\n        return False\n\n"
+    },
+    "fnB": {
+      "name": "_is_cpu_tensor",
+      "path": "python/vibetensor/torch/utils/data/pin_memory.py",
+      "body": "\n    dev = getattr(t, \"device\", None)\n    try:\n        return int(dev[0]) == 1\n    except Exception:\n        # Conservative: treat unknown device formats as non-CPU.\n        return False\n\n"
+    }
+  },
+  {
+    "gid": "p10",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 0.8512,
+    "struct": 0.1786,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_cleanup",
+      "path": "python/vibetensor/__init__.py",
+      "body": "\n        # Clear autograd backward registry\n        reset_autograd = getattr(_C, \"_reset_autograd_py\", None)\n        if callable(reset_autograd):\n            try:\n                reset_autograd()\n            except Exception:\n                pass\n\n        # Clear Python override registry\n        reset_overrides = getattr(_C, \"_reset_boxed_python_overrides\", None)\n        if callable(reset_overrides):\n            try:\n                reset_overrides()\n            except Exception:\n                pass\n"
+    },
+    "fnB": {
+      "name": "_reset_overrides",
+      "path": "python/vibetensor/library.py",
+      "body": "\n    try:\n        reset = getattr(_C, \"_reset_boxed_python_overrides\", None)\n        if callable(reset):\n            reset()\n    except Exception:\n        # Best effort: ignore errors during shutdown\n        pass\n"
+    }
+  },
+  {
+    "gid": "p11",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 0.9713,
+    "struct": 0.5455,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_fabric_tensor_marker",
+      "path": "python/vibetensor/fabric.py",
+      "body": "\n    # Type-level marker avoids triggering instance __getattr__.\n    return getattr(type(obj), \"__vbt_fabric_tensor__\", False) is True\n\n"
+    },
+    "fnB": {
+      "name": "_is_fabric_tensor_marker",
+      "path": "python/vibetensor/torch/ops.py",
+      "body": "\n    # Use type-level marker checks to avoid triggering instance __getattr__.\n    try:\n        return getattr(type(obj), \"__vbt_fabric_tensor__\", False) is True\n    except Exception:\n        return False\n\n"
+    }
+  },
+  {
+    "gid": "p12",
+    "repo": "ext-vibetensor",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_namedtuple_instance",
+      "path": "python/vibetensor/torch/utils/data/collate.py",
+      "body": "\n    # Heuristic used by PyTorch: a tuple subclass with `_fields`.\n    return isinstance(x, tuple) and hasattr(x, \"_fields\")\n\n"
+    },
+    "fnB": {
+      "name": "_is_namedtuple_instance",
+      "path": "python/vibetensor/torch/utils/data/pin_memory.py",
+      "body": "\n    # Heuristic used by PyTorch: a tuple subclass with `_fields`.\n    return isinstance(x, tuple) and hasattr(x, \"_fields\")\n\n"
+    }
+  },
+  {
+    "gid": "p13",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.8121,
+    "struct": 0.5417,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_require_tensor",
+      "path": "python/vibetensor/autograd_forward_ad.py",
+      "body": "\n    if not isinstance(value, _C.Tensor):\n        raise TypeError(\n            f\"vibetensor.autograd.forward_ad.{arg_name}: expected a VibeTensor \"\n            f\"Tensor, got {type(value)!r}\"\n        )\n    return value\n\n"
+    },
+    "fnB": {
+      "name": "_require_tensor",
+      "path": "python/vibetensor/autograd_graph.py",
+      "body": "\n    if not isinstance(value, _C.Tensor):\n        raise TypeError(\n            f\"vibetensor.autograd.graph.{arg_name}: expected a VibeTensor `_C.Tensor` \"\n            f\"got {type(value)!r}\"\n        )\n    return value\n\n"
+    }
+  },
+  {
+    "gid": "p14",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.7548,
+    "struct": 0.0462,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_normalize_outputs_arg",
+      "path": "python/vibetensor/autograd.py",
+      "body": "\n    \"\"\"Normalize `outputs` for `vibetensor.autograd.grad`.\n\n    This delegates container/type checks to `_as_tensor_sequence`.\n    \"\"\"\n\n    return _as_tensor_sequence(\n        outputs,\n        api_name=\"autograd.grad\",\n        arg_name=\"outputs\",\n        allow_empty=False,\n    )\n\n"
+    },
+    "fnB": {
+      "name": "_as_vbt_tensor_sequence",
+      "path": "python/vibetensor/autograd_functional.py",
+      "body": "\n    \"\"\"Normalize ``value`` to a non-empty tuple of ``_C.Tensor``.\n\n    Delegates container/type checks to :func:`vibetensor.autograd._as_tensor_sequence`,\n    which enforces that ``value`` is either a single ``_C.Tensor`` or a non-empty\n    :class:`collections.abc.Sequence` of ``_C.Tensor`` and rejects other iterables.\n    \"\"\"\n\n    return A._as_tensor_sequence(  # type: ignore[attr-defined]\n        value,\n        api_name=api_name,\n        arg_name=arg_name,\n        allow_empty=False,\n    )\n\n"
+    }
+  },
+  {
+    "gid": "p15",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.7379,
+    "struct": 0.02,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_as_vbt_tensor_sequence",
+      "path": "python/vibetensor/autograd_functional.py",
+      "body": "\n    \"\"\"Normalize ``value`` to a non-empty tuple of ``_C.Tensor``.\n\n    Delegates container/type checks to :func:`vibetensor.autograd._as_tensor_sequence`,\n    which enforces that ``value`` is either a single ``_C.Tensor`` or a non-empty\n    :class:`collections.abc.Sequence` of ``_C.Tensor`` and rejects other iterables.\n    \"\"\"\n\n    return A._as_tensor_sequence(  # type: ignore[attr-defined]\n        value,\n        api_name=api_name,\n        arg_name=arg_name,\n        allow_empty=False,\n    )\n\n"
+    },
+    "fnB": {
+      "name": "_as_tensor_sequence_for_multi",
+      "path": "python/vibetensor/autograd_graph.py",
+      "body": "\n    if isinstance(value, _Tensor):\n        return (value,)\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        seq = tuple(value)\n        if not seq:\n            raise RuntimeError(\n                f\"register_multi_grad_hook: {arg_name} must be a non-empty sequence\"\n            )\n        for x in seq:\n            if not isinstance(x, _Tensor):\n                raise TypeError(\n                    \"register_multi_grad_hook: tensors must be VibeTensor `_C.Tensor` objects\"\n                )\n        return seq\n    raise TypeError(\n        \"register_multi_grad_hook: tensors must be a VibeTensor tensor or a non-empty sequence of tensors\"\n    )\n\n"
+    }
+  },
+  {
+    "gid": "p16",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.8267,
+    "struct": 0.1786,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_cleanup",
+      "path": "python/vibetensor/__init__.py",
+      "body": "\n        # Clear autograd backward registry\n        reset_autograd = getattr(_C, \"_reset_autograd_py\", None)\n        if callable(reset_autograd):\n            try:\n                reset_autograd()\n            except Exception:\n                pass\n\n        # Clear Python override registry\n        reset_overrides = getattr(_C, \"_reset_boxed_python_overrides\", None)\n        if callable(reset_overrides):\n            try:\n                reset_overrides()\n            except Exception:\n                pass\n"
+    },
+    "fnB": {
+      "name": "_reset_autograd_py",
+      "path": "python/vibetensor/library.py",
+      "body": "\n    try:\n        reset = getattr(_C, \"_reset_autograd_py\", None)\n        if callable(reset):\n            reset()\n    except Exception:\n        pass\n"
+    }
+  },
+  {
+    "gid": "p17",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.7268,
+    "struct": 0.1667,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_complex_enabled",
+      "path": "python/vibetensor/torch/factory.py",
+      "body": "\n    # Pinned semantics: enabled iff env is exactly the single character \"1\".\n    return _os.getenv(\"VBT_ENABLE_COMPLEX\", \"\") == \"1\"\n\n"
+    },
+    "fnB": {
+      "name": "_compat_enabled",
+      "path": "python/vibetensor/torch/ops.py",
+      "body": "\n    return _os.getenv(\"VBT_OPS_COMPAT\", \"0\") == \"1\"\n\n"
+    }
+  },
+  {
+    "gid": "p18",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.835,
+    "struct": 0.1017,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_get_ag",
+      "path": "python/vibetensor/autograd.py",
+      "body": "\n    \"\"\"Return `_C.autograd` submodule or None.\n\n    This indirection simplifies testing and gracefully handles builds where\n    autograd is unavailable.\n    \"\"\"\n\n    return getattr(_C, \"autograd\", None)\n\n"
+    },
+    "fnB": {
+      "name": "_get_ag",
+      "path": "python/vibetensor/autograd_graph.py",
+      "body": "\n    \"\"\"Return `_C.autograd` submodule or raise.\n\n    Graph inspection helpers are only available when autograd is compiled in;\n    this helper centralizes the fallback behavior.\n    \"\"\"\n\n    ag = getattr(_C, \"autograd\", None)\n    if ag is None:\n        raise RuntimeError(\n            \"vibetensor.autograd.graph: _C.autograd is unavailable in this build\"\n        )\n    return ag\n\n"
+    }
+  },
+  {
+    "gid": "p19",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.7623,
+    "struct": 0.1026,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_normalize_backward_tensors",
+      "path": "python/vibetensor/autograd.py",
+      "body": "\n    \"\"\"Normalize `tensors` for `vibetensor.autograd.backward`.\n\n    - Accepts `_C.Tensor` or non-empty `Sequence` of `_C.Tensor`.\n    - Rejects empty sequences (MB4.f) and non-tensor entries (MB4.a/b).\n    - Returns a non-empty tuple of `_C.Tensor`.\n    \"\"\"\n\n    return _as_tensor_sequence(\n        tensors,\n        api_name=\"autograd.backward\",\n        arg_name=\"tensors\",\n        allow_empty=False,\n    )\n\n"
+    },
+    "fnB": {
+      "name": "_as_vbt_tensor_sequence",
+      "path": "python/vibetensor/autograd_functional.py",
+      "body": "\n    \"\"\"Normalize ``value`` to a non-empty tuple of ``_C.Tensor``.\n\n    Delegates container/type checks to :func:`vibetensor.autograd._as_tensor_sequence`,\n    which enforces that ``value`` is either a single ``_C.Tensor`` or a non-empty\n    :class:`collections.abc.Sequence` of ``_C.Tensor`` and rejects other iterables.\n    \"\"\"\n\n    return A._as_tensor_sequence(  # type: ignore[attr-defined]\n        value,\n        api_name=api_name,\n        arg_name=arg_name,\n        allow_empty=False,\n    )\n\n"
+    }
+  },
+  {
+    "gid": "p20",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.7856,
+    "struct": 0.192,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_as_tensor_sequence",
+      "path": "python/vibetensor/autograd.py",
+      "body": "\n    \"\"\"Normalize `value` to a tuple of `_C.Tensor`.\n\n    - Accepts a single `_C.Tensor` or a `collections.abc.Sequence` of `_C.Tensor`.\n    - Rejects non-sequence iterables (generators, custom iterables) with `TypeError`.\n    - Optionally allows or rejects empty sequences.\n    - Raises TypeError with an \"autograd.backward: ...\"-style prefix when types\n      are wrong.\n    \"\"\"\n\n    # Single tensor fast-path.\n    if _is_vbt_tensor(value):\n        return (value,)\n\n    # Sequence of tensors (excluding string-likes).\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        seq = tuple(value)\n        if not allow_empty and len(seq) == 0:\n            raise RuntimeError(\n                f\"{api_name}: {arg_name} must not be an empty sequence\"\n            )\n\n        for x in seq:\n            if not _is_vbt_tensor(x):\n                raise TypeError(\n                    f\"{api_name}: {arg_name} must be VibeTensor tensors\"\n                )\n        return seq\n\n    # Non-tensor, non-Sequence, or string-like.\n    raise TypeError(f\"{api_name}: {arg_name} must be VibeTensor tensors\")\n\n"
+    },
+    "fnB": {
+      "name": "_as_tensor_sequence_for_multi",
+      "path": "python/vibetensor/autograd_graph.py",
+      "body": "\n    if isinstance(value, _Tensor):\n        return (value,)\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        seq = tuple(value)\n        if not seq:\n            raise RuntimeError(\n                f\"register_multi_grad_hook: {arg_name} must be a non-empty sequence\"\n            )\n        for x in seq:\n            if not isinstance(x, _Tensor):\n                raise TypeError(\n                    \"register_multi_grad_hook: tensors must be VibeTensor `_C.Tensor` objects\"\n                )\n        return seq\n    raise TypeError(\n        \"register_multi_grad_hook: tensors must be a VibeTensor tensor or a non-empty sequence of tensors\"\n    )\n\n"
+    }
+  },
+  {
+    "gid": "p21",
+    "repo": "ext-vibetensor",
+    "band": "C_mid",
+    "cosine": 0.7493,
+    "struct": 0.0423,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "__len__",
+      "path": "python/vibetensor/torch/utils/data/dataloader.py",
+      "body": "\n        # Map-style only.\n        if self._dataset_is_iterable:\n            raise TypeError(\"len(DataLoader) is not defined for IterableDataset\")\n\n        # If the user provided a batch_sampler, defer to it.\n        if self.batch_sampler is not None:\n            try:\n                return len(self.batch_sampler)  # type: ignore[arg-type]\n            except TypeError:\n                raise TypeError(\"len(DataLoader): batch sampler has no length\")\n\n        # Determine the number of samples.\n        if self.sampler is not None:\n            try:\n                n = len(self.sampler)  # type: ignore[arg-type]\n            except TypeError:\n                raise TypeError(\"len(DataLoader): sampler has no length\")\n        else:\n            n = len(self.dataset)\n\n        if self.batch_size is None:\n            return int(n)\n\n        bs = int(self.batch_size)\n        if self.drop_last:\n            return int(n) // bs\n        return (int(n) + bs - 1) // bs\n\n"
+    },
+    "fnB": {
+      "name": "__len__",
+      "path": "python/vibetensor/torch/utils/data/sampler.py",
+      "body": "\n        # Best-effort length; may fail if sampler lacks __len__.\n        n = len(self.sampler)  # type: ignore[arg-type]\n        if self.drop_last:\n            return n // self.batch_size\n        return (n + self.batch_size - 1) // self.batch_size\n"
+    }
+  },
+  {
+    "gid": "p22",
+    "repo": "ext-vibetensor",
+    "band": "B_062",
+    "cosine": 0.676,
+    "struct": 0.0465,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "initial_seed",
+      "path": "python/vibetensor/torch/cuda/__init__.py",
+      "body": "\n    _ensure_cuda_available()\n    dev = int(getattr(_C, \"_cuda_current_device\", lambda: 0)()) if device is None else int(device)\n    if dev < 0 or dev >= int(_C._cuda_device_count()):  # type: ignore[attr-defined]\n        raise ValueError(\"device index out of range\")\n    return int(_C._cuda_rng_initial_seed(dev))  # type: ignore[attr-defined]\n\n"
+    },
+    "fnB": {
+      "name": "initial_seed",
+      "path": "python/vibetensor/torch/rng.py",
+      "body": "\n        if self._dev_type == \"cpu\":\n            return int(_C._rng_initial_seed())\n        return int(_C._cuda_rng_initial_seed(int(self._dev_idx)))  # type: ignore[attr-defined]\n"
+    }
+  },
+  {
+    "gid": "p23",
+    "repo": "ext-vibetensor",
+    "band": "B_062",
+    "cosine": 0.6893,
+    "struct": 0.0303,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "embedding",
+      "path": "python/vibetensor/torch/embedding.py",
+      "body": "\n    \"\"\"Gather rows from a 2D embedding matrix.\n\n    This is a thin wrapper around the dispatcher op `vt::embedding`.\n\n    Note: we intentionally materialize scalar args as *typed* CPU 0-d tensors\n    instead of relying on `vibetensor.torch.ops` scalar auto-wrapping.\n    \"\"\"\n\n    needs_grad = False\n    if sparse:\n        try:\n            from vibetensor.autograd import is_grad_enabled\n        except Exception:  # pragma: no cover\n            is_grad_enabled = lambda: False  # type: ignore[assignment]\n        needs_grad = bool(getattr(weight, \"requires_grad\", False)) and is_grad_enabled()\n\n    if sparse and needs_grad:\n        raise NotImplementedError(\n            \"vibetensor.embedding: sparse gradients are not supported\"\n        )\n\n    pad_t = _C._cpu_full([], \"int64\", int(padding_idx))\n    scale_t = _C._cpu_full([], \"bool\", bool(scale_grad_by_freq))\n    sparse_t = _C._cpu_full([], \"bool\", bool(sparse))\n    return _C._call_op(\"vt::embedding\", weight, indices, pad_t, scale_t, sparse_t)\n"
+    },
+    "fnB": {
+      "name": "embedding",
+      "path": "python/vibetensor/torch/nn/functional.py",
+      "body": "\n    \"\"\"Mirror ``torch.nn.functional.embedding``.\n\n    Notes:\n    - ``sparse=True`` is accepted for API parity, but sparse gradients are not supported.\n    - ``max_norm`` uses the dispatcher op ``vt::embedding_renorm_``.\n    \"\"\"\n\n    # --- padding_idx normalization (exact PyTorch behavior) ---\n    if padding_idx is None:\n        padding_idx_norm = -1\n    else:\n        # Prefer a canonical `.size(0)` if available; fall back to `.sizes[0]`.\n        num_embeddings = None\n        size_m = getattr(weight, \"size\", None)\n        if callable(size_m):\n            try:\n                num_embeddings = int(size_m(0))\n            except Exception:\n                num_embeddings = None\n        if num_embeddings is None:\n            num_embeddings = int(getattr(weight, \"sizes\")[0])\n\n        pad = int(padding_idx)\n        if pad < 0:\n            assert pad >= -num_embeddings, \"Padding_idx must be within num_embeddings\"\n            padding_idx_norm = num_embeddings + pad\n        else:\n            assert pad < num_embeddings, \"Padding_idx must be within num_embeddings\"\n            padding_idx_norm = pad\n\n    # --- max_norm renorm (in-place, non-differentiable) ---\n    if max_norm is not None:\n        # Match PyTorch's locality hint.\n        contig = getattr(input, \"contiguous\", None)\n        if callable(contig):\n            input = contig()\n\n        if not _C._has_op(\"vt::embedding_renorm_\"):\n            raise NotImplementedError(\n                \"vibetensor.nn.functional.embedding: max_norm is not implemented\"\n            )\n\n        max_norm_t = _C._cpu_full([], \"float32\", float(max_norm))\n        norm_type_t = _C._cpu_full([], \"float32\", float(norm_type))\n        with _A.no_grad():\n            _C._call_op(\n                \"vt::embedding_renorm_\",\n                weight.detach(),\n                input,\n                max_norm_t,\n                norm_type_t,\n            )\n\n    return _embedding(\n        weight,\n        input,\n        padding_idx=padding_idx_norm,\n        scale_grad_by_freq=scale_grad_by_freq,\n        sparse=sparse,\n    )\n"
+    }
+  },
+  {
+    "gid": "p24",
+    "repo": "ext-vibetensor",
+    "band": "B_062",
+    "cosine": 0.7182,
+    "struct": 0.1774,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "set_rng_state",
+      "path": "python/vibetensor/torch/cuda/__init__.py",
+      "body": "\n    _ensure_cuda_available()\n    if not isinstance(state, (bytes, bytearray)):\n        raise TypeError(\"state must be a bytes object\")\n    dev = int(getattr(_C, \"_cuda_current_device\", lambda: 0)()) if device is None else int(device)\n    if dev < 0 or dev >= int(_C._cuda_device_count()):  # type: ignore[attr-defined]\n        raise ValueError(\"device index out of range\")\n    _C._cuda_rng_set_state(dev, bytes(state))  # type: ignore[attr-defined]\n\n"
+    },
+    "fnB": {
+      "name": "set_state",
+      "path": "python/vibetensor/torch/rng.py",
+      "body": "\n        if not isinstance(state, (bytes, bytearray)):\n            raise TypeError(\"state must be a bytes object\")\n        if self._dev_type == \"cpu\":\n            _C._rng_set_state(bytes(state))\n        else:\n            _C._cuda_rng_set_state(int(self._dev_idx), bytes(state))  # type: ignore[attr-defined]\n\n"
+    }
+  },
+  {
+    "gid": "p25",
+    "repo": "ext-vibetensor",
+    "band": "B_062",
+    "cosine": 0.6339,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "manual_seed",
+      "path": "python/vibetensor/torch/cuda/__init__.py",
+      "body": "\n    _ensure_cuda_available()\n    cur = int(getattr(_C, \"_cuda_current_device\", lambda: 0)())\n    _C._cuda_rng_manual_seed(cur, int(seed))  # type: ignore[attr-defined]\n\n"
+    },
+    "fnB": {
+      "name": "manual_seed",
+      "path": "python/vibetensor/torch/rng.py",
+      "body": "\n        if self._dev_type == \"cpu\":\n            _C._rng_manual_seed(int(seed))\n        else:\n            _C._cuda_rng_manual_seed(int(self._dev_idx), int(seed))  # type: ignore[attr-defined]\n"
+    }
+  },
+  {
+    "gid": "p26",
+    "repo": "ext-vibetensor",
+    "band": "B_062",
+    "cosine": 0.6246,
+    "struct": 0.0833,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_is_cpu_tensor",
+      "path": "python/vibetensor/torch/utils/data/pin_memory.py",
+      "body": "\n    dev = getattr(t, \"device\", None)\n    try:\n        return int(dev[0]) == 1\n    except Exception:\n        # Conservative: treat unknown device formats as non-CPU.\n        return False\n\n"
+    },
+    "fnB": {
+      "name": "_is_cpu_tensor_like",
+      "path": "python/vibetensor/triton.py",
+      "body": "\n    dev = getattr(obj, \"device\", None)\n    if not isinstance(dev, (tuple, list)) or len(dev) < 2:\n        return False\n    try:\n        dev_type = int(dev[0])\n    except Exception:\n        return False\n    return dev_type == _KDLCPU\n\n"
+    }
+  },
+  {
+    "gid": "p27",
+    "repo": "ext-vibetensor",
+    "band": "B_062",
+    "cosine": 0.6715,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "manual_seed",
+      "path": "python/vibetensor/torch/cuda/__init__.py",
+      "body": "\n    _ensure_cuda_available()\n    cur = int(getattr(_C, \"_cuda_current_device\", lambda: 0)())\n    _C._cuda_rng_manual_seed(cur, int(seed))  # type: ignore[attr-defined]\n\n"
+    },
+    "fnB": {
+      "name": "manual_seed",
+      "path": "python/vibetensor/torch/rng.py",
+      "body": "\n    \"\"\"Set CPU and all CUDA default RNG seeds to `seed` and reset offsets to 0.\n\n    Returns the seed. When CUDA is available, reseeds each device via\n    ``_C._cuda_rng_manual_seed``. If a device is participating in an active\n    CUDA Graph capture, the guarded binding raises and this function\n    re-raises that error instead of silently skipping the device.\n    \"\"\"\n    s = int(_C._rng_manual_seed(int(seed)))\n    if getattr(_C, \"_has_cuda\", False):\n        try:\n            n = int(_C._cuda_device_count())  # type: ignore[attr-defined]\n        except Exception:\n            n = 0\n        for k in range(max(0, n)):\n            try:\n                _C._cuda_rng_manual_seed(k, s)  # type: ignore[attr-defined]\n            except Exception as exc:\n                if _is_cuda_rng_guard_error(exc):\n                    # Do not silently skip guard errors; surface them.\n                    raise\n                # Best-effort: skip devices that fail for other reasons.\n                pass\n    return s\n\n"
+    }
+  },
+  {
+    "gid": "p28",
+    "repo": "ext-vibetensor",
+    "band": "B_062",
+    "cosine": 0.6663,
+    "struct": 0.0444,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_normalize_backward_tensors",
+      "path": "python/vibetensor/autograd.py",
+      "body": "\n    \"\"\"Normalize `tensors` for `vibetensor.autograd.backward`.\n\n    - Accepts `_C.Tensor` or non-empty `Sequence` of `_C.Tensor`.\n    - Rejects empty sequences (MB4.f) and non-tensor entries (MB4.a/b).\n    - Returns a non-empty tuple of `_C.Tensor`.\n    \"\"\"\n\n    return _as_tensor_sequence(\n        tensors,\n        api_name=\"autograd.backward\",\n        arg_name=\"tensors\",\n        allow_empty=False,\n    )\n\n"
+    },
+    "fnB": {
+      "name": "_as_tensor_sequence_for_multi",
+      "path": "python/vibetensor/autograd_graph.py",
+      "body": "\n    if isinstance(value, _Tensor):\n        return (value,)\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        seq = tuple(value)\n        if not seq:\n            raise RuntimeError(\n                f\"register_multi_grad_hook: {arg_name} must be a non-empty sequence\"\n            )\n        for x in seq:\n            if not isinstance(x, _Tensor):\n                raise TypeError(\n                    \"register_multi_grad_hook: tensors must be VibeTensor `_C.Tensor` objects\"\n                )\n        return seq\n    raise TypeError(\n        \"register_multi_grad_hook: tensors must be a VibeTensor tensor or a non-empty sequence of tensors\"\n    )\n\n"
+    }
+  },
+  {
+    "gid": "p29",
+    "repo": "ext-vibetensor",
+    "band": "B_052",
+    "cosine": 0.6099,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_normalize_outputs_arg",
+      "path": "python/vibetensor/autograd.py",
+      "body": "\n    \"\"\"Normalize `outputs` for `vibetensor.autograd.grad`.\n\n    This delegates container/type checks to `_as_tensor_sequence`.\n    \"\"\"\n\n    return _as_tensor_sequence(\n        outputs,\n        api_name=\"autograd.grad\",\n        arg_name=\"outputs\",\n        allow_empty=False,\n    )\n\n"
+    },
+    "fnB": {
+      "name": "_as_tensor_sequence_for_multi",
+      "path": "python/vibetensor/autograd_graph.py",
+      "body": "\n    if isinstance(value, _Tensor):\n        return (value,)\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        seq = tuple(value)\n        if not seq:\n            raise RuntimeError(\n                f\"register_multi_grad_hook: {arg_name} must be a non-empty sequence\"\n            )\n        for x in seq:\n            if not isinstance(x, _Tensor):\n                raise TypeError(\n                    \"register_multi_grad_hook: tensors must be VibeTensor `_C.Tensor` objects\"\n                )\n        return seq\n    raise TypeError(\n        \"register_multi_grad_hook: tensors must be a VibeTensor tensor or a non-empty sequence of tensors\"\n    )\n\n"
+    }
+  },
+  {
+    "gid": "p30",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatArgs",
+      "path": "src/components/InlineToolConfirmation.tsx",
+      "body": "\n    if (!args || args.length === 0) return 'No arguments';\n    if (args.length === 1) return args[0];\n    return args.map((arg, i) => `${i + 1}. ${arg}`).join('\\n');\n  }"
+    },
+    "fnB": {
+      "name": "formatArgs",
+      "path": "src/components/InlineToolExecution.tsx",
+      "body": "\n    if (!args || args.length === 0) return 'No arguments';\n    if (args.length === 1) return args[0];\n    return args.map((arg, i) => `${i + 1}. ${arg}`).join('\\n');\n  }"
+    }
+  },
+  {
+    "gid": "p31",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 0.9336,
+    "struct": 0.4706,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "CommandShortcut",
+      "path": "src/components/ui/command.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    },
+    "fnB": {
+      "name": "DropdownMenuShortcut",
+      "path": "src/components/ui/dropdown-menu.tsx",
+      "body": "\n  return (\n    <span className={cn('ml-auto text-xs tracking-widest opacity-60', className)} {...props} />\n  );\n}"
+    }
+  },
+  {
+    "gid": "p32",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "CommandShortcut",
+      "path": "src/components/ui/command.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    },
+    "fnB": {
+      "name": "ContextMenuShortcut",
+      "path": "src/components/ui/context-menu.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    }
+  },
+  {
+    "gid": "p33",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 0.9336,
+    "struct": 0.4706,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "ContextMenuShortcut",
+      "path": "src/components/ui/context-menu.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    },
+    "fnB": {
+      "name": "DropdownMenuShortcut",
+      "path": "src/components/ui/dropdown-menu.tsx",
+      "body": "\n  return (\n    <span className={cn('ml-auto text-xs tracking-widest opacity-60', className)} {...props} />\n  );\n}"
+    }
+  },
+  {
+    "gid": "p34",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 0.9336,
+    "struct": 0.4706,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "DropdownMenuShortcut",
+      "path": "src/components/ui/dropdown-menu.tsx",
+      "body": "\n  return (\n    <span className={cn('ml-auto text-xs tracking-widest opacity-60', className)} {...props} />\n  );\n}"
+    },
+    "fnB": {
+      "name": "MenubarShortcut",
+      "path": "src/components/ui/menubar.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    }
+  },
+  {
+    "gid": "p35",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "ContextMenuShortcut",
+      "path": "src/components/ui/context-menu.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    },
+    "fnB": {
+      "name": "MenubarShortcut",
+      "path": "src/components/ui/menubar.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    }
+  },
+  {
+    "gid": "p36",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "CommandShortcut",
+      "path": "src/components/ui/command.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    },
+    "fnB": {
+      "name": "MenubarShortcut",
+      "path": "src/components/ui/menubar.tsx",
+      "body": "\n  return (\n    <span\n      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}\n      {...props}\n    />\n  );\n}"
+    }
+  },
+  {
+    "gid": "p37",
+    "repo": "ext-gptme-webui",
+    "band": "C_high",
+    "cosine": 0.9934,
+    "struct": 0.5417,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "getStatusIcon",
+      "path": "src/components/TaskDetails.tsx",
+      "body": "\n    switch (status) {\n      case 'pending':\n        return <Clock className=\"h-5 w-5 text-yellow-500\" />;\n      case 'active':\n        return <RefreshCw className=\"h-5 w-5 animate-spin text-blue-500\" />;\n      case 'completed':\n        return <CheckCircle className=\"h-5 w-5 text-green-500\" />;\n      case 'failed':\n        return <XCircle className=\"h-5 w-5 text-red-500\" />;\n    }\n  }"
+    },
+    "fnB": {
+      "name": "getStatusIcon",
+      "path": "src/components/UnifiedSidebar.tsx",
+      "body": "\n    switch (status) {\n      case 'pending':\n        return <Clock className=\"h-3 w-3 text-yellow-500\" />;\n      case 'active':\n        return <RefreshCw className=\"h-3 w-3 animate-spin text-blue-500\" />;\n      case 'completed':\n        return <CheckCircle className=\"h-3 w-3 text-green-500\" />;\n      case 'failed':\n        return <XCircle className=\"h-3 w-3 text-red-500\" />;\n    }\n  }"
+    }
+  },
+  {
+    "gid": "p38",
+    "repo": "ext-gptme-webui",
+    "band": "C_mid",
+    "cosine": 0.7774,
+    "struct": 0.28,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "useCarousel",
+      "path": "src/components/ui/carousel.tsx",
+      "body": "\n  const context = React.useContext(CarouselContext);\n\n  if (!context) {\n    throw new Error('useCarousel must be used within a <Carousel />');\n  }\n\n  return context;\n}"
+    },
+    "fnB": {
+      "name": "useChart",
+      "path": "src/components/ui/chart.tsx",
+      "body": "\n  const context = React.useContext(ChartContext);\n\n  if (!context) {\n    throw new Error('useChart must be used within a <ChartContainer />');\n  }\n\n  return context;\n}"
+    }
+  },
+  {
+    "gid": "p39",
+    "repo": "ext-gptme-webui",
+    "band": "C_mid",
+    "cosine": 0.7662,
+    "struct": 0.24,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "useApi",
+      "path": "src/contexts/ApiContext.tsx",
+      "body": "\n  const context = useContext(ApiContext);\n  if (!context) {\n    throw new Error('useApi must be used within an ApiProvider');\n  }\n  return context;\n}"
+    },
+    "fnB": {
+      "name": "useSettings",
+      "path": "src/contexts/SettingsContext.tsx",
+      "body": "\n  const context = useContext(SettingsContext);\n  if (!context) {\n    throw new Error('useSettings must be used within a SettingsProvider');\n  }\n  return context;\n}"
+    }
+  },
+  {
+    "gid": "p40",
+    "repo": "ext-gptme-webui",
+    "band": "C_mid",
+    "cosine": 0.8319,
+    "struct": 0.0517,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "getRelativeTime",
+      "path": "src/components/TaskDetails.tsx",
+      "body": "\n    const now = new Date();\n    const diff = now.getTime() - date.getTime();\n    const minutes = Math.floor(diff / (1000 * 60));\n    const hours = Math.floor(minutes / 60);\n    const days = Math.floor(hours / 24);\n\n    if (minutes < 1) return 'just now';\n    if (minutes < 60) return `${minutes}m ago`;\n    if (hours < 24) return `${hours}h ago`;\n    return `${days}d ago`;\n  }"
+    },
+    "fnB": {
+      "name": "getRelativeTimeString",
+      "path": "src/utils/time.ts",
+      "body": "\n  const now = new Date();\n  const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);\n\n  if (diffInSeconds < 60) {\n    return 'just now';\n  }\n\n  const diffInMinutes = Math.floor(diffInSeconds / 60);\n  if (diffInMinutes < 60) {\n    return `${diffInMinutes}min ago`;\n  }\n\n  const diffInHours = Math.floor(diffInMinutes / 60);\n  if (diffInHours < 24) {\n    return `${diffInHours}h ago`;\n  }\n\n  const diffInDays = Math.floor(diffInHours / 24);\n  if (diffInDays === 1) {\n    return 'yesterday';\n  }\n  if (diffInDays < 7) {\n    return `${diffInDays}d ago`;\n  }\n\n  const diffInWeeks = Math.floor(diffInDays / 7);\n  if (diffInWeeks < 4) {\n    return `${diffInWeeks}w ago`;\n  }\n\n  return date.toLocaleDateString();\n}"
+    }
+  },
+  {
+    "gid": "p41",
+    "repo": "ext-gptme-webui",
+    "band": "B_062",
+    "cosine": 0.6262,
+    "struct": 0.1923,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "useChart",
+      "path": "src/components/ui/chart.tsx",
+      "body": "\n  const context = React.useContext(ChartContext);\n\n  if (!context) {\n    throw new Error('useChart must be used within a <ChartContainer />');\n  }\n\n  return context;\n}"
+    },
+    "fnB": {
+      "name": "useSettings",
+      "path": "src/contexts/SettingsContext.tsx",
+      "body": "\n  const context = useContext(SettingsContext);\n  if (!context) {\n    throw new Error('useSettings must be used within a SettingsProvider');\n  }\n  return context;\n}"
+    }
+  },
+  {
+    "gid": "p42",
+    "repo": "ext-gptme-webui",
+    "band": "B_062",
+    "cosine": 0.6625,
+    "struct": 0.1852,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "useChart",
+      "path": "src/components/ui/chart.tsx",
+      "body": "\n  const context = React.useContext(ChartContext);\n\n  if (!context) {\n    throw new Error('useChart must be used within a <ChartContainer />');\n  }\n\n  return context;\n}"
+    },
+    "fnB": {
+      "name": "useApi",
+      "path": "src/contexts/ApiContext.tsx",
+      "body": "\n  const context = useContext(ApiContext);\n  if (!context) {\n    throw new Error('useApi must be used within an ApiProvider');\n  }\n  return context;\n}"
+    }
+  },
+  {
+    "gid": "p43",
+    "repo": "ext-gptme-webui",
+    "band": "B_052",
+    "cosine": 0.588,
+    "struct": 0.1923,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "useCarousel",
+      "path": "src/components/ui/carousel.tsx",
+      "body": "\n  const context = React.useContext(CarouselContext);\n\n  if (!context) {\n    throw new Error('useCarousel must be used within a <Carousel />');\n  }\n\n  return context;\n}"
+    },
+    "fnB": {
+      "name": "useSettings",
+      "path": "src/contexts/SettingsContext.tsx",
+      "body": "\n  const context = useContext(SettingsContext);\n  if (!context) {\n    throw new Error('useSettings must be used within a SettingsProvider');\n  }\n  return context;\n}"
+    }
+  },
+  {
+    "gid": "p44",
+    "repo": "ext-gptme-webui",
+    "band": "B_052",
+    "cosine": 0.5295,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "EnvironmentVariables",
+      "path": "src/components/settings/EnvironmentVariables.tsx",
+      "body": "\n  const [newEnvKey, setNewEnvKey] = useState('');\n  const [newEnvValue, setNewEnvValue] = useState('');\n  const { fields, append, remove } = fieldArray;\n\n  const handleAddEnvVar = () => {\n    const trimmedKey = newEnvKey.trim();\n    if (trimmedKey) {\n      append({ key: trimmedKey, value: newEnvValue });\n      setNewEnvKey('');\n      setNewEnvValue('');\n    }\n  };\n\n  return (\n    <FormItem className={className}>\n      <FormLabel>Environment Variables</FormLabel>\n      <div className=\"space-y-2\">\n        {fields.map((field, index) => (\n          <div key={field.id} className=\"flex items-center space-x-2\">\n            <Input\n              placeholder=\"Key\"\n              {...form.register(`chat.env.${index}.key`)}\n              className=\"w-1/3\"\n              disabled={isSubmitting}\n            />\n            <Input\n              placeholder=\"Value\"\n              {...form.register(`chat.env.${index}.value`)}\n              className=\"flex-grow\"\n              disabled={isSubmitting}\n            />\n            <Button\n              type=\"button\"\n              variant=\"ghost\"\n              size=\"icon\"\n              onClick={() => remove(index)}\n              disabled={isSubmitting}\n              aria-label=\"Remove variable\"\n            >\n              <X className=\"h-4 w-4\" />\n            </Button>\n          </div>\n        ))}\n      </div>\n      <div className=\"mt-2 flex items-center space-x-2\">\n        <Input\n          placeholder=\"Key\"\n          value={newEnvKey}\n          onChange={(e) => setNewEnvKey(e.target.value)}\n          disabled={isSubmitting}\n          className=\"w-1/3\"\n        />\n        <Input\n          placeholder=\"Value\"\n          value={newEnvValue}\n          onChange={(e) => setNewEnvValue(e.target.value)}\n          disabled={isSubmitting}\n          className=\"flex-grow\"\n          onKeyDown={(e) => {\n            if (e.key === 'Enter') {\n              e.preventDefault();\n              handleAddEnvVar();\n            }\n          }}\n        />\n        <Button\n          type=\"button\"\n          variant=\"ghost\"\n          size=\"icon\"\n          onClick={handleAddEnvVar}\n          disabled={!newEnvKey.trim() || isSubmitting}\n          aria-label=\"Add variable\"\n        >\n          <Plus className=\"h-4 w-4\" />\n        </Button>\n      </div>\n      {description && <FormDescription>{description}</FormDescription>}\n      {form.formState.errors.chat?.env && (\n        <FormMessage>{form.formState.errors.chat.env.message}</FormMessage>\n      )}\n    </FormItem>\n  );\n}"
+    },
+    "fnB": {
+      "name": "handleAddServerEnvVar",
+      "path": "src/components/settings/McpConfiguration.tsx",
+      "body": "\n    const inputState = newServerEnvInputs[serverIndex];\n    if (inputState && inputState.key.trim()) {\n      const fieldArrayName = `mcp.servers.${serverIndex}.env` as const;\n      const currentServerEnv = form.getValues(fieldArrayName) || [];\n      update(serverIndex, {\n        ...form.getValues(`mcp.servers.${serverIndex}`),\n        env: [...currentServerEnv, { key: inputState.key.trim(), value: inputState.value }],\n      });\n\n      setNewServerEnvInputs((prev) => ({\n        ...prev,\n        [serverIndex]: { key: '', value: '' },\n      }));\n    }\n  }"
+    }
+  },
+  {
+    "gid": "p45",
+    "repo": "ext-gptme-webui",
+    "band": "B_052",
+    "cosine": 0.5468,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "Toaster",
+      "path": "src/components/ui/sonner.tsx",
+      "body": "\n  const { theme = 'system' } = useTheme();\n\n  return (\n    <Sonner\n      theme={theme as ToasterProps['theme']}\n      className=\"toaster group\"\n      toastOptions={{\n        classNames: {\n          toast:\n            'group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',\n          description: 'group-[.toast]:text-muted-foreground',\n          actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',\n          cancelButton: 'group-[.toast]:bg-muted group-[.toast]:text-muted-foreground',\n        },\n      }}\n      {...props}\n    />\n  );\n}"
+    },
+    "fnB": {
+      "name": "Toaster",
+      "path": "src/components/ui/toaster.tsx",
+      "body": "\n  const { toasts } = useToast();\n\n  return (\n    <ToastProvider>\n      {toasts.map(function ({ id, title, description, action, ...props }) {\n        return (\n          <Toast key={id} {...props}>\n            <div className=\"grid gap-1\">\n              {title && <ToastTitle>{title}</ToastTitle>}\n              {description && <ToastDescription>{description}</ToastDescription>}\n            </div>\n            {action}\n            <ToastClose />\n          </Toast>\n        );\n      })}\n      <ToastViewport />\n    </ToastProvider>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p46",
+    "repo": "ext-gptme-webui",
+    "band": "B_042",
+    "cosine": 0.4817,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "handleAddEnvVar",
+      "path": "src/components/settings/EnvironmentVariables.tsx",
+      "body": "\n    const trimmedKey = newEnvKey.trim();\n    if (trimmedKey) {\n      append({ key: trimmedKey, value: newEnvValue });\n      setNewEnvKey('');\n      setNewEnvValue('');\n    }\n  }"
+    },
+    "fnB": {
+      "name": "handleAddServerEnvVar",
+      "path": "src/components/settings/McpConfiguration.tsx",
+      "body": "\n    const inputState = newServerEnvInputs[serverIndex];\n    if (inputState && inputState.key.trim()) {\n      const fieldArrayName = `mcp.servers.${serverIndex}.env` as const;\n      const currentServerEnv = form.getValues(fieldArrayName) || [];\n      update(serverIndex, {\n        ...form.getValues(`mcp.servers.${serverIndex}`),\n        env: [...currentServerEnv, { key: inputState.key.trim(), value: inputState.value }],\n      });\n\n      setNewServerEnvInputs((prev) => ({\n        ...prev,\n        [serverIndex]: { key: '', value: '' },\n      }));\n    }\n  }"
+    }
+  },
+  {
+    "gid": "p47",
+    "repo": "ext-gptme-webui",
+    "band": "B_032",
+    "cosine": 0.3817,
+    "struct": 0.0823,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "formatArgs",
+      "path": "src/components/InlineToolConfirmation.tsx",
+      "body": "\n    if (!args || args.length === 0) return 'No arguments';\n    if (args.length === 1) return args[0];\n    return args.map((arg, i) => `${i + 1}. ${arg}`).join('\\n');\n  }"
+    },
+    "fnB": {
+      "name": "InlineToolExecution",
+      "path": "src/components/InlineToolExecution.tsx",
+      "body": "\n  const executingTool = use$(executingTool$);\n\n  // Format args for display\n  const formatArgs = (args: string[]) => {\n    if (!args || args.length === 0) return 'No arguments';\n    if (args.length === 1) return args[0];\n    return args.map((arg, i) => `${i + 1}. ${arg}`).join('\\n');\n  };\n\n  if (!executingTool) return null;\n\n  return (\n    <div className=\"role-system mb-4 mt-4\">\n      <div className=\"mx-auto max-w-3xl px-4\">\n        <div className=\"relative\">\n          <MessageAvatar\n            role$={observable('system' as const)}\n            isError$={observable(false)}\n            isSuccess$={observable(false)}\n            chainType$={observable('standalone' as const)}\n          />\n          <div className=\"md:px-12\">\n            <div className=\"rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20\">\n              <div className=\"border-b border-blue-200 px-4 py-3 dark:border-blue-800\">\n                <div className=\"flex items-center gap-2\">\n                  <Loader2 className=\"h-4 w-4 animate-spin text-blue-600 dark:text-blue-400\" />\n                  <h3 className=\"font-medium text-blue-800 dark:text-blue-200\">Tool Executing</h3>\n                </div>\n                <p className=\"mt-1 text-sm text-blue-700 dark:text-blue-300\">\n                  The assistant is currently using\n                  <code className=\"rounded bg-muted px-2 py-1 font-mono text-sm\">\n                    {executingTool.tooluse.tool}\n                  </code>\n                  <Cog className=\"h-4 w-4 animate-spin text-blue-600 dark:text-blue-400\" />\n                </p>\n              </div>\n\n              <div className=\"space-y-4 p-4\">\n                {/* Arguments */}\n                {executingTool.tooluse.args.length > 0 && (\n                  <div className=\"space-y-2\">\n                    <span className=\"text-sm font-medium text-muted-foreground\">Arguments:</span>\n                    <CodeDisplay\n                      code={formatArgs(executingTool.tooluse.args)}\n                      maxHeight=\"120px\"\n                      showLineNumbers={false}\n                    />\n                  </div>\n                )}\n\n                {/* Code */}\n                <div className=\"space-y-2\">\n                  <CodeDisplay\n                    code={executingTool.tooluse.content}\n                    maxHeight=\"240px\"\n                    showLineNumbers={true}\n                    language={detectToolLanguage(\n                      executingTool.tooluse.tool,\n                      executingTool.tooluse.args,\n                      executingTool.tooluse.content\n                    )}\n                  />\n                </div>\n\n                {/* Status indicator */}\n                <div className=\"flex items-center gap-2 border-t border-blue-200 pt-3 dark:border-blue-800\">\n                  <Loader2 className=\"h-4 w-4 animate-spin text-blue-600 dark:text-blue-400\" />\n                  <span className=\"text-sm text-blue-700 dark:text-blue-300\">\n                    Executing tool...\n                  </span>\n                </div>\n              </div>\n            </div>\n          </div>\n        </div>\n      </div>\n    </div>\n  );\n}"
+    }
+  },
+  {
+    "gid": "p48",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8694,
+    "struct": 0.1892,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/google.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        \n        from google.generativeai.types import GenerationConfig\n        generation_config = GenerationConfig(\n            candidate_count=self.parameters.get(\"candidate_count\", 1),\n            max_output_tokens=self.parameters.get(\"max_tokens\", 8192),\n            temperature=self.parameters.get(\"temperature\", 0.8),\n        )\n\n        try:\n            with SuppressLogging():\n                response = await asyncio.to_thread(\n                    self.chat.send_message,\n                    message,\n                    generation_config=generation_config,\n                    stream=False  # Google API doesn't support streaming\n                )\n\n            complete_message = response.text\n            formatted_message = self.format_message(complete_message)\n            self.add_to_history(\"assistant\", formatted_message)\n            \n            # Simulate streaming by yielding chunks\n            chunk_size = 4  # Adjust this value to control the streaming speed\n            for i in range(0, len(complete_message), chunk_size):\n                yield complete_message[i:i+chunk_size]\n                await asyncio.sleep(0.01)  # Add a small delay between chunks\n            \n            if self.parameters.get(\"verbose\", False):\n                tokens = self.calculate_tokens(formatted_message)\n                total_tokens = self.calculate_total_tokens()\n                console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n            \n            yield None  # Signal end of streaming\n        except Exception as e:\n            error_message = f\"Error in Google API: {str(e)}\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/ollama.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"options\": {k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            response_json = json.loads(line)\n                            message_content = response_json.get('message', {}).get('content', '')\n                            if message_content:\n                                complete_message += message_content\n                                yield message_content  # Always yield the content\n                                if response_json.get('done', False):\n                                    break\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p49",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8666,
+    "struct": 0.2105,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "calculate_tokens",
+      "path": "providers/base.py",
+      "body": "\n        \"\"\"Calculate the number of tokens in a text.\"\"\"\n        return self.tokenizer_manager.calculate_tokens(text)\n"
+    },
+    "fnB": {
+      "name": "calculate_tokens",
+      "path": "utils/tokenizer.py",
+      "body": "\n        \"\"\"Calculate the number of tokens in the given text.\"\"\"\n        return len(self.tokenizer.encode(text))\n"
+    }
+  },
+  {
+    "gid": "p50",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8742,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "select_openai_model",
+      "path": "app/session_manager.py",
+      "body": "\n        return await self.select_model_for_provider(\"OpenAI\")\n    "
+    },
+    "fnB": {
+      "name": "get_model",
+      "path": "providers/provider_config.py",
+      "body": "\n        return await chat_app.session_manager.select_model_for_provider(\"OpenAI\")\n    "
+    }
+  },
+  {
+    "gid": "p51",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8786,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "select_anthropic_model",
+      "path": "app/session_manager.py",
+      "body": "\n        return await self.select_model_for_provider(\"Anthropic\")\n    "
+    },
+    "fnB": {
+      "name": "get_model",
+      "path": "providers/provider_config.py",
+      "body": "\n        return await chat_app.session_manager.select_model_for_provider(\"Anthropic\")\n    "
+    }
+  },
+  {
+    "gid": "p52",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.9453,
+    "struct": 0.5117,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openrouter.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"Authorization\": f\"Bearer {self.api_key}\",\n            \"X-Title\": \"Retrochat-v2\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(\"https://openrouter.ai/api/v1/chat/completions\", headers=headers, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            line = line.decode('utf-8').strip()\n                            if line.startswith(\"data: \"):\n                                if line == \"data: [DONE]\":\n                                    break\n                                json_str = line[6:]\n                                try:\n                                    response_json = json.loads(json_str)\n                                    content = response_json['choices'][0]['delta'].get('content', '')\n                                    if content:\n                                        complete_message += content\n                                        yield content\n                                except json.JSONDecodeError:\n                                    continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p53",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.9556,
+    "struct": 0.5417,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/ollama.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"options\": {k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            response_json = json.loads(line)\n                            message_content = response_json.get('message', {}).get('content', '')\n                            if message_content:\n                                complete_message += message_content\n                                yield message_content  # Always yield the content\n                                if response_json.get('done', False):\n                                    break\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    }
+  },
+  {
+    "gid": "p54",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8557,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "select_ollama_model",
+      "path": "app/session_manager.py",
+      "body": "\n        return await self.select_model_for_provider(\"Ollama\")\n    "
+    },
+    "fnB": {
+      "name": "get_model",
+      "path": "providers/provider_config.py",
+      "body": "\n        return await chat_app.session_manager.select_model_for_provider(\"Ollama\")\n    "
+    }
+  },
+  {
+    "gid": "p55",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.9081,
+    "struct": 0.2691,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/anthropic.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = self.prepare_messages()\n        \n        if not messages:\n            error_message = \"Error: No valid messages to send to the API.\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n            return\n\n        data = {\n            \"model\": self.model,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"messages\": messages,\n            \"stream\": False\n        }\n\n        if self.system_message:\n            data[\"system\"] = self.system_message\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"x-api-key\": self.api_key,\n            \"anthropic-version\": \"2023-06-01\",\n            \"anthropic-beta\": \"max-tokens-3-5-sonnet-2024-07-15\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data, headers=headers) as response:\n                if response.status == 200:\n                    response_json = await response.json()\n                    assistant_message = response_json.get('content', [{}])[0].get('text', '')\n                    if assistant_message:\n                        formatted_message = self.format_message(assistant_message)\n                        self.add_to_history(\"assistant\", formatted_message)\n                        if self.parameters.get(\"verbose\", False):\n                            tokens = self.calculate_tokens(formatted_message)\n                            total_tokens = self.calculate_total_tokens()\n                            console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                            console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                        yield formatted_message\n                    else:\n                        error_message = \"No response content received.\"\n                        console.print(error_message, style=\"bold red\")\n                        yield error_message\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/ollama.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"options\": {k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            response_json = json.loads(line)\n                            message_content = response_json.get('message', {}).get('content', '')\n                            if message_content:\n                                complete_message += message_content\n                                yield message_content  # Always yield the content\n                                if response_json.get('done', False):\n                                    break\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p56",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8549,
+    "struct": 0.1733,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/google.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        \n        from google.generativeai.types import GenerationConfig\n        generation_config = GenerationConfig(\n            candidate_count=self.parameters.get(\"candidate_count\", 1),\n            max_output_tokens=self.parameters.get(\"max_tokens\", 8192),\n            temperature=self.parameters.get(\"temperature\", 0.8),\n        )\n\n        try:\n            with SuppressLogging():\n                response = await asyncio.to_thread(\n                    self.chat.send_message,\n                    message,\n                    generation_config=generation_config,\n                    stream=False  # Google API doesn't support streaming\n                )\n\n            complete_message = response.text\n            formatted_message = self.format_message(complete_message)\n            self.add_to_history(\"assistant\", formatted_message)\n            \n            # Simulate streaming by yielding chunks\n            chunk_size = 4  # Adjust this value to control the streaming speed\n            for i in range(0, len(complete_message), chunk_size):\n                yield complete_message[i:i+chunk_size]\n                await asyncio.sleep(0.01)  # Add a small delay between chunks\n            \n            if self.parameters.get(\"verbose\", False):\n                tokens = self.calculate_tokens(formatted_message)\n                total_tokens = self.calculate_total_tokens()\n                console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n            \n            yield None  # Signal end of streaming\n        except Exception as e:\n            error_message = f\"Error in Google API: {str(e)}\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    }
+  },
+  {
+    "gid": "p57",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8668,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "select_openrouter_model",
+      "path": "app/session_manager.py",
+      "body": "\n        return await self.select_model_for_provider(\"OpenRouter\")\n    "
+    },
+    "fnB": {
+      "name": "get_model",
+      "path": "providers/provider_config.py",
+      "body": "\n        return await chat_app.session_manager.select_model_for_provider(\"OpenRouter\")\n    "
+    }
+  },
+  {
+    "gid": "p58",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.8883,
+    "struct": 0.2527,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/anthropic.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = self.prepare_messages()\n        \n        if not messages:\n            error_message = \"Error: No valid messages to send to the API.\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n            return\n\n        data = {\n            \"model\": self.model,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"messages\": messages,\n            \"stream\": False\n        }\n\n        if self.system_message:\n            data[\"system\"] = self.system_message\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"x-api-key\": self.api_key,\n            \"anthropic-version\": \"2023-06-01\",\n            \"anthropic-beta\": \"max-tokens-3-5-sonnet-2024-07-15\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data, headers=headers) as response:\n                if response.status == 200:\n                    response_json = await response.json()\n                    assistant_message = response_json.get('content', [{}])[0].get('text', '')\n                    if assistant_message:\n                        formatted_message = self.format_message(assistant_message)\n                        self.add_to_history(\"assistant\", formatted_message)\n                        if self.parameters.get(\"verbose\", False):\n                            tokens = self.calculate_tokens(formatted_message)\n                            total_tokens = self.calculate_total_tokens()\n                            console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                            console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                        yield formatted_message\n                    else:\n                        error_message = \"No response content received.\"\n                        console.print(error_message, style=\"bold red\")\n                        yield error_message\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openrouter.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"Authorization\": f\"Bearer {self.api_key}\",\n            \"X-Title\": \"Retrochat-v2\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(\"https://openrouter.ai/api/v1/chat/completions\", headers=headers, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            line = line.decode('utf-8').strip()\n                            if line.startswith(\"data: \"):\n                                if line == \"data: [DONE]\":\n                                    break\n                                json_str = line[6:]\n                                try:\n                                    response_json = json.loads(json_str)\n                                    content = response_json['choices'][0]['delta'].get('content', '')\n                                    if content:\n                                        complete_message += content\n                                        yield content\n                                except json.JSONDecodeError:\n                                    continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p59",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.9173,
+    "struct": 0.4746,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/lmstudio.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Prepare request data\n        json_data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"top_p\": self.parameters.get(\"top_p\", 0.95),\n            \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n            \"presence_penalty\": self.parameters.get(\"presence_penalty\", 0.0),\n        }\n\n        # Add stop parameter if it's set\n        if self.parameters.get(\"stop\"):\n            json_data[\"stop\"] = self.parameters[\"stop\"]\n\n        # Create request configuration\n        config = RequestConfig(\n            url=f\"{self.base_url}/v1/chat/completions\",\n            headers={\"Content-Type\": \"application/json\"},\n            json_data=json_data,\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openai.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Create request configuration\n        config = RequestConfig(\n            url=self.base_url,\n            headers={\n                \"Content-Type\": \"application/json\",\n                \"Authorization\": f\"Bearer {self.api_key}\"\n            },\n            json_data={\n                \"model\": self.model,\n                \"messages\": messages,\n                \"temperature\": self.parameters.get(\"temperature\", 0.8),\n                \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n                \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n                \"stream\": True\n            },\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk\n"
+    }
+  },
+  {
+    "gid": "p60",
+    "repo": "ext-retrochat",
+    "band": "C_high",
+    "cosine": 0.9592,
+    "struct": 0.5047,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/ollama.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"options\": {k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            response_json = json.loads(line)\n                            message_content = response_json.get('message', {}).get('content', '')\n                            if message_content:\n                                complete_message += message_content\n                                yield message_content  # Always yield the content\n                                if response_json.get('done', False):\n                                    break\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openrouter.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"Authorization\": f\"Bearer {self.api_key}\",\n            \"X-Title\": \"Retrochat-v2\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(\"https://openrouter.ai/api/v1/chat/completions\", headers=headers, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            line = line.decode('utf-8').strip()\n                            if line.startswith(\"data: \"):\n                                if line == \"data: [DONE]\":\n                                    break\n                                json_str = line[6:]\n                                try:\n                                    response_json = json.loads(json_str)\n                                    content = response_json['choices'][0]['delta'].get('content', '')\n                                    if content:\n                                        complete_message += content\n                                        yield content\n                                except json.JSONDecodeError:\n                                    continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p61",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7209,
+    "struct": 0.175,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_send_streaming_request",
+      "path": "providers/base.py",
+      "body": "\n        \"\"\"Helper method to send a streaming request and handle the response.\"\"\"\n        if not self.http_handler:\n            yield \"Error: HTTP handler not initialized.\"\n            return\n\n        complete_message = \"\"\n        async for chunk in self.http_handler.send_request(config):\n            if chunk is None:\n                # End of streaming\n                break\n            elif isinstance(chunk, str):\n                if chunk.startswith(\"Error:\"):\n                    # This is an error message\n                    yield chunk\n                    return\n                else:\n                    # This is content\n                    complete_message += chunk\n                    yield chunk\n        \n        # Process complete message\n        if complete_message:\n            formatted_message = self.format_message(complete_message)\n            self.add_to_history(\"assistant\", formatted_message)\n            \n            if self.parameters.get(\"verbose\", False):\n                tokens = self.calculate_tokens(formatted_message)\n                total_tokens = self.calculate_total_tokens()\n                console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/ollama.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"options\": {k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            response_json = json.loads(line)\n                            message_content = response_json.get('message', {}).get('content', '')\n                            if message_content:\n                                complete_message += message_content\n                                yield message_content  # Always yield the content\n                                if response_json.get('done', False):\n                                    break\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p62",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7696,
+    "struct": 0.1884,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "display_history",
+      "path": "providers/base.py",
+      "body": "\n        \"\"\"Display the chat history with formatting.\"\"\"\n        if not self.chat_history:\n            console.print(\"No previous chat history.\", style=\"cyan\")\n        else:\n            console.print(\"Chat history loaded from previous session:\", style=\"cyan\")\n            for entry in self.chat_history:\n                if entry.role == \"user\":\n                    console.print(Markdown(entry.content), style=\"green\")\n                else:\n                    formatted_content = self.format_message(entry.content)\n                    formatted_response, code_blocks = self.code_block_formatter.format_code_blocks(formatted_content)\n                    for line in formatted_response:\n                        if isinstance(line, Panel):\n                            console.print(line)\n                        elif isinstance(line, str):\n                            console.print(Markdown(line), style=\"yellow\")\n                        else:\n                            console.print(str(line), style=\"yellow\")\n"
+    },
+    "fnB": {
+      "name": "display_chat_history",
+      "path": "ui/display_manager.py",
+      "body": "\n        if self.chat_app.current_session and self.chat_app.current_session.chat_history:\n            for message in self.chat_app.current_session.chat_history:\n                if message.role == \"user\":\n                    console.print(Markdown(message.content), style=\"green\")\n                else:\n                    content = message.content\n                    think_match = re.search(r\"<think>(.*?)</think>\", content, re.DOTALL)\n                    \n                    if think_match:\n                        thought = think_match.group(1)\n                        self.display_think_thought(thought)\n                        content = content.replace(think_match.group(0), \"\").strip()\n\n                    if content:\n                        formatted_content, _ = self.chat_app.code_block_formatter.format_code_blocks(content)\n                        for line in formatted_content:\n                            if isinstance(line, Panel):\n                                console.print(line)\n                            elif isinstance(line, str):\n                                console.print(Markdown(line), style=\"yellow\")\n                            else:\n                                console.print(str(line), style=\"yellow\")"
+    }
+  },
+  {
+    "gid": "p63",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.8286,
+    "struct": 0.2069,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "load_history",
+      "path": "core/history_manager.py",
+      "body": "\n        \"\"\"Load chat history from the database.\"\"\"\n        session_id = self._get_session_id(self.chat_name)\n        cursor = self.conn.cursor()\n        cursor.execute('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp', (session_id,))\n        try:\n            return [ChatMessage(role=row[0], content=str(row[1])) for row in cursor.fetchall()]\n        except Exception as e:\n            Logger.error(f\"Error loading chat history: {e}\")\n            return []\n"
+    },
+    "fnB": {
+      "name": "load_history",
+      "path": "providers/base.py",
+      "body": "\n        \"\"\"Load chat history from the database.\"\"\"\n        try:\n            return self.history_manager.load_history()\n        except Exception as e:\n            Logger.error(f\"Error loading chat history: {e}\")\n            return []\n"
+    }
+  },
+  {
+    "gid": "p64",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7291,
+    "struct": 0.0435,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "handle_show_thinking",
+      "path": "handlers/command_handler.py",
+      "body": "\n        \"\"\"Handle the /show thinking command.\"\"\"\n        if value.lower() in ['true', 'false']:\n            show_thoughts = value.lower() == 'true'\n            self.chat_app.display_manager.show_thoughts = show_thoughts\n            status = \"enabled\" if show_thoughts else \"disabled\"\n            console.print(f\"Model thoughts display {status}.\", style=\"cyan\")\n        else:\n            console.print(\"Invalid value. Use '/show thinking true' or '/show thinking false'.\", style=\"bold red\")\n"
+    },
+    "fnB": {
+      "name": "toggle_thoughts_display",
+      "path": "ui/display_manager.py",
+      "body": "\n        \"\"\"Toggle the visibility of model thoughts.\"\"\"\n        self.show_thoughts = not self.show_thoughts\n        console.print(f\"Model thoughts display toggled {'on' if self.show_thoughts else 'off'}.\", style=\"bold yellow\")\n"
+    }
+  },
+  {
+    "gid": "p65",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7657,
+    "struct": 0.1682,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/openai.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Create request configuration\n        config = RequestConfig(\n            url=self.base_url,\n            headers={\n                \"Content-Type\": \"application/json\",\n                \"Authorization\": f\"Bearer {self.api_key}\"\n            },\n            json_data={\n                \"model\": self.model,\n                \"messages\": messages,\n                \"temperature\": self.parameters.get(\"temperature\", 0.8),\n                \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n                \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n                \"stream\": True\n            },\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openrouter.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"Authorization\": f\"Bearer {self.api_key}\",\n            \"X-Title\": \"Retrochat-v2\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(\"https://openrouter.ai/api/v1/chat/completions\", headers=headers, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            line = line.decode('utf-8').strip()\n                            if line.startswith(\"data: \"):\n                                if line == \"data: [DONE]\":\n                                    break\n                                json_str = line[6:]\n                                try:\n                                    response_json = json.loads(json_str)\n                                    content = response_json['choices'][0]['delta'].get('content', '')\n                                    if content:\n                                        complete_message += content\n                                        yield content\n                                except json.JSONDecodeError:\n                                    continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p66",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.8415,
+    "struct": 0.259,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/anthropic.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = self.prepare_messages()\n        \n        if not messages:\n            error_message = \"Error: No valid messages to send to the API.\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n            return\n\n        data = {\n            \"model\": self.model,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"messages\": messages,\n            \"stream\": False\n        }\n\n        if self.system_message:\n            data[\"system\"] = self.system_message\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"x-api-key\": self.api_key,\n            \"anthropic-version\": \"2023-06-01\",\n            \"anthropic-beta\": \"max-tokens-3-5-sonnet-2024-07-15\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data, headers=headers) as response:\n                if response.status == 200:\n                    response_json = await response.json()\n                    assistant_message = response_json.get('content', [{}])[0].get('text', '')\n                    if assistant_message:\n                        formatted_message = self.format_message(assistant_message)\n                        self.add_to_history(\"assistant\", formatted_message)\n                        if self.parameters.get(\"verbose\", False):\n                            tokens = self.calculate_tokens(formatted_message)\n                            total_tokens = self.calculate_total_tokens()\n                            console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                            console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                        yield formatted_message\n                    else:\n                        error_message = \"No response content received.\"\n                        console.print(error_message, style=\"bold red\")\n                        yield error_message\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    }
+  },
+  {
+    "gid": "p67",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.8493,
+    "struct": 0.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "select_google_model",
+      "path": "app/session_manager.py",
+      "body": "\n        return await self.select_model_for_provider(\"Google\")"
+    },
+    "fnB": {
+      "name": "get_model",
+      "path": "providers/provider_config.py",
+      "body": "\n        return await chat_app.session_manager.select_model_for_provider(\"Google\")\n    "
+    }
+  },
+  {
+    "gid": "p68",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.8313,
+    "struct": 0.1864,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "save_history",
+      "path": "core/history_manager.py",
+      "body": "\n        \"\"\"Save chat history to the database.\"\"\"\n        session_id = self._get_session_id(self.chat_name)\n        try:\n            with self.conn:\n                self.conn.execute('DELETE FROM chat_messages WHERE session_id = ?', (session_id,))\n                self.conn.executemany('''\n                    INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)\n                ''', [(session_id, msg.role, str(msg.content)) for msg in history])\n        except Exception as e:\n            Logger.error(f\"Error saving chat history: {e}\")\n"
+    },
+    "fnB": {
+      "name": "save_history",
+      "path": "providers/base.py",
+      "body": "\n        \"\"\"Save chat history to the database.\"\"\"\n        try:\n            self.history_manager.save_history(self.chat_history)\n        except Exception as e:\n            Logger.error(f\"Error saving chat history: {e}\")\n"
+    }
+  },
+  {
+    "gid": "p69",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7364,
+    "struct": 0.0813,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/anthropic.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = self.prepare_messages()\n        \n        if not messages:\n            error_message = \"Error: No valid messages to send to the API.\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n            return\n\n        data = {\n            \"model\": self.model,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"messages\": messages,\n            \"stream\": False\n        }\n\n        if self.system_message:\n            data[\"system\"] = self.system_message\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"x-api-key\": self.api_key,\n            \"anthropic-version\": \"2023-06-01\",\n            \"anthropic-beta\": \"max-tokens-3-5-sonnet-2024-07-15\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data, headers=headers) as response:\n                if response.status == 200:\n                    response_json = await response.json()\n                    assistant_message = response_json.get('content', [{}])[0].get('text', '')\n                    if assistant_message:\n                        formatted_message = self.format_message(assistant_message)\n                        self.add_to_history(\"assistant\", formatted_message)\n                        if self.parameters.get(\"verbose\", False):\n                            tokens = self.calculate_tokens(formatted_message)\n                            total_tokens = self.calculate_total_tokens()\n                            console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                            console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                        yield formatted_message\n                    else:\n                        error_message = \"No response content received.\"\n                        console.print(error_message, style=\"bold red\")\n                        yield error_message\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/lmstudio.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Prepare request data\n        json_data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"top_p\": self.parameters.get(\"top_p\", 0.95),\n            \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n            \"presence_penalty\": self.parameters.get(\"presence_penalty\", 0.0),\n        }\n\n        # Add stop parameter if it's set\n        if self.parameters.get(\"stop\"):\n            json_data[\"stop\"] = self.parameters[\"stop\"]\n\n        # Create request configuration\n        config = RequestConfig(\n            url=f\"{self.base_url}/v1/chat/completions\",\n            headers={\"Content-Type\": \"application/json\"},\n            json_data=json_data,\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk"
+    }
+  },
+  {
+    "gid": "p70",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7341,
+    "struct": 0.0492,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/google.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        \n        from google.generativeai.types import GenerationConfig\n        generation_config = GenerationConfig(\n            candidate_count=self.parameters.get(\"candidate_count\", 1),\n            max_output_tokens=self.parameters.get(\"max_tokens\", 8192),\n            temperature=self.parameters.get(\"temperature\", 0.8),\n        )\n\n        try:\n            with SuppressLogging():\n                response = await asyncio.to_thread(\n                    self.chat.send_message,\n                    message,\n                    generation_config=generation_config,\n                    stream=False  # Google API doesn't support streaming\n                )\n\n            complete_message = response.text\n            formatted_message = self.format_message(complete_message)\n            self.add_to_history(\"assistant\", formatted_message)\n            \n            # Simulate streaming by yielding chunks\n            chunk_size = 4  # Adjust this value to control the streaming speed\n            for i in range(0, len(complete_message), chunk_size):\n                yield complete_message[i:i+chunk_size]\n                await asyncio.sleep(0.01)  # Add a small delay between chunks\n            \n            if self.parameters.get(\"verbose\", False):\n                tokens = self.calculate_tokens(formatted_message)\n                total_tokens = self.calculate_total_tokens()\n                console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n            \n            yield None  # Signal end of streaming\n        except Exception as e:\n            error_message = f\"Error in Google API: {str(e)}\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openai.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Create request configuration\n        config = RequestConfig(\n            url=self.base_url,\n            headers={\n                \"Content-Type\": \"application/json\",\n                \"Authorization\": f\"Bearer {self.api_key}\"\n            },\n            json_data={\n                \"model\": self.model,\n                \"messages\": messages,\n                \"temperature\": self.parameters.get(\"temperature\", 0.8),\n                \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n                \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n                \"stream\": True\n            },\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk\n"
+    }
+  },
+  {
+    "gid": "p71",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7579,
+    "struct": 0.0718,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openai.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Create request configuration\n        config = RequestConfig(\n            url=self.base_url,\n            headers={\n                \"Content-Type\": \"application/json\",\n                \"Authorization\": f\"Bearer {self.api_key}\"\n            },\n            json_data={\n                \"model\": self.model,\n                \"messages\": messages,\n                \"temperature\": self.parameters.get(\"temperature\", 0.8),\n                \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n                \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n                \"stream\": True\n            },\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk\n"
+    }
+  },
+  {
+    "gid": "p72",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.832,
+    "struct": 0.0982,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/lmstudio.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Prepare request data\n        json_data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"top_p\": self.parameters.get(\"top_p\", 0.95),\n            \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n            \"presence_penalty\": self.parameters.get(\"presence_penalty\", 0.0),\n        }\n\n        # Add stop parameter if it's set\n        if self.parameters.get(\"stop\"):\n            json_data[\"stop\"] = self.parameters[\"stop\"]\n\n        # Create request configuration\n        config = RequestConfig(\n            url=f\"{self.base_url}/v1/chat/completions\",\n            headers={\"Content-Type\": \"application/json\"},\n            json_data=json_data,\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    }
+  },
+  {
+    "gid": "p73",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.739,
+    "struct": 0.0702,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/anthropic.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = self.prepare_messages()\n        \n        if not messages:\n            error_message = \"Error: No valid messages to send to the API.\"\n            console.print(error_message, style=\"bold red\")\n            yield error_message\n            return\n\n        data = {\n            \"model\": self.model,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"messages\": messages,\n            \"stream\": False\n        }\n\n        if self.system_message:\n            data[\"system\"] = self.system_message\n\n        headers = {\n            \"Content-Type\": \"application/json\",\n            \"x-api-key\": self.api_key,\n            \"anthropic-version\": \"2023-06-01\",\n            \"anthropic-beta\": \"max-tokens-3-5-sonnet-2024-07-15\",\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data, headers=headers) as response:\n                if response.status == 200:\n                    response_json = await response.json()\n                    assistant_message = response_json.get('content', [{}])[0].get('text', '')\n                    if assistant_message:\n                        formatted_message = self.format_message(assistant_message)\n                        self.add_to_history(\"assistant\", formatted_message)\n                        if self.parameters.get(\"verbose\", False):\n                            tokens = self.calculate_tokens(formatted_message)\n                            total_tokens = self.calculate_total_tokens()\n                            console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                            console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                        yield formatted_message\n                    else:\n                        error_message = \"No response content received.\"\n                        console.print(error_message, style=\"bold red\")\n                        yield error_message\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openai.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Create request configuration\n        config = RequestConfig(\n            url=self.base_url,\n            headers={\n                \"Content-Type\": \"application/json\",\n                \"Authorization\": f\"Bearer {self.api_key}\"\n            },\n            json_data={\n                \"model\": self.model,\n                \"messages\": messages,\n                \"temperature\": self.parameters.get(\"temperature\", 0.8),\n                \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n                \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n                \"stream\": True\n            },\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk\n"
+    }
+  },
+  {
+    "gid": "p74",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7808,
+    "struct": 0.1487,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/ollama.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"options\": {k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            response_json = json.loads(line)\n                            message_content = response_json.get('message', {}).get('content', '')\n                            if message_content:\n                                complete_message += message_content\n                                yield message_content  # Always yield the content\n                                if response_json.get('done', False):\n                                    break\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/openai.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Create request configuration\n        config = RequestConfig(\n            url=self.base_url,\n            headers={\n                \"Content-Type\": \"application/json\",\n                \"Authorization\": f\"Bearer {self.api_key}\"\n            },\n            json_data={\n                \"model\": self.model,\n                \"messages\": messages,\n                \"temperature\": self.parameters.get(\"temperature\", 0.8),\n                \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n                \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n                \"stream\": True\n            },\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk\n"
+    }
+  },
+  {
+    "gid": "p75",
+    "repo": "ext-retrochat",
+    "band": "C_mid",
+    "cosine": 0.7995,
+    "struct": 0.1495,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "send_message",
+      "path": "providers/lmstudio.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        # Prepare request data\n        json_data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"max_tokens\": self.parameters.get(\"max_tokens\", 8192),\n            \"temperature\": self.parameters.get(\"temperature\", 0.8),\n            \"top_p\": self.parameters.get(\"top_p\", 0.95),\n            \"frequency_penalty\": self.parameters.get(\"frequency_penalty\", 0.0),\n            \"presence_penalty\": self.parameters.get(\"presence_penalty\", 0.0),\n        }\n\n        # Add stop parameter if it's set\n        if self.parameters.get(\"stop\"):\n            json_data[\"stop\"] = self.parameters[\"stop\"]\n\n        # Create request configuration\n        config = RequestConfig(\n            url=f\"{self.base_url}/v1/chat/completions\",\n            headers={\"Content-Type\": \"application/json\"},\n            json_data=json_data,\n            stream=True\n        )\n        \n        # Use the unified streaming request method\n        async for chunk in self._send_streaming_request(config):\n            yield chunk"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/ollama.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        if self.system_message:\n            messages.insert(0, {\"role\": \"system\", \"content\": self.system_message})\n        \n        data = {\n            \"model\": self.model,\n            \"messages\": messages,\n            \"stream\": True,\n            \"options\": {k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(self.model_url, json=data) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            response_json = json.loads(line)\n                            message_content = response_json.get('message', {}).get('content', '')\n                            if message_content:\n                                complete_message += message_content\n                                yield message_content  # Always yield the content\n                                if response_json.get('done', False):\n                                    break\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n"
+    }
+  },
+  {
+    "gid": "p76",
+    "repo": "ext-retrochat",
+    "band": "B_062",
+    "cosine": 0.7169,
+    "struct": 0.1576,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_send_streaming_request",
+      "path": "providers/base.py",
+      "body": "\n        \"\"\"Helper method to send a streaming request and handle the response.\"\"\"\n        if not self.http_handler:\n            yield \"Error: HTTP handler not initialized.\"\n            return\n\n        complete_message = \"\"\n        async for chunk in self.http_handler.send_request(config):\n            if chunk is None:\n                # End of streaming\n                break\n            elif isinstance(chunk, str):\n                if chunk.startswith(\"Error:\"):\n                    # This is an error message\n                    yield chunk\n                    return\n                else:\n                    # This is content\n                    complete_message += chunk\n                    yield chunk\n        \n        # Process complete message\n        if complete_message:\n            formatted_message = self.format_message(complete_message)\n            self.add_to_history(\"assistant\", formatted_message)\n            \n            if self.parameters.get(\"verbose\", False):\n                tokens = self.calculate_tokens(formatted_message)\n                total_tokens = self.calculate_total_tokens()\n                console.print(f\"\\nResponse tokens: {tokens}\", style=\"cyan\")\n                console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n"
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    }
+  },
+  {
+    "gid": "p77",
+    "repo": "ext-retrochat",
+    "band": "B_052",
+    "cosine": 0.5304,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "select_anthropic_model",
+      "path": "app/session_manager.py",
+      "body": "\n        return await self.select_model_for_provider(\"Anthropic\")\n    "
+    },
+    "fnB": {
+      "name": "get_model",
+      "path": "providers/provider_config.py",
+      "body": "\n        return await chat_app.session_manager.select_model_for_provider(\"OpenRouter\")\n    "
+    }
+  },
+  {
+    "gid": "p78",
+    "repo": "ext-retrochat",
+    "band": "B_052",
+    "cosine": 0.5935,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "load_parameters",
+      "path": "core/history_manager.py",
+      "body": "\n        \"\"\"Load chat parameters from the database.\"\"\"\n        session_id = self._get_session_id(self.chat_name)\n        cursor = self.conn.cursor()\n        cursor.execute('SELECT parameters FROM chat_sessions WHERE id = ?', (session_id,))\n        result = cursor.fetchone()\n        return json.loads(result[0]) if result and result[0] else {}\n"
+    },
+    "fnB": {
+      "name": "load_parameters",
+      "path": "core/parameter_manager.py",
+      "body": "\n        \"\"\"Load parameters from persistent storage.\"\"\"\n        try:\n            saved_params = self.history_manager.load_parameters()\n            self.parameters.update(saved_params)\n            return self.parameters\n        except Exception as e:\n            console.print(f\"Error loading parameters: {e}\", style=\"bold red\")\n            return {}\n    "
+    }
+  },
+  {
+    "gid": "p79",
+    "repo": "ext-retrochat",
+    "band": "B_052",
+    "cosine": 0.5847,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "show_parameters",
+      "path": "core/parameter_manager.py",
+      "body": "\n        \"\"\"Display current parameters.\"\"\"\n        console.print(\"Current Parameters:\", style=\"cyan\")\n        \n        # Group parameters by category\n        shown_params = set()\n        \n        for param_name, definition in self.parameter_definitions.items():\n            # Skip aliases to avoid duplication\n            if definition.name != param_name:\n                continue\n                \n            if definition.name in shown_params:\n                continue\n                \n            current_value = self.parameters.get(definition.name, definition.default_value)\n            \n            # Special display for max_tokens\n            if definition.name == \"max_tokens\":\n                console.print(f\"max_tokens: {current_value} (sent as max_output_tokens to some APIs)\", style=\"green\")\n            # Special handling for frequency_penalty (show both names for clarity)\n            elif definition.name == \"frequency_penalty\":\n                console.print(f\"frequency_penalty: {current_value}\", style=\"green\")\n                console.print(f\"repeat_penalty: {current_value} (alias for frequency_penalty)\", style=\"green\")\n            else:\n                console.print(f\"{definition.name}: {current_value}\", style=\"green\")\n            \n            shown_params.add(definition.name)\n        \n        # Show any custom parameters not in definitions\n        for param_name, value in self.parameters.items():\n            if param_name not in shown_params and param_name != \"repeat_penalty\":  # Skip repeat_penalty since it's shown above\n                console.print(f\"{param_name}: {value}\", style=\"green\")\n    "
+    },
+    "fnB": {
+      "name": "show_parameters",
+      "path": "providers/base.py",
+      "body": "\n        \"\"\"Display current chat parameters using the unified parameter manager.\"\"\"\n        self.parameter_manager.show_parameters()\n        \n        # Show system message if set\n        if self.system_message:\n            console.print(f\"system: {self.system_message}\", style=\"green\")\n"
+    }
+  },
+  {
+    "gid": "p80",
+    "repo": "ext-retrochat",
+    "band": "B_052",
+    "cosine": 0.5418,
+    "struct": 0.0323,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "_process_streaming_response",
+      "path": "core/http_handler.py",
+      "body": "\n        \"\"\"Process streaming response.\"\"\"\n        complete_message = \"\"\n        \n        async for line in response.content:\n            if not line:\n                continue\n                \n            line_str = line.decode('utf-8').strip()\n            chunk = self.response_processor.process_stream_line(line_str)\n            \n            if chunk:\n                if chunk.is_complete:\n                    yield None  # Signal end of streaming\n                    break\n                elif chunk.content:\n                    complete_message += chunk.content\n                    yield chunk.content\n        \n        # If we collected a complete message, yield it at the end\n        if complete_message:\n            yield None  # Signal end of streaming\n    "
+    },
+    "fnB": {
+      "name": "send_message",
+      "path": "providers/oobabooga.py",
+      "body": "\n        self.add_to_history(\"user\", message)\n        messages = [{\"role\": msg.role, \"content\": msg.content} for msg in self.chat_history]\n        \n        data = {\n            \"mode\": \"chat\",\n            \"character\": self.character,\n            \"messages\": messages,\n            \"stream\": True,\n            **{k: v for k, v in self.parameters.items() if v is not None}\n        }\n\n        async with aiohttp.ClientSession() as session:\n            async with session.post(f\"{self.base_url}/v1/chat/completions\", headers=self.headers, json=data, ssl=False) as response:\n                if response.status == 200:\n                    complete_message = \"\"\n                    async for line in response.content:\n                        if line:\n                            try:\n                                response_json = json.loads(line)\n                                message_content = response_json['choices'][0]['delta'].get('content', '')\n                                if message_content:\n                                    complete_message += message_content\n                                    yield message_content  # Yield each chunk for streaming\n                            except json.JSONDecodeError:\n                                continue\n                    \n                    formatted_message = self.format_message(complete_message)\n                    self.add_to_history(\"assistant\", formatted_message)\n                    \n                    if self.parameters.get(\"verbose\", False):\n                        tokens = self.calculate_tokens(formatted_message)\n                        total_tokens = self.calculate_total_tokens()\n                        console.print(f\"Response tokens: {tokens}\", style=\"cyan\")\n                        console.print(f\"Total conversation tokens: {total_tokens}\", style=\"cyan\")\n                    \n                    yield None  # Signal end of streaming\n                    yield formatted_message  # Yield the formatted message as the last item\n                else:\n                    error_message = f\"Error: {response.status} - {await response.text()}\"\n                    console.print(error_message, style=\"bold red\")\n                    yield error_message\n\n    \n"
+    }
+  },
+  {
+    "gid": "p81",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/observability.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-lang-rust/src/parser.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p82",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-storage/src/backends.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/mandrel-mcp-th/src/validation/schema.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p83",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-analysis/src/security.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/mandrel-mcp-th/src/error_handling/logging.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p84",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/error.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/scanner/mod.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p85",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/content/mod.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/scanner/mod.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p86",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/content/parsers.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-storage/src/backends.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p87",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "new",
+      "path": "crates/codeprism-core/src/ast/mod.rs",
+      "body": "\n        Self {\n            start_byte,\n            end_byte,\n            start_line,\n            end_line,\n            start_column,\n            end_column,\n        }\n    }"
+    },
+    "fnB": {
+      "name": "new",
+      "path": "crates/codeprism-lang-js/src/types.rs",
+      "body": "\n        Self {\n            start_byte,\n            end_byte,\n            start_line,\n            end_line,\n            start_column,\n            end_column,\n        }\n    }"
+    }
+  },
+  {
+    "gid": "p88",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/content/extractors.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-core/src/parser/mod.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p89",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-analysis/src/api_surface.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-dev-tools/src/performance_profiler.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p90",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-analysis/src/complexity.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-storage/src/backends.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p91",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-dev-tools/src/graphviz_export.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-lang-java/src/parser.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p92",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-analysis/src/semantic/search.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/mandrel-mcp-th/src/error_handling/logging.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p93",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-dev-tools/src/graphviz_export.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-lang-python/src/adapter.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p94",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 0.8509,
+    "struct": 0.5806,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "test_parse_simple_javascript",
+      "path": "crates/codeprism-lang-js/src/parser.rs",
+      "body": "\n        let mut parser = JavaScriptParser::new();\n        let context = ParseContext {\n            repo_id: \"test_repo\".to_string(),\n            file_path: PathBuf::from(\"test.js\"),\n            old_tree: None,\n            content: \"function hello() { return 'world'; }\".to_string(),\n        };\n\n        let result = parser.parse(&context).unwrap();\n        assert!(!result.nodes.is_empty(), \"Should not be empty\");\n\n        // Should have at least a module node and a function node\n        assert!(result\n            .nodes\n            .iter()\n            .any(|n| matches!(n.kind, crate::types::NodeKind::Module)));\n        assert!(result\n            .nodes\n            .iter()\n            .any(|n| matches!(n.kind, crate::types::NodeKind::Function)));\n    }"
+    },
+    "fnB": {
+      "name": "test_parse_struct",
+      "path": "crates/codeprism-lang-rust/src/parser.rs",
+      "body": "\n        let mut parser = RustParser::new();\n        let context = ParseContext {\n            repo_id: \"test_repo\".to_string(),\n            file_path: PathBuf::from(\"test.rs\"),\n            old_tree: None,\n            content: \"struct Point { x: i32, y: i32 }\".to_string(),\n        };\n\n        let result = parser.parse(&context).unwrap();\n        assert!(!result.nodes.is_empty(), \"Should not be empty\");\n\n        // Should have module and struct nodes\n        assert!(result\n            .nodes\n            .iter()\n            .any(|n| matches!(n.kind, crate::types::NodeKind::Module)));\n        assert!(result\n            .nodes\n            .iter()\n            .any(|n| matches!(n.kind, crate::types::NodeKind::Struct)));\n    }"
+    }
+  },
+  {
+    "gid": "p95",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-analysis/src/performance.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/codeprism-lang-python/src/parser.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p96",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "extract_middleware_chain",
+      "path": "crates/codeprism-lang-js/src/analysis.rs",
+      "body": "\n        // Simplified implementation - would analyze middleware usage in real implementation\n        Vec::new()\n    }"
+    },
+    "fnB": {
+      "name": "extract_django_middleware",
+      "path": "crates/codeprism-lang-python/src/analysis.rs",
+      "body": "\n        Vec::new() // Simplified implementation\n    }"
+    }
+  },
+  {
+    "gid": "p97",
+    "repo": "ext-codeprism",
+    "band": "C_high",
+    "cosine": 1.0,
+    "struct": 1.0,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-dev-tools/src/parser_validator.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/mandrel-mcp-th/src/error_handling/logging.rs",
+      "body": "\n        Self::new()\n    }"
+    }
+  },
+  {
+    "gid": "p98",
+    "repo": "ext-codeprism",
+    "band": "C_mid",
+    "cosine": 0.7319,
+    "struct": 0.0044,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "test_execution_summary_calculation",
+      "path": "crates/mandrel-mcp-th/src/reporting/mod.rs",
+      "body": "\n        let test_results = vec![\n            create_passing_test_result(),\n            create_failing_test_result(),\n            create_passing_test_result(),\n        ];\n\n        let summary = ExecutionSummary::from_results(&test_results);\n\n        // Verify summary calculations are correct\n        assert_eq!(summary.total_tests, 3, \"Total tests should be 3\");\n        assert_eq!(summary.passed, 2, \"Passed tests should be 2\");\n        assert_eq!(summary.failed, 1, \"Failed tests should be 1\");\n        assert_eq!(summary.skipped, 0, \"Skipped tests should be 0\");\n        assert_eq!(summary.success_rate, 66.66666666666666, \"Success rate should be 66.67%\");\n\n        // Verify total_duration is calculated from all test durations\n        let expected_duration = test_results.iter().map(|t| t.duration).sum::<Duration>();\n        assert_eq!(summary.total_duration, expected_duration, \"Total duration should sum individual test durations\");\n\n        // Verify calculations work with empty results\n        let empty_summary = ExecutionSummary::from_results(&[]);\n        assert_eq!(empty_summary.total_tests, 0, \"Empty results should have 0 total tests\");\n        assert_eq!(empty_summary.success_rate, 0.0, \"Empty results should have 0% success rate\");\n    }"
+    },
+    "fnB": {
+      "name": "test_test_suite_result_calculations",
+      "path": "crates/mandrel-mcp-th/src/runner/result.rs",
+      "body": "\n        let test_results = vec![\n            TestResult::success(\"test1\".to_string(), Duration::from_millis(100)),\n            TestResult::failure(\n                \"test2\".to_string(),\n                Duration::from_millis(200),\n                \"error\".to_string(),\n            ),\n            TestResult::success(\"test3\".to_string(), Duration::from_millis(150)),\n        ];\n\n        let suite_result = TestSuiteResult {\n            suite_name: \"test_suite\".to_string(),\n            specification_file: PathBuf::from(\"test.yaml\"),\n            execution_start: SystemTime::now(),\n            execution_end: SystemTime::now(),\n            total_duration: Duration::from_millis(450),\n            total_tests: 3,\n            passed: 2,\n            failed: 1,\n            skipped: 0,\n            error_rate: 1.0 / 3.0,\n            test_results,\n            suite_metrics: SuiteMetrics::default(),\n            execution_mode: ExecutionMode::Sequential,\n            dependency_resolution: DependencyResolution::default(),\n        };\n\n        // Use tolerance-based comparisons for floating point percentages\n        let expected_success_rate = 66.66666666666667;\n        let actual_success_rate = suite_result.success_rate();\n        assert!(\n            (actual_success_rate - expected_success_rate).abs() < 0.01,\n            \"Success rate {:.10} should be approximately {:.10} (diff: {:.10})\",\n            actual_success_rate,\n            expected_success_rate,\n            (actual_success_rate - expected_success_rate).abs()\n        );\n\n        let expected_failure_rate = 33.333333333333336;\n        let actual_failure_rate = suite_result.failure_rate();\n        assert!(\n            (actual_failure_rate - expected_failure_rate).abs() < 0.01,\n            \"Failure rate {:.10} should be approximately {:.10} (diff: {:.10})\",\n            actual_failure_rate,\n            expected_failure_rate,\n            (actual_failure_rate - expected_failure_rate).abs()\n        );\n\n        assert!(!suite_result.all_passed());\n        assert!(suite_result.has_failures());\n        assert_eq!(suite_result.failed_tests().len(), 1);\n        assert_eq!(suite_result.passed_tests().len(), 2);\n        assert_eq!(\n            suite_result.average_test_duration(),\n            Duration::from_millis(150)\n        );\n    }"
+    }
+  },
+  {
+    "gid": "p99",
+    "repo": "ext-codeprism",
+    "band": "C_mid",
+    "cosine": 0.7526,
+    "struct": 0.25,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "detect_language",
+      "path": "crates/codeprism-lang-python/src/parser.rs",
+      "body": "\n        // All Python files are Python language\n        match path.extension().and_then(|s| s.to_str()) {\n            Some(\"py\") | Some(\"pyw\") => Language::Python,\n            _ => Language::Python, // Default to Python\n        }\n    }"
+    },
+    "fnB": {
+      "name": "detect_language",
+      "path": "crates/codeprism-lang-rust/src/parser.rs",
+      "body": "\n        // All Rust files are Rust language\n        match path.extension().and_then(|s| s.to_str()) {\n            Some(\"rs\") => Language::Rust,\n            _ => Language::Rust, // Default to Rust\n        }\n    }"
+    }
+  },
+  {
+    "gid": "p100",
+    "repo": "ext-codeprism",
+    "band": "C_mid",
+    "cosine": 0.7723,
+    "struct": 0.1795,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "create_test_context",
+      "path": "crates/mandrel-mcp-th/src/script_engines/js_engine.rs",
+      "body": "\n        let config = ScriptConfig::new();\n        ScriptContext::new(\n            json!({\"test_input\": \"sample_data\"}),\n            \"test_js_execution\".to_string(),\n            \"test_tool\".to_string(),\n            config,\n        )\n        .with_response(json!({\"test_output\": \"expected_result\"}))\n    }"
+    },
+    "fnB": {
+      "name": "create_test_context_with_data",
+      "path": "crates/mandrel-mcp-th/src/script_engines/python_engine.rs",
+      "body": "\n        let config = ScriptConfig::new();\n        ScriptContext::new(\n            json!({\n                \"method\": \"tools/call\",\n                \"params\": {\n                    \"name\": \"test_tool\",\n                    \"arguments\": {\"input\": \"test_value\"}\n                }\n            }),\n            \"comprehensive_test\".to_string(),\n            \"mcp_tool\".to_string(),\n            config,\n        )\n        .with_response(json!({\n            \"content\": [\n                {\n                    \"type\": \"text\",\n                    \"text\": \"Test response content\"\n                }\n            ],\n            \"isError\": false\n        }))\n    }"
+    }
+  },
+  {
+    "gid": "p101",
+    "repo": "ext-codeprism",
+    "band": "C_mid",
+    "cosine": 0.8364,
+    "struct": 0.1731,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "find_parent_scope_id",
+      "path": "crates/codeprism-lang-js/src/ast_mapper.rs",
+      "body": "\n        let mut parent = node.parent();\n        while let Some(p) = parent {\n            match p.kind() {\n                \"function_declaration\" | \"function\" | \"arrow_function\" | \"method_definition\" => {\n                    if let Some(id) = self.node_map.get(&p.id()) {\n                        return Some(*id);\n                    }\n                }\n                _ => {}\n            }\n            parent = p.parent();\n        }\n        self.find_module_node_id()\n    }"
+    },
+    "fnB": {
+      "name": "find_enclosing_scope_id",
+      "path": "crates/codeprism-lang-rust/src/ast_mapper.rs",
+      "body": "\n        let mut current = node.parent();\n        while let Some(parent) = current {\n            if matches!(\n                parent.kind(),\n                \"function_item\" | \"impl_item\" | \"mod_item\" | \"source_file\"\n            ) {\n                if let Some(&node_id) = self.node_map.get(&parent.id()) {\n                    return Some(node_id);\n                }\n            }\n            current = parent.parent();\n        }\n        self.find_module_node_id()\n    }"
+    }
+  },
+  {
+    "gid": "p102",
+    "repo": "ext-codeprism",
+    "band": "C_mid",
+    "cosine": 0.8334,
+    "struct": 0.4,
+    "isCandidate": true,
+    "belowFloor": false,
+    "bothShipped": true,
+    "fnA": {
+      "name": "handle_variable_declarator",
+      "path": "crates/codeprism-lang-js/src/ast_mapper.rs",
+      "body": "\n        let node = cursor.node();\n        let span = Span::from_node(&node);\n\n        // Extract variable name\n        if let Some(name_node) = node.child_by_field_name(\"name\") {\n            let name = self.get_node_text(&name_node);\n\n            let var_node = Node::new(\n                &self.repo_id,\n                NodeKind::Variable,\n                name,\n                self.language,\n                self.file_path.clone(),\n                span,\n            );\n\n            // Store the mapping\n            self.node_map.insert(node.id(), var_node.id);\n\n            // Add edge from parent scope\n            if let Some(parent_id) = self.find_parent_scope_id(&node) {\n                self.edges\n                    .push(Edge::new(parent_id, var_node.id, EdgeKind::Writes));\n            }\n\n            self.nodes.push(var_node);\n        }\n\n        Ok(())\n    }"
+    },
+    "fnB": {
+      "name": "handle_mod_item",
+      "path": "crates/codeprism-lang-rust/src/ast_mapper.rs",
+      "body": "\n        let node = cursor.node();\n        let span = Span::from_node(&node);\n\n        let name = self.extract_identifier_name(&node, \"name\")?;\n\n        let mod_node = Node::new(\n            &self.repo_id,\n            NodeKind::Mod,\n            name,\n            self.language,\n            self.file_path.clone(),\n            span,\n        );\n\n        self.node_map.insert(node.id(), mod_node.id);\n\n        if let Some(parent_id) = self.find_parent_scope_id(&node) {\n            self.edges\n                .push(Edge::new(parent_id, mod_node.id, EdgeKind::Contains));\n        }\n\n        self.nodes.push(mod_node);\n        Ok(())\n    }"
+    }
+  },
+  {
+    "gid": "p103",
+    "repo": "ext-codeprism",
+    "band": "B_062",
+    "cosine": 0.7149,
+    "struct": 0.0097,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "execute_script_phase",
+      "path": "crates/mandrel-mcp-th/src/executor.rs",
+      "body": "\n        let mut results = Vec::new();\n\n        // Get the LuaEngine for script execution\n        let lua_engine = self\n            .lua_engine\n            .as_ref()\n            .ok_or_else(|| ExecutorError::ConfigError(\"LuaEngine not initialized\".to_string()))?;\n\n        for script in scripts {\n            let start_time = Instant::now();\n\n            // Create script context with request/response data\n            let mut context = self.create_script_context(script, tool_name, input, response);\n\n            // Add response data if available\n            if let Some(response_data) = response {\n                context = context.with_response(response_data.clone());\n            }\n\n            // Execute the script using LuaEngine\n            let script_result = match lua_engine.execute_script(&script.source, context).await {\n                Ok(result) => {\n                    // Convert ScriptResult to ScriptValidationResult\n                    let errors = if result.success {\n                        vec![]\n                    } else {\n                        // Convert ScriptError to ValidationError\n                        result.error.map_or(vec![], |script_error| {\n                            vec![ValidationError::SchemaError {\n                                message: format!(\"Script execution failed: {script_error}\"),\n                            }]\n                        })\n                    };\n\n                    // Convert logs from LogEntry to String\n                    let logs = result\n                        .logs\n                        .into_iter()\n                        .map(|log_entry| format!(\"[{}] {}\", log_entry.level, log_entry.message))\n                        .collect();\n\n                    ScriptValidationResult {\n                        script_name: script.name.clone(),\n                        success: result.success,\n                        execution_time: Duration::from_millis(result.duration_ms),\n                        errors,\n                        logs,\n                        phase: phase.clone(),\n                    }\n                }\n                Err(script_error) => {\n                    // Handle script execution errors\n                    let error_message = format!(\"Script execution error: {script_error}\");\n                    let errors = vec![ValidationError::SchemaError {\n                        message: error_message.clone(),\n                    }];\n\n                    ScriptValidationResult {\n                        script_name: script.name.clone(),\n                        success: false,\n                        execution_time: start_time.elapsed(),\n                        errors,\n                        logs: vec![format!(\"ERROR: {error_message}\")],\n                        phase: phase.clone(),\n                    }\n                }\n            };\n\n            results.push(script_result);\n        }\n\n        Ok(results)\n    }"
+    },
+    "fnB": {
+      "name": "execute_script",
+      "path": "crates/mandrel-mcp-th/src/validation/script_engine.rs",
+      "body": "\n        // Validate script configuration first\n        self.validate_script_config(script)?;\n\n        // Convert validation context to engine context\n        let engine_context = EngineScriptContext::new(\n            context.test_case.input.clone(),\n            context.test_case.name.clone(),\n            \"validation_script\".to_string(),\n            ScriptConfig::new(),\n        )\n        .with_response(context.response.clone().unwrap_or(serde_json::Value::Null));\n\n        // Route to appropriate engine based on language and execute the script\n        let result = match script.language {\n            crate::spec::ScriptLanguage::JavaScript => self\n                .js_engine\n                .execute_script(&script.source, engine_context)\n                .await\n                .map_err(|e| {\n                    crate::error::Error::validation(format!(\"JavaScript execution failed: {e:?}\"))\n                })?,\n            crate::spec::ScriptLanguage::Python => self\n                .python_engine\n                .execute_script(&script.source, engine_context)\n                .await\n                .map_err(|e| {\n                    crate::error::Error::validation(format!(\"Python execution failed: {e:?}\"))\n                })?,\n            crate::spec::ScriptLanguage::Lua => self\n                .lua_engine\n                .execute_script(&script.source, engine_context)\n                .await\n                .map_err(|e| {\n                    crate::error::Error::validation(format!(\"Lua execution failed: {e:?}\"))\n                })?,\n        };\n\n        Ok(result)\n    }"
+    }
+  },
+  {
+    "gid": "p104",
+    "repo": "ext-codeprism",
+    "band": "B_062",
+    "cosine": 0.6228,
+    "struct": 0.0247,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "create_script_with_context",
+      "path": "crates/mandrel-mcp-th/src/script_engines/python_engine.rs",
+      "body": "\n        let context_json = serde_json::to_string_pretty(&serde_json::json!({\n            \"request\": context.request,\n            \"response\": context.response,\n            \"metadata\": {\n                \"test_name\": context.metadata.test_name,\n                \"tool_name\": context.metadata.tool_name,\n            }\n        }))\n        .map_err(|e| ScriptError::ExecutionError {\n            message: format!(\"Failed to serialize context: {e}\"),\n        })?;\n\n        // Convert JSON nulls to Python None for proper syntax\n        let python_context = context_json\n            .replace(\"null\", \"None\")\n            .replace(\"true\", \"True\")\n            .replace(\"false\", \"False\");\n\n        Ok(format!(\n            r#\"#!/usr/bin/env python3\n# Context injection for MCP validation\nimport json\nimport sys\n\n# Injected context data\ncontext = {python_context}\n\ndef log(level, message):\n    \"\"\"Logging function for validation scripts\"\"\"\n    print(f\"[{{level}}] {{message}}\", file=sys.stderr)\n\n# User script execution\n{script}\n\"#\n        ))\n    }"
+    },
+    "fnB": {
+      "name": "to_javascript",
+      "path": "crates/mandrel-mcp-th/src/validation/script_context.rs",
+      "body": "\n        let helpers = self.generate_javascript_helpers();\n        let context_json =\n            serde_json::to_string_pretty(self).map_err(ScriptContextError::SerializationError)?;\n\n        Ok(format!(\n            r#\"\n// Context object with test data and helper functions\nconst context = {context_json};\n\n// Helper functions for JavaScript validation scripts\n{helpers}\n\n// Make context globally available\nglobalThis.context = context;\n\"#\n        ))\n    }"
+    }
+  },
+  {
+    "gid": "p105",
+    "repo": "ext-codeprism",
+    "band": "B_052",
+    "cosine": 0.6188,
+    "struct": 0.3333,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-storage/src/backends.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "new",
+      "path": "crates/mandrel-mcp-th/src/validation/mod.rs",
+      "body": "\n        Self::default()\n    }"
+    }
+  },
+  {
+    "gid": "p106",
+    "repo": "ext-codeprism",
+    "band": "B_042",
+    "cosine": 0.4213,
+    "struct": 0.0,
+    "isCandidate": false,
+    "belowFloor": true,
+    "bothShipped": true,
+    "fnA": {
+      "name": "default",
+      "path": "crates/codeprism-lang-rust/src/parser.rs",
+      "body": "\n        Self::new()\n    }"
+    },
+    "fnB": {
+      "name": "default",
+      "path": "crates/mandrel-mcp-th/src/reporting/templates.rs",
+      "body": "\n        Self::new().expect(\"Failed to create default template renderer\")\n    }"
+    }
+  }
+]

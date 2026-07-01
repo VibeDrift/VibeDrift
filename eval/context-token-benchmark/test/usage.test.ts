@@ -40,6 +40,10 @@ describe("parseClaudeUsage", () => {
     it("returns modelId from first message_start", () => {
       expect(parsed.modelId).toBe("claude-opus-4-8");
     });
+
+    it("reports zero vibedriftToolCalls when no MCP tool_use blocks present", () => {
+      expect(parsed.vibedriftToolCalls).toBe(0);
+    });
   });
 
   describe("Fixture B: stream without result (fallback path)", () => {
@@ -76,6 +80,43 @@ describe("parseClaudeUsage", () => {
 
     it("returns modelId from first message_start", () => {
       expect(parsed.modelId).toBe("claude-opus-4-8");
+    });
+  });
+
+  describe("vibedriftToolCalls counting", () => {
+    it("counts mcp__vibedrift__* tool_use blocks nested in assistant content arrays", () => {
+      const stream = [
+        '{"type":"system","subtype":"init","model":"claude-opus-4-8"}',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"mcp__vibedrift__get_dominant_pattern","input":{}}]}}',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"thinking"},{"type":"tool_use","id":"b","name":"mcp__vibedrift__find_similar_function","input":{}}]}}',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"Read","input":{}}]}}',
+        '{"type":"result","subtype":"success","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"total_cost_usd":0.01,"num_turns":3}',
+      ].join("\n");
+
+      const parsed = parseClaudeUsage(stream);
+      // Two mcp__vibedrift__* blocks; the plain "Read" tool_use is not counted.
+      expect(parsed.vibedriftToolCalls).toBe(2);
+    });
+
+    it("counts MCP tool_use blocks in the fallback path (no result line)", () => {
+      const stream = [
+        '{"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":5,"output_tokens":1}}}',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"mcp__vibedrift__check_file_drift","input":{}}]}}',
+        '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}',
+      ].join("\n");
+
+      const parsed = parseClaudeUsage(stream);
+      expect(parsed.reportedCostUsd).toBeNull(); // confirms fallback path
+      expect(parsed.vibedriftToolCalls).toBe(1);
+    });
+
+    it("does not count non-vibedrift mcp tool_use blocks", () => {
+      const stream = [
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"mcp__other__do_thing","input":{}}]}}',
+        '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"total_cost_usd":0.01,"num_turns":1}',
+      ].join("\n");
+
+      expect(parseClaudeUsage(stream).vibedriftToolCalls).toBe(0);
     });
   });
 

@@ -1,0 +1,68 @@
+{
+  "repo": "ext-gptme-webui",
+  "functions": 247,
+  "crossFilePairs": 29723,
+  "cosMed": 0.72,
+  "structHigh": 0.95,
+  "candidates": 13,
+  "autoConfirm": 4,
+  "needsLlm": 9,
+  "bands": [
+    {
+      "band": "C_high",
+      "lo": 0.85,
+      "hi": 1.01,
+      "isCandidate": true,
+      "population": 8,
+      "sampled": 8
+    },
+    {
+      "band": "C_mid",
+      "lo": 0.72,
+      "hi": 0.85,
+      "isCandidate": true,
+      "population": 5,
+      "sampled": 5
+    },
+    {
+      "band": "B_062",
+      "lo": 0.62,
+      "hi": 0.72,
+      "isCandidate": false,
+      "population": 23,
+      "sampled": 23
+    },
+    {
+      "band": "B_052",
+      "lo": 0.52,
+      "hi": 0.62,
+      "isCandidate": false,
+      "population": 85,
+      "sampled": 60
+    },
+    {
+      "band": "B_042",
+      "lo": 0.42,
+      "hi": 0.52,
+      "isCandidate": false,
+      "population": 409,
+      "sampled": 100
+    },
+    {
+      "band": "B_032",
+      "lo": 0.32,
+      "hi": 0.42,
+      "isCandidate": false,
+      "population": 1221,
+      "sampled": 100
+    },
+    {
+      "band": "B_022",
+      "lo": 0.22,
+      "hi": 0.32,
+      "isCandidate": false,
+      "population": 4295,
+      "sampled": 60
+    }
+  ]
+}

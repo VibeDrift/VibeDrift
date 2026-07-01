@@ -1,0 +1,26 @@
+{
+  "_comment": "TEMPLATE ONLY — not loaded by the harness (lives outside tasks/) and NOT verified against the repo. See TASKS.md. Copy to tasks/<id>.json only after completing the verification checklist.",
+  "id": "remeda-example-unverified",
+  "repoId": "remeda",
+  "kind": "positive",
+  "prompt": "Implement <function> in packages/remeda/src so it behaves as the tests require.",
+  "applyTestsPatch": "fixtures/patches/remeda-example.patch",
+  "gateTestCmd": "cd packages/remeda && npx vitest run --project runtime <spec>",
+  "conventionTargets": [
+    {
+      "axis": "reuse",
+      "expectation": "build the function with the existing `purry` helper instead of hand-rolling argument handling",
+      "rationale": "every data-first/data-last function in remeda is wrapped with purry"
+    },
+    {
+      "axis": "naming",
+      "expectation": "use a camelCase function name matching its neighbors",
+      "rationale": "all public functions in src/ are camelCase"
+    },
+    {
+      "axis": "imports",
+      "expectation": "import internal helpers via the existing relative import style, no default exports",
+      "rationale": "remeda uses named relative imports throughout"
+    }
+  ]
+}

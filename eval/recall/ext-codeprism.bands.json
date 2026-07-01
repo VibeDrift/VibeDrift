@@ -1,0 +1,68 @@
+{
+  "repo": "ext-codeprism",
+  "functions": 2792,
+  "crossFilePairs": 3827921,
+  "cosMed": 0.72,
+  "structHigh": 0.95,
+  "candidates": 3303,
+  "autoConfirm": 1517,
+  "needsLlm": 1786,
+  "bands": [
+    {
+      "band": "C_high",
+      "lo": 0.85,
+      "hi": 1.01,
+      "isCandidate": true,
+      "population": 1717,
+      "sampled": 24
+    },
+    {
+      "band": "C_mid",
+      "lo": 0.72,
+      "hi": 0.85,
+      "isCandidate": true,
+      "population": 1586,
+      "sampled": 24
+    },
+    {
+      "band": "B_062",
+      "lo": 0.62,
+      "hi": 0.72,
+      "isCandidate": false,
+      "population": 5994,
+      "sampled": 60
+    },
+    {
+      "band": "B_052",
+      "lo": 0.52,
+      "hi": 0.62,
+      "isCandidate": false,
+      "population": 23155,
+      "sampled": 60
+    },
+    {
+      "band": "B_042",
+      "lo": 0.42,
+      "hi": 0.52,
+      "isCandidate": false,
+      "population": 115692,
+      "sampled": 100
+    },
+    {
+      "band": "B_032",
+      "lo": 0.32,
+      "hi": 0.42,
+      "isCandidate": false,
+      "population": 372655,
+      "sampled": 100
+    },
+    {
+      "band": "B_022",
+      "lo": 0.22,
+      "hi": 0.32,
+      "isCandidate": false,
+      "population": 885405,
+      "sampled": 60
+    }
+  ]
+}

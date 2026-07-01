@@ -1,0 +1,1 @@
+[{"id":"remeda","language":"typescript","gitUrl":"https://github.com/remeda/remeda","sha":"c9feae9f07bc7b925371eadcd5ffd321190ffdf1","testCmd":"cd packages/remeda && npx vitest run --project runtime","setupCmd":"npm install","postCutoff":false}]

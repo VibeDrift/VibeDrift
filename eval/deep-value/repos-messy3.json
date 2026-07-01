@@ -1,0 +1,5 @@
+[
+  { "label": "malware-analysis", "lang": "python", "source": { "git": "https://github.com/umasolution/malware-analysis.git" } },
+  { "label": "JSONSchemaDiscovery", "lang": "typescript", "source": { "git": "https://github.com/feekosta/JSONSchemaDiscovery.git" } },
+  { "label": "frontend-service", "lang": "typescript", "source": { "git": "https://github.com/nimble-platform/frontend-service.git" } }
+]

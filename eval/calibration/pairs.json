@@ -1,0 +1,1345 @@
+[
+  {
+    "id": "g0",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 3,
+    "crossPackage": true,
+    "fnA": {
+      "name": "createContext",
+      "path": "examples/lambda-api-gateway-streaming/src/server.ts",
+      "body": "\n  return {\n    event: event,\n    apiVersion: (event as { version?: string }).version ?? '1.0',\n    user: event.headers['x-user'],\n  };\n}"
+    },
+    "fnB": {
+      "name": "createContext",
+      "path": "examples/lambda-api-gateway/src/server.ts",
+      "body": "\n  return {\n    event: event,\n    apiVersion: (event as { version?: string }).version ?? '1.0',\n    user: event.headers['x-user'],\n  };\n}"
+    }
+  },
+  {
+    "id": "g1",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 4,
+    "crossPackage": true,
+    "fnA": {
+      "name": "getBaseUrl",
+      "path": "examples/next-big-router/src/utils/trpc.ts",
+      "body": "\n  if (typeof window !== 'undefined') {\n    // In the browser, we return a relative URL\n    return '';\n  }\n  // When rendering on the server, we return an absolute URL\n\n  // reference for vercel.com\n  if (process.env.VERCEL_URL) {\n    return `https://${process.env.VERCEL_URL}`;\n  }\n\n  // assume localhost\n  return `http://localhost:${process.env.PORT ?? 3000}`;\n}"
+    },
+    "fnB": {
+      "name": "getBaseUrl",
+      "path": "examples/next-edge-runtime/src/utils/trpc.ts",
+      "body": "\n  if (typeof window !== 'undefined') {\n    // In the browser, we return a relative URL\n    return '';\n  }\n  // When rendering on the server, we return an absolute URL\n\n  // reference for vercel.com\n  if (process.env.VERCEL_URL) {\n    return `https://${process.env.VERCEL_URL}`;\n  }\n\n  // assume localhost\n  return `http://localhost:${process.env.PORT ?? 3000}`;\n}"
+    }
+  },
+  {
+    "id": "g2",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "isAuthed",
+      "path": "examples/next-prisma-websockets-starter/src/server/trpc.ts",
+      "body": "\n  const user = opts.ctx.session?.user;\n\n  if (!user?.name) {\n    throw new TRPCError({ code: 'UNAUTHORIZED' });\n  }\n\n  return opts.next({\n    ctx: {\n      user: {\n        ...user,\n        name: user.name,\n      },\n    },\n  });\n}"
+    },
+    "fnB": {
+      "name": "isAuthed",
+      "path": "examples/next-sse-chat/src/server/trpc.ts",
+      "body": "\n  const user = opts.ctx.session?.user;\n\n  if (!user?.name) {\n    throw new TRPCError({ code: 'UNAUTHORIZED' });\n  }\n\n  return opts.next({\n    ctx: {\n      user: {\n        ...user,\n        name: user.name,\n      },\n    },\n  });\n}"
+    }
+  },
+  {
+    "id": "g3",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "beforeRequest",
+      "path": "examples/openapi-codegen/src/client/generated/client/client.gen.ts",
+      "body": "\n    const opts = {\n      ..._config,\n      ...options,\n      fetch: options.fetch ?? _config.fetch ?? globalThis.fetch,\n      headers: mergeHeaders(_config.headers, options.headers),\n      serializedBody: undefined as string | undefined,\n    };\n\n    if (opts.security) {\n      await setAuthParams({\n        ...opts,\n        security: opts.security,\n      });\n    }\n\n    if (opts.requestValidator) {\n      await opts.requestValidator(opts);\n    }\n\n    if (opts.body !== undefined && opts.bodySerializer) {\n      opts.serializedBody = opts.bodySerializer(opts.body) as string | undefined;\n    }\n\n    // remove Content-Type header if body is empty to avoid sending invalid requests\n    if (opts.body === undefined || opts.serializedBody === '') {\n      opts.headers.delete('Content-Type');\n    }\n\n    const url = buildUrl(opts);\n\n    return { opts, url };\n  }"
+    },
+    "fnB": {
+      "name": "beforeRequest",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/client/client.gen.ts",
+      "body": "\n    const opts = {\n      ..._config,\n      ...options,\n      fetch: options.fetch ?? _config.fetch ?? globalThis.fetch,\n      headers: mergeHeaders(_config.headers, options.headers),\n      serializedBody: undefined as string | undefined,\n    };\n\n    if (opts.security) {\n      await setAuthParams({\n        ...opts,\n        security: opts.security,\n      });\n    }\n\n    if (opts.requestValidator) {\n      await opts.requestValidator(opts);\n    }\n\n    if (opts.body !== undefined && opts.bodySerializer) {\n      opts.serializedBody = opts.bodySerializer(opts.body) as string | undefined;\n    }\n\n    // remove Content-Type header if body is empty to avoid sending invalid requests\n    if (opts.body === undefined || opts.serializedBody === '') {\n      opts.headers.delete('Content-Type');\n    }\n\n    const url = buildUrl(opts);\n\n    return { opts, url };\n  }"
+    }
+  },
+  {
+    "id": "g4",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "getParseAs",
+      "path": "examples/openapi-codegen/src/client/generated/client/utils.gen.ts",
+      "body": "\n  if (!contentType) {\n    // If no Content-Type header is provided, the best we can do is return the raw response body,\n    // which is effectively the same as the 'stream' option.\n    return 'stream';\n  }\n\n  const cleanContent = contentType.split(';')[0]?.trim();\n\n  if (!cleanContent) {\n    return;\n  }\n\n  if (cleanContent.startsWith('application/json') || cleanContent.endsWith('+json')) {\n    return 'json';\n  }\n\n  if (cleanContent === 'multipart/form-data') {\n    return 'formData';\n  }\n\n  if (\n    ['application/', 'audio/', 'image/', 'video/'].some((type) => cleanContent.startsWith(type))\n  ) {\n    return 'blob';\n  }\n\n  if (cleanContent.startsWith('text/')) {\n    return 'text';\n  }\n\n  return;\n}"
+    },
+    "fnB": {
+      "name": "getParseAs",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!contentType) {\n    // If no Content-Type header is provided, the best we can do is return the raw response body,\n    // which is effectively the same as the 'stream' option.\n    return 'stream';\n  }\n\n  const cleanContent = contentType.split(';')[0]?.trim();\n\n  if (!cleanContent) {\n    return;\n  }\n\n  if (cleanContent.startsWith('application/json') || cleanContent.endsWith('+json')) {\n    return 'json';\n  }\n\n  if (cleanContent === 'multipart/form-data') {\n    return 'formData';\n  }\n\n  if (\n    ['application/', 'audio/', 'image/', 'video/'].some((type) => cleanContent.startsWith(type))\n  ) {\n    return 'blob';\n  }\n\n  if (cleanContent.startsWith('text/')) {\n    return 'text';\n  }\n\n  return;\n}"
+    }
+  },
+  {
+    "id": "g5",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "checkForExistence",
+      "path": "examples/openapi-codegen/src/client/generated/client/utils.gen.ts",
+      "body": "\n  if (!name) {\n    return false;\n  }\n  if (\n    options.headers.has(name) ||\n    options.query?.[name] ||\n    options.headers.get('Cookie')?.includes(`${name}=`)\n  ) {\n    return true;\n  }\n  return false;\n}"
+    },
+    "fnB": {
+      "name": "checkForExistence",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/client/utils.gen.ts",
+      "body": "\n  if (!name) {\n    return false;\n  }\n  if (\n    options.headers.has(name) ||\n    options.query?.[name] ||\n    options.headers.get('Cookie')?.includes(`${name}=`)\n  ) {\n    return true;\n  }\n  return false;\n}"
+    }
+  },
+  {
+    "id": "g6",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "serializeUrlSearchParamsPair",
+      "path": "examples/openapi-codegen/src/client/generated/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string') {\n    data.append(key, value);\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    },
+    "fnB": {
+      "name": "serializeUrlSearchParamsPair",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/bodySerializer.gen.ts",
+      "body": "\n  if (typeof value === 'string') {\n    data.append(key, value);\n  } else {\n    data.append(key, JSON.stringify(value));\n  }\n}"
+    }
+  },
+  {
+    "id": "g7",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "buildKeyMap",
+      "path": "examples/openapi-codegen/src/client/generated/core/params.gen.ts",
+      "body": "\n  if (!map) {\n    map = new Map();\n  }\n\n  for (const config of fields) {\n    if ('in' in config) {\n      if (config.key) {\n        map.set(config.key, {\n          in: config.in,\n          map: config.map,\n        });\n      }\n    } else if ('key' in config) {\n      map.set(config.key, {\n        map: config.map,\n      });\n    } else if (config.args) {\n      buildKeyMap(config.args, map);\n    }\n  }\n\n  return map;\n}"
+    },
+    "fnB": {
+      "name": "buildKeyMap",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/params.gen.ts",
+      "body": "\n  if (!map) {\n    map = new Map();\n  }\n\n  for (const config of fields) {\n    if ('in' in config) {\n      if (config.key) {\n        map.set(config.key, {\n          in: config.in,\n          map: config.map,\n        });\n      }\n    } else if ('key' in config) {\n      map.set(config.key, {\n        map: config.map,\n      });\n    } else if (config.args) {\n      buildKeyMap(config.args, map);\n    }\n  }\n\n  return map;\n}"
+    }
+  },
+  {
+    "id": "g8",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "stripEmptySlots",
+      "path": "examples/openapi-codegen/src/client/generated/core/params.gen.ts",
+      "body": "\n  for (const [slot, value] of Object.entries(params)) {\n    if (value && typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length) {\n      delete params[slot as Slot];\n    }\n  }\n}"
+    },
+    "fnB": {
+      "name": "stripEmptySlots",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/params.gen.ts",
+      "body": "\n  for (const [slot, value] of Object.entries(params)) {\n    if (value && typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length) {\n      delete params[slot as Slot];\n    }\n  }\n}"
+    }
+  },
+  {
+    "id": "g9",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "serializePrimitiveParam",
+      "path": "examples/openapi-codegen/src/client/generated/core/pathSerializer.gen.ts",
+      "body": "\n  if (value === undefined || value === null) {\n    return '';\n  }\n\n  if (typeof value === 'object') {\n    throw new Error(\n      'Deeply-nested arrays/objects aren’t supported. Provide your own `querySerializer()` to handle these.',\n    );\n  }\n\n  return `${name}=${allowReserved ? value : encodeURIComponent(value)}`;\n}"
+    },
+    "fnB": {
+      "name": "serializePrimitiveParam",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/pathSerializer.gen.ts",
+      "body": "\n  if (value === undefined || value === null) {\n    return '';\n  }\n\n  if (typeof value === 'object') {\n    throw new Error(\n      'Deeply-nested arrays/objects aren’t supported. Provide your own `querySerializer()` to handle these.',\n    );\n  }\n\n  return `${name}=${allowReserved ? value : encodeURIComponent(value)}`;\n}"
+    }
+  },
+  {
+    "id": "g10",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "stringifyToJsonValue",
+      "path": "examples/openapi-codegen/src/client/generated/core/queryKeySerializer.gen.ts",
+      "body": "\n  try {\n    const json = JSON.stringify(input, queryKeyJsonReplacer);\n    if (json === undefined) {\n      return undefined;\n    }\n    return JSON.parse(json) as JsonValue;\n  } catch {\n    return undefined;\n  }\n}"
+    },
+    "fnB": {
+      "name": "stringifyToJsonValue",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/queryKeySerializer.gen.ts",
+      "body": "\n  try {\n    const json = JSON.stringify(input, queryKeyJsonReplacer);\n    if (json === undefined) {\n      return undefined;\n    }\n    return JSON.parse(json) as JsonValue;\n  } catch {\n    return undefined;\n  }\n}"
+    }
+  },
+  {
+    "id": "g11",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "serializeSearchParams",
+      "path": "examples/openapi-codegen/src/client/generated/core/queryKeySerializer.gen.ts",
+      "body": "\n  const entries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b));\n  const result: Record<string, JsonValue> = {};\n\n  for (const [key, value] of entries) {\n    const existing = result[key];\n    if (existing === undefined) {\n      result[key] = value;\n      continue;\n    }\n\n    if (Array.isArray(existing)) {\n      (existing as string[]).push(value);\n    } else {\n      result[key] = [existing, value];\n    }\n  }\n\n  return result;\n}"
+    },
+    "fnB": {
+      "name": "serializeSearchParams",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/queryKeySerializer.gen.ts",
+      "body": "\n  const entries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b));\n  const result: Record<string, JsonValue> = {};\n\n  for (const [key, value] of entries) {\n    const existing = result[key];\n    if (existing === undefined) {\n      result[key] = value;\n      continue;\n    }\n\n    if (Array.isArray(existing)) {\n      (existing as string[]).push(value);\n    } else {\n      result[key] = [existing, value];\n    }\n  }\n\n  return result;\n}"
+    }
+  },
+  {
+    "id": "g12",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "getValidRequestBody",
+      "path": "examples/openapi-codegen/src/client/generated/core/utils.gen.ts",
+      "body": "\n  const hasBody = options.body !== undefined;\n  const isSerializedBody = hasBody && options.bodySerializer;\n\n  if (isSerializedBody) {\n    if ('serializedBody' in options) {\n      const hasSerializedBody =\n        options.serializedBody !== undefined && options.serializedBody !== '';\n\n      return hasSerializedBody ? options.serializedBody : null;\n    }\n\n    // not all clients implement a serializedBody property (i.e. client-axios)\n    return options.body !== '' ? options.body : null;\n  }\n\n  // plain/text body\n  if (hasBody) {\n    return options.body;\n  }\n\n  // no body was provided\n  return undefined;\n}"
+    },
+    "fnB": {
+      "name": "getValidRequestBody",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/utils.gen.ts",
+      "body": "\n  const hasBody = options.body !== undefined;\n  const isSerializedBody = hasBody && options.bodySerializer;\n\n  if (isSerializedBody) {\n    if ('serializedBody' in options) {\n      const hasSerializedBody =\n        options.serializedBody !== undefined && options.serializedBody !== '';\n\n      return hasSerializedBody ? options.serializedBody : null;\n    }\n\n    // not all clients implement a serializedBody property (i.e., client-axios)\n    return options.body !== '' ? options.body : null;\n  }\n\n  // plain/text body\n  if (hasBody) {\n    return options.body;\n  }\n\n  // no body was provided\n  return undefined;\n}"
+    }
+  },
+  {
+    "id": "g13",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 10,
+    "crossPackage": true,
+    "fnA": {
+      "name": "getUrl",
+      "path": "examples/openapi-codegen/src/client/generated/core/utils.gen.ts",
+      "body": "\n  const pathUrl = _url.startsWith('/') ? _url : `/${_url}`;\n  let url = (baseUrl ?? '') + pathUrl;\n  if (path) {\n    url = defaultPathSerializer({ path, url });\n  }\n  let search = query ? querySerializer(query) : '';\n  if (search.startsWith('?')) {\n    search = search.substring(1);\n  }\n  if (search) {\n    url += `?${search}`;\n  }\n  return url;\n}"
+    },
+    "fnB": {
+      "name": "getUrl",
+      "path": "packages/openapi/test/routers/amazonIonRouter-heyapi/core/utils.gen.ts",
+      "body": "\n  const pathUrl = _url.startsWith('/') ? _url : `/${_url}`;\n  let url = (baseUrl ?? '') + pathUrl;\n  if (path) {\n    url = defaultPathSerializer({ path, url });\n  }\n  let search = query ? querySerializer(query) : '';\n  if (search.startsWith('?')) {\n    search = search.substring(1);\n  }\n  if (search) {\n    url += `?${search}`;\n  }\n  return url;\n}"
+    }
+  },
+  {
+    "id": "g14",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "getMessageFromUnknownError",
+      "path": "packages/client/src/TRPCClientError.ts",
+      "body": "\n  if (typeof err === 'string') {\n    return err;\n  }\n  if (isObject(err) && typeof err['message'] === 'string') {\n    return err['message'];\n  }\n  return fallback;\n}"
+    },
+    "fnB": {
+      "name": "getMessageFromUnknownError",
+      "path": "packages/tests/server/errors.test.ts",
+      "body": "\n  if (typeof err === 'string') {\n    return err;\n  }\n  if (isObject(err) && typeof err['message'] === 'string') {\n    return err['message'];\n  }\n  return fallback;\n}"
+    }
+  },
+  {
+    "id": "g15",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "resolveTransformer",
+      "path": "packages/openapi/src/heyapi/index.ts",
+      "body": "\n  if ('input' in transformer) {\n    return transformer;\n  }\n  return { input: transformer, output: transformer };\n}"
+    },
+    "fnB": {
+      "name": "getDataTransformer",
+      "path": "packages/server/src/unstable-core-do-not-import/transformer.ts",
+      "body": "\n  if ('input' in transformer) {\n    return transformer;\n  }\n  return { input: transformer, output: transformer };\n}"
+    }
+  },
+  {
+    "id": "g16",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 3,
+    "crossPackage": false,
+    "fnA": {
+      "name": "App",
+      "path": "packages/react-query/test/overrides.test.tsx",
+      "body": "\n        return (\n          <trpc.Provider\n            {...{ queryClient, client: getUntypedClient(opts.client) }}\n          >\n            <QueryClientProvider client={queryClient}>\n              {props.children}\n            </QueryClientProvider>\n          </trpc.Provider>\n        );\n      }"
+    },
+    "fnB": {
+      "name": "App",
+      "path": "packages/react-query/test/polymorphism.test.tsx",
+      "body": "\n        return (\n          <trpc.Provider\n            {...{ queryClient, client: getUntypedClient(opts.client) }}\n          >\n            <QueryClientProvider client={queryClient}>\n              {props.children}\n            </QueryClientProvider>\n          </trpc.Provider>\n        );\n      }"
+    }
+  },
+  {
+    "id": "g17",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "diff",
+      "path": "packages/react-query/test/useSubscription.test.tsx",
+      "body": "\n  return list.map((item, index) => {\n    if (index === 0) return item;\n\n    const prev = list[index - 1]!;\n    const diff = {} as any;\n    for (const key in item) {\n      if (item[key] !== prev[key]) {\n        diff[key] = item[key];\n      }\n    }\n    return diff;\n  });\n}"
+    },
+    "fnB": {
+      "name": "diff",
+      "path": "packages/tanstack-react-query/test/useSubscription.test.tsx",
+      "body": "\n  return list.map((item, index) => {\n    if (index === 0) return item;\n\n    const prev = list[index - 1]!;\n    const diff = {} as any;\n    for (const key in item) {\n      if (item[key] !== prev[key]) {\n        diff[key] = item[key];\n      }\n    }\n    return diff;\n  });\n}"
+    }
+  },
+  {
+    "id": "g18",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "trimSlashes",
+      "path": "packages/server/src/adapters/fetch/fetchRequestHandler.ts",
+      "body": "\n  path = path.startsWith('/') ? path.slice(1) : path;\n  path = path.endsWith('/') ? path.slice(0, -1) : path;\n\n  return path;\n}"
+    },
+    "fnB": {
+      "name": "trimSlashes",
+      "path": "packages/tests/server/adapters/fetch.test.ts",
+      "body": "\n    path = path.startsWith('/') ? path.slice(1) : path;\n    path = path.endsWith('/') ? path.slice(0, -1) : path;\n\n    return path;\n  }"
+    }
+  },
+  {
+    "id": "g19",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "onData",
+      "path": "packages/server/src/observable/observable.test.ts",
+      "body": "\n      observer.next(data);\n    }"
+    },
+    "fnB": {
+      "name": "callback",
+      "path": "packages/server/src/observable/operators.test.ts",
+      "body": "\n      observer.next(data);\n    }"
+    }
+  },
+  {
+    "id": "g20",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Component",
+      "path": "packages/upgrade/test/__fixtures__/hooks/existingRq.snap.tsx",
+      "body": "\n  useQuery({ queryKey: ['a'], queryFn: () => 1 });\n  useMutation({ mutationFn: async () => 1 });\n\n  return useQueryClient().isFetching() ? 'loading' : 'loaded';\n}"
+    },
+    "fnB": {
+      "name": "Component",
+      "path": "packages/upgrade/test/__fixtures__/hooks/existingRq.tsx",
+      "body": "\n  useQuery({ queryKey: ['a'], queryFn: () => 1 });\n  useMutation({ mutationFn: async () => 1 });\n\n  return useQueryClient().isFetching() ? 'loading' : 'loaded';\n}"
+    }
+  },
+  {
+    "id": "g21",
+    "repo": "trpc/trpc",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Component2",
+      "path": "packages/upgrade/test/__fixtures__/hooks/reactContext.snap.tsx",
+      "body": "\n  const value = React.useContext(DummyContext);\n\n  return 'ok';\n}"
+    },
+    "fnB": {
+      "name": "Component2",
+      "path": "packages/upgrade/test/__fixtures__/hooks/reactContext.tsx",
+      "body": "\n  const value = React.useContext(DummyContext);\n\n  return 'ok';\n}"
+    }
+  },
+  {
+    "id": "g22",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 4,
+    "crossPackage": false,
+    "fnA": {
+      "name": "getQueryClient",
+      "path": "examples/react/nextjs-app-prefetching/app/get-query-client.ts",
+      "body": "\n  if (environmentManager.isServer()) {\n    // Server: always make a new query client\n    return makeQueryClient()\n  } else {\n    // Browser: make a new query client if we don't already have one\n    // This is very important, so we don't re-make a new client if React\n    // suspends during the initial render. This may not be needed if we\n    // have a suspense boundary BELOW the creation of the query client\n    if (!browserQueryClient) browserQueryClient = makeQueryClient()\n    return browserQueryClient\n  }\n}"
+    },
+    "fnB": {
+      "name": "getQueryClient",
+      "path": "examples/react/nextjs-suspense-streaming/src/app/providers.tsx",
+      "body": "\n  if (environmentManager.isServer()) {\n    return makeQueryClient()\n  } else {\n    if (!browserQueryClient) browserQueryClient = makeQueryClient()\n    return browserQueryClient\n  }\n}"
+    }
+  },
+  {
+    "id": "g23",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "updateMovie",
+      "path": "examples/react/offline/src/api.ts",
+      "body": "\n  const response = await fetch(`/movies/${id}`, {\n    method: 'POST',\n    body: JSON.stringify({ comment }),\n    headers: { 'Content-Type': 'application/json' },\n  })\n  return await response.json()\n}"
+    },
+    "fnB": {
+      "name": "updateMovie",
+      "path": "examples/solid/offline/src/api.ts",
+      "body": "\n  const response = await fetch(`/movies/${id}`, {\n    method: 'POST',\n    body: JSON.stringify({ comment }),\n    headers: { 'Content-Type': 'application/json' },\n  })\n  return await response.json()\n}"
+    }
+  },
+  {
+    "id": "g24",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Page",
+      "path": "packages/preact-query/src/__tests__/QueryResetErrorBoundary.test.tsx",
+      "body": "\n        const [{ data }] = useSuspenseQueries({\n          queries: [\n            {\n              queryKey: key,\n              queryFn: () =>\n                sleep(10).then(() => {\n                  if (!succeed) throw new Error('Error')\n                  return 'data'\n                }),\n              retry: false,\n              retryOnMount: () => true,\n            },\n          ],\n        })\n\n        return <div>{data}</div>\n      }"
+    },
+    "fnB": {
+      "name": "Page",
+      "path": "packages/react-query/src/__tests__/QueryResetErrorBoundary.test.tsx",
+      "body": "\n        const [{ data }] = useSuspenseQueries({\n          queries: [\n            {\n              queryKey: key,\n              queryFn: () =>\n                sleep(10).then(() => {\n                  if (!succeed) throw new Error('Error')\n                  return 'data'\n                }),\n              retry: false,\n              retryOnMount: () => true,\n            },\n          ],\n        })\n\n        return <div>{data}</div>\n      }"
+    }
+  },
+  {
+    "id": "g25",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Page",
+      "path": "packages/preact-query/src/__tests__/QueryResetErrorBoundary.test.tsx",
+      "body": "\n        const [{ data }] = useSuspenseQueries({\n          queries: [\n            {\n              queryKey: key,\n              queryFn: () =>\n                sleep(10).then(() => {\n                  if (!succeed) throw new Error('Error')\n                  return 'data'\n                }),\n              retry: false,\n              retryOnMount: () => true,\n            },\n          ],\n        })\n\n        return <div>{data}</div>\n      }"
+    },
+    "fnB": {
+      "name": "Page",
+      "path": "packages/react-query/src/__tests__/QueryResetErrorBoundary.test.tsx",
+      "body": "\n        const [{ data }] = useSuspenseQueries({\n          queries: [\n            {\n              queryKey: key,\n              queryFn: () =>\n                sleep(10).then(() => {\n                  if (!succeed) throw new Error('Error')\n                  return 'data'\n                }),\n              retry: false,\n              retryOnMount: () => true,\n            },\n          ],\n        })\n\n        return <div>{data}</div>\n      }"
+    }
+  },
+  {
+    "id": "g26",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Mutation",
+      "path": "packages/preact-query/src/__tests__/mutationOptions.test.tsx",
+      "body": "\n      const { mutate: mutate1 } = useMutation(mutationOpts1)\n      const { mutate: mutate2 } = useMutation(mutationOpts2)\n      const data = useMutationState({\n        filters: { mutationKey: mutationOpts1.mutationKey, status: 'success' },\n      })\n\n      mutationStateArray.push(...data)\n\n      return (\n        <div>\n          <button onClick={() => mutate1()}>mutate1</button>\n          <button onClick={() => mutate2()}>mutate2</button>\n        </div>\n      )\n    }"
+    },
+    "fnB": {
+      "name": "Mutation",
+      "path": "packages/react-query/src/__tests__/mutationOptions.test.tsx",
+      "body": "\n      const { mutate: mutate1 } = useMutation(mutationOpts1)\n      const { mutate: mutate2 } = useMutation(mutationOpts2)\n      const data = useMutationState({\n        filters: { mutationKey: mutationOpts1.mutationKey, status: 'success' },\n      })\n\n      mutationStateArray.push(...data)\n\n      return (\n        <div>\n          <button onClick={() => mutate1()}>mutate1</button>\n          <button onClick={() => mutate2()}>mutate2</button>\n        </div>\n      )\n    }"
+    }
+  },
+  {
+    "id": "g27",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "testFn",
+      "path": "packages/preact-query/src/__tests__/queryOptions.test-d.tsx",
+      "body": "\n      const options = queryOptions({\n        queryKey: queryKey(),\n        queryFn: () => Promise.resolve('something string'),\n        initialData: id ? 'initial string' : undefined,\n      })\n      expectTypeOf(options.initialData).toExtend<\n        InitialDataFunction<string> | string | undefined\n      >()\n    }"
+    },
+    "fnB": {
+      "name": "testFn",
+      "path": "packages/react-query/src/__tests__/queryOptions.test-d.tsx",
+      "body": "\n      const options = queryOptions({\n        queryKey: queryKey(),\n        queryFn: () => Promise.resolve('something string'),\n        initialData: id ? 'initial string' : undefined,\n      })\n      expectTypeOf(options.initialData).toExtend<\n        InitialDataFunction<string> | string | undefined\n      >()\n    }"
+    }
+  },
+  {
+    "id": "g28",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "renderWithSuspense",
+      "path": "packages/preact-query/src/__tests__/suspense.test.tsx",
+      "body": "\n  return render(\n    <QueryClientProvider client={client}>\n      <Suspense fallback=\"loading\">{ui}</Suspense>\n    </QueryClientProvider>,\n  )\n}"
+    },
+    "fnB": {
+      "name": "renderWithSuspense",
+      "path": "packages/react-query/src/__tests__/suspense.test.tsx",
+      "body": "\n  return render(\n    <QueryClientProvider client={client}>\n      <Suspense fallback=\"loading\">{ui}</Suspense>\n    </QueryClientProvider>,\n  )\n}"
+    }
+  },
+  {
+    "id": "g29",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 4,
+    "crossPackage": true,
+    "fnA": {
+      "name": "queryFn",
+      "path": "packages/preact-query/src/__tests__/useInfiniteQuery.test.tsx",
+      "body": "\n      const promise = new Promise<string>((resolve, reject) => {\n        cancelFn = vi.fn(() => reject('Cancelled'))\n        signal?.addEventListener('abort', cancelFn)\n        sleep(1000).then(() => resolve('OK'))\n      })\n\n      return promise\n    }"
+    },
+    "fnB": {
+      "name": "queryFn",
+      "path": "packages/react-query/src/__tests__/useInfiniteQuery.test.tsx",
+      "body": "\n      const promise = new Promise<string>((resolve, reject) => {\n        cancelFn = vi.fn(() => reject('Cancelled'))\n        signal?.addEventListener('abort', cancelFn)\n        sleep(1000).then(() => resolve('OK'))\n      })\n\n      return promise\n    }"
+    }
+  },
+  {
+    "id": "g30",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 3,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Page",
+      "path": "packages/preact-query/src/__tests__/useMutationState.test.tsx",
+      "body": "\n      return (\n        <div>\n          <Variables />\n          <Mutate />\n        </div>\n      )\n    }"
+    },
+    "fnB": {
+      "name": "Page",
+      "path": "packages/react-query/src/__tests__/useMutationState.test.tsx",
+      "body": "\n      return (\n        <div>\n          <Variables />\n          <Mutate />\n        </div>\n      )\n    }"
+    }
+  },
+  {
+    "id": "g31",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Prefetch",
+      "path": "packages/preact-query/src/__tests__/usePrefetchInfiniteQuery.test.tsx",
+      "body": "\n      usePrefetchInfiniteQuery(queryOpts)\n      return <>{children}</>\n    }"
+    },
+    "fnB": {
+      "name": "Prefetch",
+      "path": "packages/react-query/src/__tests__/usePrefetchInfiniteQuery.test.tsx",
+      "body": "\n      usePrefetchInfiniteQuery(queryOpts)\n      return <>{children}</>\n    }"
+    }
+  },
+  {
+    "id": "g32",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Page",
+      "path": "packages/preact-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    },
+    "fnB": {
+      "name": "Page",
+      "path": "packages/react-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    }
+  },
+  {
+    "id": "g33",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Page",
+      "path": "packages/preact-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    },
+    "fnB": {
+      "name": "Page",
+      "path": "packages/react-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    }
+  },
+  {
+    "id": "g34",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Page",
+      "path": "packages/preact-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    },
+    "fnB": {
+      "name": "Page",
+      "path": "packages/react-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    }
+  },
+  {
+    "id": "g35",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "Page",
+      "path": "packages/preact-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    },
+    "fnB": {
+      "name": "Page",
+      "path": "packages/react-query/src/__tests__/useQueries.test.tsx",
+      "body": "\n      const results = useQueries({\n        queries: [\n          { queryKey: key1, queryFn: queryFn1 },\n          { queryKey: key2, queryFn: queryFn2 },\n        ],\n      })\n\n      return (\n        <div>\n          <div data-testid=\"status1\">{results[0]?.status}</div>\n          <div data-testid=\"status2\">{results[1]?.status}</div>\n          <div data-testid=\"fetchStatus1\">{results[0]?.fetchStatus}</div>\n          <div data-testid=\"fetchStatus2\">{results[1]?.fetchStatus}</div>\n          <div data-testid=\"data1\">{results[0]?.data ?? 'undefined'}</div>\n          <div data-testid=\"data2\">{results[1]?.data ?? 'undefined'}</div>\n        </div>\n      )\n    }"
+    }
+  },
+  {
+    "id": "g36",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "queryKeyHashFn",
+      "path": "packages/preact-query/src/__tests__/useQuery.test.tsx",
+      "body": "\n      return JSON.stringify(x, (_, value) => {\n        if (typeof value === 'bigint') return value.toString()\n        return value\n      })\n    }"
+    },
+    "fnB": {
+      "name": "queryKeyHashFn",
+      "path": "packages/react-query/src/__tests__/useQuery.test.tsx",
+      "body": "\n      return JSON.stringify(x, (_, value) => {\n        if (typeof value === 'bigint') return value.toString()\n        return value\n      })\n    }"
+    }
+  },
+  {
+    "id": "g37",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 4,
+    "crossPackage": false,
+    "fnA": {
+      "name": "selector",
+      "path": "packages/preact-query/src/__tests__/useQuery.test.tsx",
+      "body": "\n      return data.numbers.current\n    }"
+    },
+    "fnB": {
+      "name": "selector",
+      "path": "packages/preact-query/src/__tests__/useQuery.test.tsx",
+      "body": "\n      return data.numbers.current\n    }"
+    }
+  },
+  {
+    "id": "g38",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "queryFn",
+      "path": "packages/preact-query/src/__tests__/useQuery.test.tsx",
+      "body": "\n      return Promise.resolve('custom client')\n    }"
+    },
+    "fnB": {
+      "name": "queryFn",
+      "path": "packages/react-query/src/__tests__/useQuery.test.tsx",
+      "body": "\n      return Promise.resolve('custom client')\n    }"
+    }
+  },
+  {
+    "id": "g39",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Example4",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/default.input.tsx",
+      "body": "\n  const { data } = useQueries({\n    queryKey: ['posts'],\n    queryFn: queryFn,\n    keepPreviousData: false,\n  })\n\n  return <div>{JSON.stringify(data)}</div>\n}"
+    },
+    "fnB": {
+      "name": "Example4",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/default.output.tsx",
+      "body": "\n  const { data } = useQueries({\n    queryKey: ['posts'],\n    queryFn: queryFn,\n    keepPreviousData: false,\n  })\n\n  return <div>{JSON.stringify(data)}</div>\n}"
+    }
+  },
+  {
+    "id": "g40",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Example7",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/default.input.tsx",
+      "body": "\n  const queryClient = new QueryClient()\n\n  queryClient.setQueryDefaults(['key'], {\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n\n  useQueryClient().setQueryDefaults(['key'], {\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n\n  const anotherQueryClient = useQueryClient()\n\n  anotherQueryClient.setQueryDefaults(['key'], {\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n}"
+    },
+    "fnB": {
+      "name": "Example7",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/default.output.tsx",
+      "body": "\n  const queryClient = new QueryClient()\n\n  queryClient.setQueryDefaults(['key'], {\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n\n  useQueryClient().setQueryDefaults(['key'], {\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n\n  const anotherQueryClient = useQueryClient()\n\n  anotherQueryClient.setQueryDefaults(['key'], {\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n}"
+    }
+  },
+  {
+    "id": "g41",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Example12",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/default.input.tsx",
+      "body": "\n  new QueryClient({\n    defaultOptions: {\n      queries: {\n        keepPreviousData: true,\n        placeholderData: () => previousData\n      }\n    }\n  })\n}"
+    },
+    "fnB": {
+      "name": "Example12",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/default.output.tsx",
+      "body": "\n  new QueryClient({\n    defaultOptions: {\n      queries: {\n        keepPreviousData: true,\n        placeholderData: () => previousData\n      }\n    }\n  })\n}"
+    }
+  },
+  {
+    "id": "g42",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Example2",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/named.input.tsx",
+      "body": "\n  const { data } = useRenamedUseQuery({\n    queryKey: ['posts'],\n    queryFn: queryFn,\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n\n  return <div>{JSON.stringify(data)}</div>\n}"
+    },
+    "fnB": {
+      "name": "Example2",
+      "path": "packages/query-codemods/src/v5/keep-previous-data/__testfixtures__/named.output.tsx",
+      "body": "\n  const { data } = useRenamedUseQuery({\n    queryKey: ['posts'],\n    queryFn: queryFn,\n    keepPreviousData: true,\n    placeholderData: () => previousData\n  })\n\n  return <div>{JSON.stringify(data)}</div>\n}"
+    }
+  },
+  {
+    "id": "g43",
+    "repo": "TanStack/query",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "MyApp",
+      "path": "packages/query-codemods/src/v5/rename-hydrate/__testfixtures__/named-import.input.tsx",
+      "body": "\n  const [queryClient] = React.useState(() => new RenamedQueryClient())\n\n  return (\n    <RenamedQueryClientProvider client={queryClient}>\n      <RenamedHydrate state={pageProps.dehydratedState}>\n        <Component {...pageProps} />\n      </RenamedHydrate>\n      <ReactQueryDevtools />\n    </RenamedQueryClientProvider>\n  )\n}"
+    },
+    "fnB": {
+      "name": "MyApp",
+      "path": "packages/query-codemods/src/v5/rename-hydrate/__testfixtures__/named-import.output.tsx",
+      "body": "\n  const [queryClient] = React.useState(() => new RenamedQueryClient())\n\n  return (\n    <RenamedQueryClientProvider client={queryClient}>\n      <RenamedHydrate state={pageProps.dehydratedState}>\n        <Component {...pageProps} />\n      </RenamedHydrate>\n      <ReactQueryDevtools />\n    </RenamedQueryClientProvider>\n  )\n}"
+    }
+  },
+  {
+    "id": "g44",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "getPositionInCode",
+      "path": "packages/compiler-core/__tests__/compile.spec.ts",
+      "body": "\n    const generatedOffset = code.indexOf(token)\n    let line = 1\n    let lastNewLinePos = -1\n    for (let i = 0; i < generatedOffset; i++) {\n      if (code.charCodeAt(i) === 10 /* newline char code */) {\n        line++\n        lastNewLinePos = i\n      }\n    }\n    const res: Pos = {\n      line,\n      column:\n        lastNewLinePos === -1\n          ? generatedOffset\n          : generatedOffset - lastNewLinePos - 1,\n    }\n    if (expectName) {\n      res.name = typeof expectName === 'string' ? expectName : token\n    }\n    return res\n  }"
+    },
+    "fnB": {
+      "name": "getPositionInCode",
+      "path": "packages/compiler-sfc/__tests__/utils.ts",
+      "body": "\n  const generatedOffset = code.indexOf(token)\n  let line = 1\n  let lastNewLinePos = -1\n  for (let i = 0; i < generatedOffset; i++) {\n    if (code.charCodeAt(i) === 10 /* newline char code */) {\n      line++\n      lastNewLinePos = i\n    }\n  }\n  const res: Pos = {\n    line,\n    column:\n      lastNewLinePos === -1\n        ? generatedOffset\n        : generatedOffset - lastNewLinePos - 1,\n  }\n  if (expectName) {\n    res.name = typeof expectName === 'string' ? expectName : token\n  }\n  return res\n}"
+    }
+  },
+  {
+    "id": "g45",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "compileWithWrapper",
+      "path": "packages/compiler-ssr/__tests__/ssrVModel.spec.ts",
+      "body": "\n  return compile(`<div>${src}</div>`)\n}"
+    },
+    "fnB": {
+      "name": "compileWithWrapper",
+      "path": "packages/compiler-ssr/__tests__/ssrVShow.spec.ts",
+      "body": "\n  return compile(`<div>${src}</div>`)\n}"
+    }
+  },
+  {
+    "id": "g46",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "coverCollectionFn",
+      "path": "packages/reactivity/__tests__/collections/Map.spec.ts",
+      "body": "\n    const spy = vi.fn()\n    let proxy = reactive(collection)\n    ;(collection as any)[fnName] = spy\n    return [proxy as any, spy]\n  }"
+    },
+    "fnB": {
+      "name": "coverCollectionFn",
+      "path": "packages/reactivity/__tests__/collections/Set.spec.ts",
+      "body": "\n    const spy = vi.fn()\n    let proxy = reactive(collection)\n    ;(collection as any)[fnName] = spy\n    return [proxy as any, spy]\n  }"
+    }
+  },
+  {
+    "id": "g47",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "triggerEvent",
+      "path": "packages/runtime-core/__tests__/hydration.spec.ts",
+      "body": "\n  const event = new Event(type)\n  el.dispatchEvent(event)\n}"
+    },
+    "fnB": {
+      "name": "triggerEvent",
+      "path": "packages/runtime-dom/__tests__/directives/vModel.spec.ts",
+      "body": "\n  const event = new Event(type)\n  el.dispatchEvent(event)\n}"
+    }
+  },
+  {
+    "id": "g48",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 3,
+    "crossPackage": false,
+    "fnA": {
+      "name": "throwError",
+      "path": "packages/runtime-core/__tests__/hydration.spec.ts",
+      "body": "\n          throw new Error('Sentry Error')\n        }"
+    },
+    "fnB": {
+      "name": "throwError",
+      "path": "packages/runtime-core/__tests__/hydration.spec.ts",
+      "body": "\n          throw new Error('Sentry Error')\n        }"
+    }
+  },
+  {
+    "id": "g49",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "initDev",
+      "path": "packages/vue-compat/src/dev.ts",
+      "body": "\n  if (__BROWSER__) {\n    if (!__ESM_BUNDLER__) {\n      console.info(\n        `You are running a development build of Vue.\\n` +\n          `Make sure to use the production build (*.prod.js) when deploying for production.`,\n      )\n    }\n\n    initCustomFormatter()\n  }\n}"
+    },
+    "fnB": {
+      "name": "initDev",
+      "path": "packages/vue/src/dev.ts",
+      "body": "\n  if (__BROWSER__) {\n    if (!__ESM_BUNDLER__) {\n      console.info(\n        `You are running a development build of Vue.\\n` +\n          `Make sure to use the production build (*.prod.js) when deploying for production.`,\n      )\n    }\n\n    initCustomFormatter()\n  }\n}"
+    }
+  },
+  {
+    "id": "g50",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "onError",
+      "path": "packages/vue-compat/src/index.ts",
+      "body": "\n    const message = asWarning\n      ? err.message\n      : `Template compilation error: ${err.message}`\n    const codeFrame =\n      err.loc &&\n      generateCodeFrame(\n        template as string,\n        err.loc.start.offset,\n        err.loc.end.offset,\n      )\n    warn(codeFrame ? `${message}\\n${codeFrame}` : message)\n  }"
+    },
+    "fnB": {
+      "name": "onError",
+      "path": "packages/vue/src/index.ts",
+      "body": "\n    const message = asWarning\n      ? err.message\n      : `Template compilation error: ${err.message}`\n    const codeFrame =\n      err.loc &&\n      generateCodeFrame(\n        template as string,\n        err.loc.start.offset,\n        err.loc.end.offset,\n      )\n    warn(codeFrame ? `${message}\\n${codeFrame}` : message)\n  }"
+    }
+  },
+  {
+    "id": "g51",
+    "repo": "vuejs/core",
+    "repoType": "monorepo",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "jsx",
+      "path": "packages/vue/jsx-runtime/index.js",
+      "body": "\n  const { children } = props\n  delete props.children\n  if (arguments.length > 2) {\n    props.key = key\n  }\n  return h(type, props, children)\n}"
+    },
+    "fnB": {
+      "name": "jsx",
+      "path": "packages/vue/jsx-runtime/index.mjs",
+      "body": "\n  const { children } = props\n  delete props.children\n  if (arguments.length > 2) {\n    props.key = key\n  }\n  return h(type, props, children)\n}"
+    }
+  },
+  {
+    "id": "g52",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "buildPage",
+      "path": "benchmarks/jsx/src/page-react.tsx",
+      "body": "\n  const Content = () => (\n    <>\n      <p id='a' className='class-name'>\n        1<br />a\n      </p>\n      <p id='b' className='class-name'>\n        2<br />b\n      </p>\n      <div dangerouslySetInnerHTML={{ __html: '<p id=\"c\" class=\"class-name\">3<br/>c</p>' }} />\n      {null}\n      {undefined}\n    </>\n  )\n\n  const Form = () => (\n    <form>\n      <input type='text' value='1234567890 < 1234567891' readOnly tabIndex={1} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={true} tabIndex={2} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={true} tabIndex={3} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={false} tabIndex={4} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={false} tabIndex={5} />\n    </form>\n  )\n\n  return () => (\n    <html>\n      <body>\n        <Content />\n        <Form />\n      </body>\n    </html>\n  )\n}"
+    },
+    "fnB": {
+      "name": "buildPage",
+      "path": "benchmarks/jsx/src/react-jsx/page-react.tsx",
+      "body": "\n  const Content = () => (\n    <>\n      <p id='a' className='class-name'>\n        1<br />a\n      </p>\n      <p id='b' className='class-name'>\n        2<br />b\n      </p>\n      <div dangerouslySetInnerHTML={{ __html: '<p id=\"c\" class=\"class-name\">3<br/>c</p>' }} />\n      {null}\n      {undefined}\n    </>\n  )\n\n  const Form = () => (\n    <form>\n      <input type='text' value='1234567890 < 1234567891' readOnly tabIndex={1} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={true} tabIndex={2} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={true} tabIndex={3} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={false} tabIndex={4} />\n      <input type='checkbox' value='1234567890 < 1234567891' defaultChecked={false} tabIndex={5} />\n    </form>\n  )\n\n  return () => (\n    <html>\n      <body>\n        <Content />\n        <Form />\n      </body>\n    </html>\n  )\n}"
+    }
+  },
+  {
+    "id": "g53",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 4,
+    "crossPackage": false,
+    "fnA": {
+      "name": "buildPage",
+      "path": "benchmarks/jsx/src/page.tsx",
+      "body": "\n  const Content = () => (\n    <>\n      <p id='a' class='class-name'>\n        1<br />a\n      </p>\n      <p id='b' class='class-name'>\n        2<br />b\n      </p>\n      <div dangerouslySetInnerHTML={{ __html: '<p id=\"c\" class=\"class-name\">3<br/>c</p>' }} />\n      {null}\n      {undefined}\n    </>\n  )\n\n  const Form = () => (\n    <form>\n      <input type='text' value='1234567890 < 1234567891' readonly tabindex={1} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={true} tabindex={2} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={true} tabindex={3} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={false} tabindex={4} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={false} tabindex={5} />\n    </form>\n  )\n\n  return () => (\n    <html>\n      <body>\n        <Content />\n        <Form />\n      </body>\n    </html>\n  )\n}"
+    },
+    "fnB": {
+      "name": "buildPage",
+      "path": "benchmarks/jsx/src/react-jsx/page-hono.tsx",
+      "body": "\n  const Content = () => (\n    <>\n      <p id='a' class='class-name'>\n        1<br />a\n      </p>\n      <p id='b' class='class-name'>\n        2<br />b\n      </p>\n      <div dangerouslySetInnerHTML={{ __html: '<p id=\"c\" class=\"class-name\">3<br/>c</p>' }} />\n      {null}\n      {undefined}\n    </>\n  )\n\n  const Form = () => (\n    <form>\n      <input type='text' value='1234567890 < 1234567891' readonly tabindex={1} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={true} tabindex={2} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={true} tabindex={3} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={false} tabindex={4} />\n      <input type='checkbox' value='1234567890 < 1234567891' checked={false} tabindex={5} />\n    </form>\n  )\n\n  return () => (\n    <html>\n      <body>\n        <Content />\n        <Form />\n      </body>\n    </html>\n  )\n}"
+    }
+  },
+  {
+    "id": "g54",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "getQueryStringFromURL",
+      "path": "benchmarks/query-param/src/fast-querystring.mts",
+      "body": "\n  const queryIndex = url.indexOf('?', 8)\n  const result = queryIndex !== -1 ? url.slice(queryIndex + 1) : ''\n  return result\n}"
+    },
+    "fnB": {
+      "name": "getQueryStringFromURL",
+      "path": "benchmarks/query-param/src/qs.mts",
+      "body": "\n  const queryIndex = url.indexOf('?', 8)\n  const result = queryIndex !== -1 ? url.slice(queryIndex + 1) : ''\n  return result\n}"
+    }
+  },
+  {
+    "id": "g55",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "createHonoRouter",
+      "path": "benchmarks/routers-deno/src/hono.mts",
+      "body": "\n  for (const route of routes) {\n    router.add(route.method, route.path, handler)\n  }\n  return {\n    name: `Hono ${name}`,\n    match: (route) => {\n      router.match(route.method, route.path)\n    },\n  }\n}"
+    },
+    "fnB": {
+      "name": "createHonoRouter",
+      "path": "benchmarks/routers/src/hono.mts",
+      "body": "\n  for (const route of routes) {\n    router.add(route.method, route.path, handler)\n  }\n  return {\n    name: `Hono ${name}`,\n    match: (route) => {\n      router.match(route.method, route.path)\n    },\n  }\n}"
+    }
+  },
+  {
+    "id": "g56",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 3,
+    "crossPackage": false,
+    "fnA": {
+      "name": "b",
+      "path": "src/compose.test.ts",
+      "body": "\n    await next()\n    c.header('x-custom-header', 'custom-header')\n  }"
+    },
+    "fnB": {
+      "name": "mHandlerBar",
+      "path": "src/compose.test.ts",
+      "body": "\n    await next()\n    c.header('x-header-bar', 'bar')\n  }"
+    }
+  },
+  {
+    "id": "g57",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "mHandlerFoo",
+      "path": "src/compose.test.ts",
+      "body": "\n    c.req.raw.headers.append('x-header-foo', 'foo')\n    await next()\n  }"
+    },
+    "fnB": {
+      "name": "customHeader",
+      "path": "src/hono.test.ts",
+      "body": "\n      c.req.raw.headers.append('x-custom-foo', 'bar')\n      await next()\n    }"
+    }
+  },
+  {
+    "id": "g58",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "replacementResult",
+      "path": "src/jsx/components.test.tsx",
+      "body": "\n  const document = new JSDOM(html, { runScripts: 'dangerously' }).window.document\n  document.querySelectorAll('template, script').forEach((e) => e.remove())\n  return document.body.innerHTML\n}"
+    },
+    "fnB": {
+      "name": "replacementResult",
+      "path": "src/jsx/streaming.test.tsx",
+      "body": "\n  const document = new JSDOM(html, { runScripts: 'dangerously' }).window.document\n  document.querySelectorAll('template, script').forEach((e) => e.remove())\n  return document.body.innerHTML\n}"
+    }
+  },
+  {
+    "id": "g59",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Broken",
+      "path": "src/jsx/context-isolation.test.ts",
+      "body": "\n      await Promise.resolve()\n      throw new Error('boom')\n    }"
+    },
+    "fnB": {
+      "name": "Broken",
+      "path": "src/jsx/index.test.tsx",
+      "body": "\n      await Promise.resolve()\n      throw new Error('boom')\n    }"
+    }
+  },
+  {
+    "id": "g60",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 8,
+    "crossPackage": false,
+    "fnA": {
+      "name": "Content",
+      "path": "src/jsx/context-isolation.test.ts",
+      "body": "\n      throw new Error('boom')\n    }"
+    },
+    "fnB": {
+      "name": "Content",
+      "path": "src/jsx/context-isolation.test.ts",
+      "body": "\n      throw new Error('boom')\n    }"
+    }
+  },
+  {
+    "id": "g61",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "ChildAsyncComponent",
+      "path": "src/jsx/dom/server.test.tsx",
+      "body": "\n      await new Promise((resolve) => setTimeout(resolve, 10))\n      return <span>child async component</span>\n    }"
+    },
+    "fnB": {
+      "name": "ChildAsyncComponent",
+      "path": "src/jsx/index.test.tsx",
+      "body": "\n      await new Promise((resolve) => setTimeout(resolve, 10))\n      return <span>child async component</span>\n    }"
+    }
+  },
+  {
+    "id": "g62",
+    "repo": "honojs/hono",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": false,
+    "fnA": {
+      "name": "unauthorizedResponse",
+      "path": "src/middleware/jwk/jwk.ts",
+      "body": "\n  return new Response('Unauthorized', {\n    status: 401,\n    statusText: opts.statusText,\n    headers: {\n      'WWW-Authenticate': `Bearer realm=\"${opts.ctx.req.url}\",error=\"${opts.error}\",error_description=\"${opts.errDescription}\"`,\n    },\n  })\n}"
+    },
+    "fnB": {
+      "name": "unauthorizedResponse",
+      "path": "src/middleware/jwt/jwt.ts",
+      "body": "\n  return new Response('Unauthorized', {\n    status: 401,\n    statusText: opts.statusText,\n    headers: {\n      'WWW-Authenticate': `Bearer realm=\"${opts.ctx.req.url}\",error=\"${opts.error}\",error_description=\"${opts.errDescription}\"`,\n    },\n  })\n}"
+    }
+  },
+  {
+    "id": "g63",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "defaultChildLoggerFactory",
+      "path": "lib/logger-factory.js",
+      "body": "\n  return logger.child(bindings, opts)\n}"
+    },
+    "fnB": {
+      "name": "childLoggerFactory",
+      "path": "test/types/instance.tst.ts",
+      "body": "\n  return logger.child(bindings, opts)\n}"
+    }
+  },
+  {
+    "id": "g64",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 7,
+    "crossPackage": false,
+    "fnA": {
+      "name": "completed",
+      "path": "test/decorator.test.js",
+      "body": "\n    if (--pending === 0) {\n      done()\n    }\n  }"
+    },
+    "fnB": {
+      "name": "completed",
+      "path": "test/decorator.test.js",
+      "body": "\n    if (--pending === 0) {\n      done()\n    }\n  }"
+    }
+  },
+  {
+    "id": "g65",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 5,
+    "crossPackage": false,
+    "fnA": {
+      "name": "pluginFactory",
+      "path": "test/encapsulated-child-logger-factory.test.js",
+      "body": "\n      const child = logger.child(bindings, opts)\n      child.customLog = function (message) {\n        t.assert.strictEqual(message, 'custom')\n      }\n      return child\n    }"
+    },
+    "fnB": {
+      "name": "pluginFactory",
+      "path": "test/encapsulated-child-logger-factory.test.js",
+      "body": "\n      const child = logger.child(bindings, opts)\n      child.customLog = function (message) {\n        t.assert.strictEqual(message, 'custom')\n      }\n      return child\n    }"
+    }
+  },
+  {
+    "id": "g66",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "globalFactory",
+      "path": "test/encapsulated-child-logger-factory.test.js",
+      "body": "\n    const child = logger.child(bindings, opts)\n    child.globalLog = function (message) {\n      t.assert.strictEqual(message, 'global')\n    }\n    return child\n  }"
+    },
+    "fnB": {
+      "name": "customGlobalChildLogger",
+      "path": "test/route.5.test.js",
+      "body": "\n    const child = logger.child(bindings, opts)\n    child.globalLog = function (message) {\n      t.assert.strictEqual(message, 'global')\n    }\n    return child\n  }"
+    }
+  },
+  {
+    "id": "g67",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "handler",
+      "path": "test/hooks.test.js",
+      "body": " reply.send({}) }"
+    },
+    "fnB": {
+      "name": "handler",
+      "path": "test/route-hooks.test.js",
+      "body": "\n      reply.send({})\n    }"
+    }
+  },
+  {
+    "id": "g68",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 11,
+    "crossPackage": false,
+    "fnA": {
+      "name": "fn3",
+      "path": "test/internals/hook-runner.test.js",
+      "body": "\n    t.assert.fail('this should not be called')\n  }"
+    },
+    "fnB": {
+      "name": "fn3",
+      "path": "test/internals/hook-runner.test.js",
+      "body": "\n    t.assert.fail('this should not be called')\n  }"
+    }
+  },
+  {
+    "id": "g69",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 3,
+    "crossPackage": true,
+    "fnA": {
+      "name": "fooBar",
+      "path": "test/plugin.1.test.js",
+      "body": "\n    t.assert.strictEqual(fastify.pluginName, 'fooBar')\n    done()\n  }"
+    },
+    "fnB": {
+      "name": "myPluginAB",
+      "path": "test/plugin.2.test.js",
+      "body": "\n      t.assert.strictEqual(fastify.pluginName, 'myPluginAB')\n      done()\n    }"
+    }
+  },
+  {
+    "id": "g70",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "echoBody",
+      "path": "test/schema-feature.test.js",
+      "body": " reply.send(req.body) }"
+    },
+    "fnB": {
+      "name": "echoBody",
+      "path": "test/schema-serialization.test.js",
+      "body": " reply.send(req.body) }"
+    }
+  },
+  {
+    "id": "g71",
+    "repo": "fastify/fastify",
+    "repoType": "lib",
+    "groupSize": 3,
+    "crossPackage": false,
+    "fnA": {
+      "name": "validatorCompiler",
+      "path": "test/schema-special-usage.test.js",
+      "body": "\n            return () => { return true }\n          }"
+    },
+    "fnB": {
+      "name": "serializerCompiler",
+      "path": "test/schema-special-usage.test.js",
+      "body": "\n            return () => { return true }\n          }"
+    }
+  },
+  {
+    "id": "g72",
+    "repo": "expressjs/express",
+    "repoType": "lib",
+    "groupSize": 5,
+    "crossPackage": true,
+    "fnA": {
+      "name": "no",
+      "path": "test/Router.js",
+      "body": "\n        throw new Error('should not be called')\n      }"
+    },
+    "fnB": {
+      "name": "accept",
+      "path": "test/express.json.js",
+      "body": "\n          throw new Error('oops!')\n        }"
+    }
+  },
+  {
+    "id": "g73",
+    "repo": "expressjs/express",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "createApp",
+      "path": "test/app.render.js",
+      "body": "\n  var app = express();\n\n  app.engine('.tmpl', tmpl);\n\n  return app;\n}"
+    },
+    "fnB": {
+      "name": "createApp",
+      "path": "test/res.render.js",
+      "body": "\n  var app = express();\n\n  app.engine('.tmpl', tmpl);\n\n  return app;\n}"
+    }
+  },
+  {
+    "id": "g74",
+    "repo": "expressjs/express",
+    "repoType": "lib",
+    "groupSize": 7,
+    "crossPackage": false,
+    "fnA": {
+      "name": "createError",
+      "path": "test/app.route.js",
+      "body": "\n          return Promise.reject(new Error('boom!'))\n        }"
+    },
+    "fnB": {
+      "name": "createError",
+      "path": "test/app.route.js",
+      "body": "\n          return Promise.reject(new Error('boom!'))\n        }"
+    }
+  },
+  {
+    "id": "g75",
+    "repo": "expressjs/express",
+    "repoType": "lib",
+    "groupSize": 3,
+    "crossPackage": true,
+    "fnA": {
+      "name": "createError",
+      "path": "test/app.route.js",
+      "body": "\n          return Promise.reject(new Error('boom!'))\n        }"
+    },
+    "fnB": {
+      "name": "createError",
+      "path": "test/app.router.js",
+      "body": "\n          return Promise.reject(new Error('boom!'))\n        }"
+    }
+  },
+  {
+    "id": "g76",
+    "repo": "expressjs/express",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "createError",
+      "path": "test/app.route.js",
+      "body": "\n          return Promise.reject(new Error('boom!'))\n        }"
+    },
+    "fnB": {
+      "name": "createError",
+      "path": "test/app.router.js",
+      "body": "\n          return Promise.reject(new Error('boom!'))\n        }"
+    }
+  },
+  {
+    "id": "g77",
+    "repo": "expressjs/express",
+    "repoType": "lib",
+    "groupSize": 4,
+    "crossPackage": true,
+    "fnA": {
+      "name": "accept",
+      "path": "test/express.json.js",
+      "body": "\n          throw new Error('oops!')\n        }"
+    },
+    "fnB": {
+      "name": "accept",
+      "path": "test/express.raw.js",
+      "body": "\n          throw new Error('oops!')\n        }"
+    }
+  },
+  {
+    "id": "g78",
+    "repo": "sindresorhus/p-queue",
+    "repoType": "lib",
+    "groupSize": 2,
+    "crossPackage": true,
+    "fnA": {
+      "name": "errorTask",
+      "path": "test/advanced.ts",
+      "body": "\n\t\ttry {\n\t\t\tawait queue.add(async () => {\n\t\t\t\tawait delay(50);\n\t\t\t\tthrow new Error('Task failed');\n\t\t\t});\n\t\t} catch {\n\t\t\t// Expected error - ignore\n\t\t}\n\t}"
+    },
+    "fnB": {
+      "name": "errorTask",
+      "path": "test/basic.ts",
+      "body": "\n\t\ttry {\n\t\t\tawait queue.add(async () => {\n\t\t\t\tawait delay(50);\n\t\t\t\tthrow new Error('Task failed');\n\t\t\t});\n\t\t} catch {\n\t\t\t// Expected error - ignore\n\t\t}\n\t}"
+    }
+  }
+]

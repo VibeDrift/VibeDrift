@@ -1,0 +1,68 @@
+{
+  "repo": "honojs-hono",
+  "functions": 765,
+  "crossFilePairs": 282383,
+  "cosMed": 0.72,
+  "structHigh": 0.95,
+  "candidates": 1339,
+  "autoConfirm": 32,
+  "needsLlm": 1307,
+  "bands": [
+    {
+      "band": "C_high",
+      "lo": 0.85,
+      "hi": 1.01,
+      "isCandidate": true,
+      "population": 220,
+      "sampled": 24
+    },
+    {
+      "band": "C_mid",
+      "lo": 0.72,
+      "hi": 0.85,
+      "isCandidate": true,
+      "population": 1119,
+      "sampled": 24
+    },
+    {
+      "band": "B_062",
+      "lo": 0.62,
+      "hi": 0.72,
+      "isCandidate": false,
+      "population": 1270,
+      "sampled": 60
+    },
+    {
+      "band": "B_052",
+      "lo": 0.52,
+      "hi": 0.62,
+      "isCandidate": false,
+      "population": 2333,
+      "sampled": 60
+    },
+    {
+      "band": "B_042",
+      "lo": 0.42,
+      "hi": 0.52,
+      "isCandidate": false,
+      "population": 7126,
+      "sampled": 100
+    },
+    {
+      "band": "B_032",
+      "lo": 0.32,
+      "hi": 0.42,
+      "isCandidate": false,
+      "population": 20098,
+      "sampled": 100
+    },
+    {
+      "band": "B_022",
+      "lo": 0.22,
+      "hi": 0.32,
+      "isCandidate": false,
+      "population": 41202,
+      "sampled": 60
+    }
+  ]
+}
