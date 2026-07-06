@@ -59,6 +59,10 @@ const IMPORT_PATTERNS = [
   /import\s*\*\s*as\s+(\w+)\s+from\s*['"]([^'"]+)['"]/g,
   /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g,
   /(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g,
+  // Dynamic imports: const { X } = await import("./module.js")
+  // and namespace form: const ns = await import("./module.js")
+  /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*['"]([^'"]+)['"]\s*\)/g,
+  /(?:const|let|var)\s+(\w+)\s*=\s*await\s+import\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
 // Re-export edges: a barrel file's `export { X } from './y'` / `export * from
