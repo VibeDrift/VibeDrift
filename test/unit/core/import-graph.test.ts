@@ -67,3 +67,55 @@ describe("parseExports — single-name re-export trimming", () => {
     expect(names).toContain("internalName");
   });
 });
+
+describe("parseImports — dynamic await import()", () => {
+  it("captures destructured names from `const { X } = await import('./mod')`", () => {
+    const { names, sources } = parseImports(
+      makeFile(`const { runAnalysis, buildGraph } = await import("./codedna/index.js");\n`),
+    );
+    expect(names.has("runAnalysis")).toBe(true);
+    expect(names.has("buildGraph")).toBe(true);
+    expect(sources.has("./codedna/index.js")).toBe(true);
+  });
+
+  it("captures dynamic imports with single quotes", () => {
+    const { names, sources } = parseImports(
+      makeFile(`const { checkForUpdate } = await import('../../core/update-check.js');\n`),
+    );
+    expect(names.has("checkForUpdate")).toBe(true);
+    expect(sources.has("../../core/update-check.js")).toBe(true);
+  });
+
+  it("captures let and var destructured dynamic imports", () => {
+    const { names, sources } = parseImports(
+      makeFile(`let { openBrowser } = await import("../auth/browser.js");\n`),
+    );
+    expect(names.has("openBrowser")).toBe(true);
+    expect(sources.has("../auth/browser.js")).toBe(true);
+  });
+
+  it("captures namespace form `const ns = await import('./mod')`", () => {
+    const { names, sources } = parseImports(
+      makeFile(`const utils = await import("./helpers.js");\n`),
+    );
+    expect(names.has("utils")).toBe(true);
+    expect(sources.has("./helpers.js")).toBe(true);
+  });
+
+  it("captures multi-line destructured dynamic imports", () => {
+    const { names, sources } = parseImports(
+      makeFile(`const {\n  assembleBaseline,\n  writeBaseline\n} = await import("../../core/baseline.js");\n`),
+    );
+    expect(names.has("assembleBaseline")).toBe(true);
+    expect(names.has("writeBaseline")).toBe(true);
+    expect(sources.has("../../core/baseline.js")).toBe(true);
+  });
+
+  it("does NOT capture bare await import() with no assignment", () => {
+    const { names, sources } = parseImports(
+      makeFile(`await import("./register-globals.js");\n`),
+    );
+    expect(names.size).toBe(0);
+    expect(sources.size).toBe(0);
+  });
+});
