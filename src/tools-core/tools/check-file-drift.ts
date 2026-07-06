@@ -73,7 +73,7 @@ export async function run({
   const { baseline, status } = await getBaseline(rootDir);
   // Relativize against the baseline's root so it matches the stored ctx paths,
   // whether the caller passed an absolute path or one relative to rootDir.
-  const rel = relative(rootDir, resolve(rootDir, filePath));
+  const rel = relative(rootDir, resolve(rootDir, filePath)).replace(/\\/g, "/");
   if (!baseline) {
     return noBaselineData({ file: rel, fits: null, deviations: [], more: 0 }) as unknown as CheckFileDriftOut;
   }

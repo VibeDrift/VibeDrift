@@ -67,3 +67,48 @@ describe("parseExports — single-name re-export trimming", () => {
     expect(names).toContain("internalName");
   });
 });
+
+describe("buildImportGraph — multi-component relative paths", () => {
+  it("resolves incoming imports for files with directory-separated paths", async () => {
+    const { buildImportGraph } = await import("../../../src/core/import-graph.js");
+
+    const indexFile = makeFile(
+      `import { complexityAnalyzer } from "./complexity.js";\nimport { namingAnalyzer } from "./naming.js";\n`,
+      "src/analyzers/index.ts",
+    );
+    const complexityFile = makeFile(
+      `export const complexityAnalyzer = {};\n`,
+      "src/analyzers/complexity.ts",
+    );
+    const namingFile = makeFile(
+      `export const namingAnalyzer = {};\n`,
+      "src/analyzers/naming.ts",
+    );
+
+    const graph = buildImportGraph([indexFile, complexityFile, namingFile]);
+
+    // complexity.ts and naming.ts should each have 1 incoming import from index.ts
+    expect(graph.incomingCount.get("src/analyzers/complexity.ts")).toBe(1);
+    expect(graph.incomingCount.get("src/analyzers/naming.ts")).toBe(1);
+    // index.ts has no one importing it
+    expect(graph.incomingCount.get("src/analyzers/index.ts")).toBe(0);
+  });
+
+  it("resolves barrel index files by parent directory name", async () => {
+    const { buildImportGraph } = await import("../../../src/core/import-graph.js");
+
+    const consumer = makeFile(
+      `import { createRegistry } from "../../analyzers/index.js";\n`,
+      "src/cli/commands/scan.ts",
+    );
+    const barrel = makeFile(
+      `export function createRegistry() {}\n`,
+      "src/analyzers/index.ts",
+    );
+
+    const graph = buildImportGraph([consumer, barrel]);
+
+    // index.ts should be resolved via its parent dir name "analyzers"
+    expect(graph.incomingCount.get("src/analyzers/index.ts")).toBe(1);
+  });
+});

@@ -295,7 +295,7 @@ async function snapshotMtimes(rootDir: string): Promise<Map<string, number>> {
     }
     for (const entry of entries) {
       const full = join(dir, entry);
-      const rel = relative(rootDir, full);
+      const rel = relative(rootDir, full).replace(/\\/g, "/");
       if (shouldIgnore(rel)) continue;
       let info;
       try {

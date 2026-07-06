@@ -235,7 +235,7 @@ export async function run({
       confidence: "low",
     }) as unknown as ValidateChangeOut;
   }
-  const relTarget = relative(rootDir, resolve(rootDir, targetPath));
+  const relTarget = relative(rootDir, resolve(rootDir, targetPath)).replace(/\\/g, "/");
   const out: ValidateChangeOut = { status, ...validateChange(baseline, relTarget, body) };
 
   if (!deep) return out;
