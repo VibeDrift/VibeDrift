@@ -64,6 +64,83 @@ function extractJsPackageName(specifier: string): string {
   return specifier.split("/")[0];
 }
 
+function isImportSpecifierString(prefix: string): boolean {
+  return /(?:\bimport\s*\(|\brequire\s*\(|\bfrom|^\s*import)\s*$/.test(prefix);
+}
+
+function maskJsNonCodeImportText(content: string): string {
+  let masked = "";
+  let i = 0;
+
+  while (i < content.length) {
+    const ch = content[i];
+    const next = content[i + 1];
+
+    if (ch === "/" && next === "/") {
+      masked += "  ";
+      i += 2;
+      while (i < content.length && content[i] !== "\n") {
+        masked += " ";
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      masked += "  ";
+      i += 2;
+      while (i < content.length) {
+        if (content[i] === "*" && content[i + 1] === "/") {
+          masked += "  ";
+          i += 2;
+          break;
+        }
+        masked += content[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quote = ch;
+      const keep = quote !== "`" && isImportSpecifierString(masked);
+      masked += keep ? ch : " ";
+      i++;
+
+      while (i < content.length) {
+        const current = content[i];
+
+        if (current === "\\") {
+          if (keep) {
+            masked += current;
+            if (i + 1 < content.length) masked += content[i + 1];
+          } else {
+            masked += " ";
+            if (i + 1 < content.length) masked += content[i + 1] === "\n" ? "\n" : " ";
+          }
+          i += 2;
+          continue;
+        }
+
+        if (current === quote) {
+          masked += keep ? current : " ";
+          i++;
+          break;
+        }
+
+        masked += keep || current === "\n" ? current : " ";
+        i++;
+      }
+      continue;
+    }
+
+    masked += ch;
+    i++;
+  }
+
+  return masked;
+}
+
 const DEV_TOOL_PATTERNS = [
   "@types/", "eslint", "prettier", "tsup", "vitest", "typescript",
   "jest", "mocha", "webpack", "rollup", "vite", "babel", "postcss",
@@ -114,10 +191,11 @@ function collectImportedPackages(
   const importLocations = new Map<string, { file: string; line: number }[]>();
 
   for (const file of files) {
+    const codeContent = maskJsNonCodeImportText(file.content);
     for (const pattern of JS_IMPORT_PATTERNS) {
       const regex = new RegExp(pattern.source, pattern.flags);
       let match;
-      while ((match = regex.exec(file.content)) !== null) {
+      while ((match = regex.exec(codeContent)) !== null) {
         const pkg = extractJsPackageName(match[1]);
         if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) continue;
         imported.add(pkg);
@@ -225,11 +303,12 @@ function analyzeJsDeps(ctx: AnalysisContext): Finding[] {
 
   // Include optionalDependencies and detect workspace packages
   const declared = new Set<string>([
+    pkg.name,
     ...Object.keys(pkg.dependencies ?? {}),
     ...Object.keys(pkg.devDependencies ?? {}),
     ...Object.keys(pkg.peerDependencies ?? {}),
     ...Object.keys((pkg as any).optionalDependencies ?? {}),
-  ]);
+  ].filter((name): name is string => typeof name === "string" && name.length > 0));
 
   // Detect monorepo workspace packages (workspace:* protocol, or packages
   // whose versions are "workspace:*", "workspace:^", "workspace:~", "*")

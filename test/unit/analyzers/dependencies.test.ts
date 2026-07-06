@@ -107,4 +107,62 @@ describe("dependencies analyzer", () => {
     const findings = await dependenciesAnalyzer.analyze(ctx);
     expect(findings.find((f) => f.tags.includes("missing"))).toBeDefined();
   });
+
+  it("ignores import-like text in comments and string literals", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [{
+        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
+        content: [
+          "import express from \"express\";",
+          "// import { renderHtmlReport } from \"@vibedrift/cli/render\"",
+          "/** `require('lodash')` should not count as an import. */",
+          "const prose = 'the shift from \"interesting\" to actionable';",
+          "const docs = \"require('pkg') is shown in documentation\";",
+          "const pattern = /require\\(\\s*['\"]([^./][^'\"]*)['\"]\\s*\\)/g;",
+          "const dynamicImportDocs = `await import(\"not-a-real-dep\")`;",
+        ].join("\n"),
+        lineCount: 7,
+      }],
+      packageJson: { dependencies: { express: "^4.0.0" } },
+      totalLines: 7,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+    expect(missing).toBeUndefined();
+  });
+
+  it("does not report the current package name as a missing dependency", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [{
+        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
+        content: 'const tools = await import("@scope/current-package/tools");\n', lineCount: 1,
+      }],
+      packageJson: { name: "@scope/current-package", dependencies: {} },
+      totalLines: 1,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    expect(findings.find((f) => f.tags.includes("missing"))).toBeUndefined();
+  });
+
+  it("still detects static require and dynamic import calls", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [{
+        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
+        content: [
+          'const chalk = require("chalk");',
+          'const zod = await import("zod");',
+        ].join("\n"),
+        lineCount: 2,
+      }],
+      packageJson: { dependencies: {} },
+      totalLines: 2,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+    expect(missing?.message).toContain("chalk");
+    expect(missing?.message).toContain("zod");
+  });
 });
