@@ -203,7 +203,7 @@ function buildDocxScoreTable(result: ScanResult): string {
   const ds = result.driftScores ?? {};
   const catRows = [
     ["Architectural Consistency", ds.architectural_consistency],
-    ["Security Posture", ds.security_posture],
+    ["Security Consistency", ds.security_posture],
     ["Semantic Duplication", ds.semantic_duplication],
     ["Convention Drift", ds.naming_conventions],
     ["Phantom Scaffolding", ds.phantom_scaffolding],

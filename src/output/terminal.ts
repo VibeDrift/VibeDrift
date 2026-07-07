@@ -596,6 +596,14 @@ function renderCategoryBars(result: ScanResult): string[] {
       }
       lines.push(`  ${label} ${color(`${s.score.toFixed(0).padStart(2)}/${s.maxScore}`)}  ${bar}${deltaStr}`);
     }
+
+    if (cat === "securityPosture") {
+      lines.push(
+        chalk.dim(
+          `  ${padRight("", 28)}   consistent ≠ safe: measures how uniformly this repo applies its own auth and validation patterns, not the absence of vulnerabilities`,
+        ),
+      );
+    }
   }
 
   lines.push(`  ${"─".repeat(34)}`);

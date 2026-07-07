@@ -109,7 +109,7 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
     ],
   },
   securityPosture: {
-    name: "Security Posture",
+    name: "Security Consistency",
     maxScore: 20,
     analyzers: [
       // Generic OWASP regex checks
