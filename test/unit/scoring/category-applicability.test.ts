@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeScores } from "../../../src/scoring/engine.js";
+import { computeScores, MIN_SECURITY_PEERS } from "../../../src/scoring/engine.js";
 import { isCategoryApplicable, DRIFT_DISPLAY_CATEGORIES } from "../../../src/scoring/categories.js";
 import { applicableCategoryCount } from "../../../src/output/terminal.js";
 import type { Finding } from "../../../src/core/types.js";
@@ -22,7 +22,11 @@ import type { Finding } from "../../../src/core/types.js";
  *      never silently vanishes.
  */
 
-function mk(analyzerId: string, severity: Finding["severity"] = "warning"): Finding {
+function mk(
+  analyzerId: string,
+  severity: Finding["severity"] = "warning",
+  driftSignal?: Finding["driftSignal"],
+): Finding {
   return {
     analyzerId,
     severity,
@@ -30,7 +34,22 @@ function mk(analyzerId: string, severity: Finding["severity"] = "warning"): Find
     message: `test finding for ${analyzerId}`,
     locations: [{ file: "src/example.ts", line: 1 }],
     tags: [],
+    ...(driftSignal ? { driftSignal } : {}),
   };
+}
+
+// A drift-security_posture finding with a peer sample AT the min-peer floor
+// (see applySecurityMinPeerFloor, src/scoring/engine.ts). Real detector output
+// always carries driftSignal for this category (driftFindingToFinding,
+// src/drift/index.ts) — a bare mk("drift-security_posture") with no
+// driftSignal is a 0-peer sample and is (correctly) demoted to advisory by the
+// floor, so these "real finding" guards use a well-sampled fixture instead.
+function wellSampledSecurityFinding(severity: Finding["severity"] = "warning"): Finding {
+  return mk("drift-security_posture", severity, {
+    consistencyScore: 50,
+    dominantCount: MIN_SECURITY_PEERS - 1,
+    totalRelevantFiles: MIN_SECURITY_PEERS,
+  });
 }
 
 describe("why a category is N/A: drift-detector presence (isCategoryApplicable)", () => {
@@ -90,7 +109,7 @@ describe("N/A means nothing to measure — a real surface always scores", () => 
   });
 
   it("ANTI-BUG GUARD: a security surface (real drift finding) is SCORED, never hidden as N/A", () => {
-    const { scores } = computeScores([mk("drift-security_posture", "error")], 30000);
+    const { scores } = computeScores([wellSampledSecurityFinding("error")], 30000);
     expect(scores.securityPosture.applicable).toBe(true);
     expect(scores.securityPosture.findingCount).toBeGreaterThan(0);
   });
@@ -117,6 +136,6 @@ describe("N/A set is exactly the honest set; composite excludes N/A", () => {
 
   it("composite counts only applicable categories, and a new surface adds to the count", () => {
     expect(applicableCategoryCount(computeScores([], 30000).scores)).toBe(2); // arch + redundancy
-    expect(applicableCategoryCount(computeScores([mk("drift-security_posture")], 30000).scores)).toBe(3); // + security
+    expect(applicableCategoryCount(computeScores([wellSampledSecurityFinding()], 30000).scores)).toBe(3); // + security
   });
 });

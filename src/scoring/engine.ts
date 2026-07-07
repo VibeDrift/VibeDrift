@@ -103,6 +103,33 @@ export function applyReimplementationConcentrationGate(
 }
 
 /**
+ * Route-consistency security findings need a minimum peer sample before they
+ * move the composite. Below MIN_SECURITY_PEERS relevant routes a single
+ * deviator is too large a fraction of too small a sample to trust — the
+ * uniform-auth-gap baseline can fire on as few as 2 mutating routes. Such thin
+ * findings are re-tagged to a hygiene id so they still RENDER (informational)
+ * but never dent the Vibe Drift Score. Findings at or above the floor keep the
+ * drift id and score, ramped by groupSampleConfidence up to
+ * SAMPLE_FULL_CONFIDENCE (8). Route-independent taint findings (codedna-taint)
+ * are unaffected. Pure; returns the same array reference when nothing re-tags.
+ */
+export const MIN_SECURITY_PEERS = 4;
+const SECURITY_DRIFT_ID = "drift-security_posture";
+const SECURITY_ADVISORY_ID = "security_posture-advisory";
+
+export function applySecurityMinPeerFloor(findings: Finding[]): Finding[] {
+  let changed = false;
+  const out = findings.map((f) => {
+    if (f.analyzerId !== SECURITY_DRIFT_ID) return f;
+    const n = f.driftSignal?.totalRelevantFiles ?? 0;
+    if (n >= MIN_SECURITY_PEERS) return f;
+    changed = true;
+    return { ...f, analyzerId: SECURITY_ADVISORY_ID };
+  });
+  return changed ? out : findings;
+}
+
+/**
  * Place a composite Vibe Drift Score on a peer percentile against a bundled
  * corpus of real-world repos in the same language. Pure, local, deterministic,
  * and FREE — only surfacing the result is Pro-gated (see `isPeerGroundedEntitled`).
@@ -679,6 +706,12 @@ export function computeScores(
   // its hygiene id and stays informational. Applied here so the gate sees the
   // full finding set together with totalLines.
   findings = applyReimplementationConcentrationGate(findings, totalLines);
+
+  // Route-consistency findings with too few peer routes to trust are demoted to
+  // an advisory hygiene id here (see applySecurityMinPeerFloor) so they render
+  // but do not move the composite. Applied after the reimplementation gate so
+  // both re-tags see the full finding set.
+  findings = applySecurityMinPeerFloor(findings);
 
   const mutateImpact = options.mutateImpact ?? true;
   const previousScoringVersion = options.previousScoringVersion;
