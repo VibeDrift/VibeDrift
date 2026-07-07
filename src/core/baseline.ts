@@ -27,7 +27,7 @@ import type { IntentHint } from "../intent/types.js";
 
 const CACHE_DIR = join(homedir(), ".vibedrift", "baseline-cache");
 /** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 1;
+export const BASELINE_VERSION = 2;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;
@@ -54,6 +54,12 @@ export interface RepoDriftBaseline {
   rootDir: string;
   ctxFiles: Array<{ path: string; hash: string }>;
   perCategoryVote: Partial<Record<DriftCategory, CategoryVote>>;
+  /** Per-security-sub-convention votes (Auth middleware / Input validation /
+   *  Rate limiting), keyed by sub-category label. Kept separate from
+   *  perCategoryVote, which collapses all three into one security_posture slot
+   *  by widest denominator — so get_dominant_pattern('auth') can read the AUTH
+   *  vote, not whichever sub-convention had the most routes. */
+  securitySubVotes?: Partial<Record<string, CategoryVote>>;
   intentHints: IntentHint[];
   minhashIndex: MinhashEntry[];
   builtAt: number;
@@ -95,15 +101,42 @@ export function votesFromFindings(
   for (const f of findings) {
     const existing = out[f.driftCategory];
     if (existing && existing.totalRelevantFiles >= f.totalRelevantFiles) continue;
-    out[f.driftCategory] = {
-      driftCategory: f.driftCategory,
-      dominantPattern: f.dominantPattern,
-      dominantCount: f.dominantCount,
-      totalRelevantFiles: f.totalRelevantFiles,
-      consistencyScore: f.consistencyScore,
-      dominantFiles: f.dominantFiles ?? [],
-      deviators: f.deviatingFiles.map((d) => ({ path: d.path, detectedPattern: d.detectedPattern })),
-    };
+    out[f.driftCategory] = toCategoryVote(f);
+  }
+  return out;
+}
+
+/** Build a CategoryVote from a single finding. Shared by votesFromFindings
+ *  (keyed by driftCategory) and securitySubVotesFromFindings (keyed by
+ *  subCategory) so the vote shape lives in exactly one place. */
+export function toCategoryVote(f: DriftFinding): CategoryVote {
+  return {
+    driftCategory: f.driftCategory,
+    dominantPattern: f.dominantPattern,
+    dominantCount: f.dominantCount,
+    totalRelevantFiles: f.totalRelevantFiles,
+    consistencyScore: f.consistencyScore,
+    dominantFiles: f.dominantFiles ?? [],
+    deviators: f.deviatingFiles.map((d) => ({ path: d.path, detectedPattern: d.detectedPattern })),
+  };
+}
+
+/**
+ * Like votesFromFindings but for the security sub-conventions, keyed by
+ * `subCategory` instead of `driftCategory`. Only security_posture findings that
+ * carry a subCategory participate; each sub-key keeps the widest-denominator
+ * finding (same tie-break as votesFromFindings).
+ */
+export function securitySubVotesFromFindings(
+  findings: DriftFinding[],
+): Partial<Record<string, CategoryVote>> {
+  const out: Partial<Record<string, CategoryVote>> = {};
+  for (const f of findings) {
+    if (f.driftCategory !== "security_posture" || !f.subCategory) continue;
+    const key = f.subCategory;
+    const existing = out[key];
+    if (existing && existing.totalRelevantFiles >= f.totalRelevantFiles) continue;
+    out[key] = toCategoryVote(f);
   }
   return out;
 }
@@ -140,6 +173,7 @@ export function assembleBaseline(
     rootDir,
     ctxFiles,
     perCategoryVote: votesFromFindings(driftFindings),
+    securitySubVotes: securitySubVotesFromFindings(driftFindings),
     intentHints: ctx.intentHints ?? [],
     minhashIndex,
     builtAt: Date.now(),

@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import type { DriftCategory } from "../../drift/types.js";
+import { SECURITY_SUBCATEGORIES } from "../../drift/types.js";
 import type { RepoDriftBaseline } from "../../core/baseline.js";
 import { getBaseline } from "../../mcp/baseline-provider.js";
 import { noBaselineData, type Status } from "../result.js";
@@ -26,6 +27,12 @@ const DIM = {
 export type DominantDimension = keyof typeof DIM;
 export const DIMENSIONS = Object.keys(DIM) as DominantDimension[];
 
+// Dimensions whose vote lives in securitySubVotes (keyed by sub-category label)
+// rather than the collapsed perCategoryVote slot.
+const SECURITY_SUB_DIM: Partial<Record<DominantDimension, string>> = {
+  auth: SECURITY_SUBCATEGORIES.auth,
+};
+
 export const inputSchema = {
   rootDir: z.string().describe("Absolute path to the repository root"),
   dimension: z.enum(DIMENSIONS as [DominantDimension, ...DominantDimension[]]),
@@ -43,7 +50,8 @@ export function dominantPatternFor(
   baseline: RepoDriftBaseline,
   dimension: DominantDimension,
 ): DominantPatternProjection {
-  const vote = baseline.perCategoryVote[DIM[dimension]];
+  const subKey = SECURITY_SUB_DIM[dimension];
+  const vote = subKey ? baseline.securitySubVotes?.[subKey] : baseline.perCategoryVote[DIM[dimension]];
   if (!vote) {
     return {
       dimension,

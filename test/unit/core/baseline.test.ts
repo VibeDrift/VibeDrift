@@ -10,6 +10,7 @@ import {
   loadBaselineUnchecked,
   computeBaselineKey,
   votesFromFindings,
+  securitySubVotesFromFindings,
 } from "../../../src/core/baseline.js";
 import { buildAnalysisContext } from "../../../src/core/discovery.js";
 import { runDriftDetection } from "../../../src/drift/index.js";
@@ -71,6 +72,18 @@ describe("votesFromFindings", () => {
   it("handles a missing optional dominantFiles as an empty array", () => {
     const votes = votesFromFindings([fakeFinding({ dominantFiles: undefined })]);
     expect(votes.async_patterns!.dominantFiles).toEqual([]);
+  });
+
+  it("keeps auth/validation/rate-limit as SEPARATE security sub-votes (no collision)", () => {
+    const subVotes = securitySubVotesFromFindings([
+      fakeFinding({ driftCategory: "security_posture", subCategory: "Auth middleware", dominantPattern: "Auth middleware applied", totalRelevantFiles: 5, consistencyScore: 80 }),
+      fakeFinding({ driftCategory: "security_posture", subCategory: "Rate limiting", dominantPattern: "Rate limiting applied", totalRelevantFiles: 12, consistencyScore: 60 }),
+    ]);
+    // Both survive under their own key — the widest-denominator finding does NOT
+    // evict the other (which is the perCategoryVote collision this fixes).
+    expect(subVotes["Auth middleware"]!.dominantPattern).toBe("Auth middleware applied");
+    expect(subVotes["Rate limiting"]!.dominantPattern).toBe("Rate limiting applied");
+    expect(subVotes["Auth middleware"]!.totalRelevantFiles).toBe(5);
   });
 });
 
