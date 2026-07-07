@@ -155,3 +155,15 @@ export interface DriftFinding {
   };
   recommendation: string;
 }
+
+/**
+ * Canonical labels for the three security sub-conventions the route-consistency
+ * detector votes on. Single source of truth so the detector's emitted
+ * `subCategory` and the baseline sub-vote lookup (get_dominant_pattern) can
+ * never drift apart.
+ */
+export const SECURITY_SUBCATEGORIES = {
+  auth: "Auth middleware",
+  validation: "Input validation",
+  rateLimit: "Rate limiting",
+} as const;

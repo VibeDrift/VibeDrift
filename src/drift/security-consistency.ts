@@ -32,6 +32,7 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
+import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
 
 const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
@@ -70,7 +71,7 @@ function analyzeUniformAuthGap(
 
   return {
     detector: "security_posture",
-    subCategory: "Auth middleware",
+    subCategory: SECURITY_SUBCATEGORIES.auth,
     driftCategory: "security_posture",
     severity: unauthed.length > 2 ? "error" : "warning",
     confidence,
@@ -310,7 +311,13 @@ export const securityConsistency: DriftDetector = {
     const healthPaths = /^\/(?:health|healthz|ready|metrics|ping)$/;
     const authHint = pickIntentHint(ctx, "security_posture");
 
-    const authFinding = analyzeSecurityProperty(routes, "Auth middleware", (r) => r.hasAuth, healthPaths);
+    // Auth applies to every state-changing route (POST/PUT/PATCH/DELETE).
+    // Rescoped from `routes`: counting read-only GETs put intentionally-public
+    // reads in the denominator and made the "X of Y mutating routes" line false.
+    // Same set as analyzeUniformAuthGap so the primary vote and its fallback agree.
+    const authRoutes = routes.filter((r) => MUTATION_METHODS.includes(r.method));
+
+    const authFinding = analyzeSecurityProperty(authRoutes, SECURITY_SUBCATEGORIES.auth, (r) => r.hasAuth, healthPaths);
     if (authFinding) {
       findings.push(authFinding);
     } else {
@@ -326,11 +333,11 @@ export const securityConsistency: DriftDetector = {
 
     const mutationRoutes = routes.filter((r) => ["POST", "PUT", "PATCH"].includes(r.method));
     if (mutationRoutes.length >= 2) {
-      const valFinding = analyzeSecurityProperty(mutationRoutes, "Input validation", (r) => r.hasValidation, healthPaths);
+      const valFinding = analyzeSecurityProperty(mutationRoutes, SECURITY_SUBCATEGORIES.validation, (r) => r.hasValidation, healthPaths);
       if (valFinding) findings.push(valFinding);
     }
 
-    const rateLimitFinding = analyzeSecurityProperty(routes, "Rate limiting", (r) => r.hasRateLimit, healthPaths);
+    const rateLimitFinding = analyzeSecurityProperty(routes, SECURITY_SUBCATEGORIES.rateLimit, (r) => r.hasRateLimit, healthPaths);
     if (rateLimitFinding) findings.push(rateLimitFinding);
 
     return findings;

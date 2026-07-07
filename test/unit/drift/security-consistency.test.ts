@@ -80,4 +80,22 @@ describe("security-consistency detector", () => {
       expect(authFinding!.confidence).toBeGreaterThan(0.75);
     });
   });
+
+  it("does not flag a public GET for missing auth — only mutating routes are the auth peer group", () => {
+    const files = [
+      file(
+        "src/routes/api.ts",
+        `router.post("/items", requireAuth, createItem);\n` +
+          `router.put("/items/:id", requireAuth, updateItem);\n` +
+          `router.patch("/items/:id", requireAuth, patchItem);\n` +
+          `router.delete("/items/:id", requireAuth, deleteItem);\n`,
+      ),
+      file("src/routes/public.ts", `router.get("/catalog", listCatalog);\n`),
+    ];
+    const findings = securityConsistency.detect(mkCtx(files));
+    const authFinding = findings.find((f) => f.subCategory === "Auth middleware");
+    // 4 mutating routes all authed → no auth deviation; the public GET is NOT
+    // in the denominator (old behavior voted over all 5 routes and flagged it).
+    expect(authFinding).toBeUndefined();
+  });
 });
