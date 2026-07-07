@@ -1,0 +1,3 @@
+{
+  "_comment": "Optional GitHub-login -> Discord-user-ID map used by discord-release.yml to turn a contributor credit into a real @ping. Contributors without an entry are credited with a link to their GitHub profile instead. To get a Discord ID: enable Developer Mode (User Settings > Advanced), right-click the user, Copy User ID. Example: \"BrandonGarate177\": \"123456789012345678\"."
+}

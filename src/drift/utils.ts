@@ -26,7 +26,10 @@
  */
 
 import { getLineNumber } from "../utils/text.js";
+import { shannonEntropy } from "../utils/math.js";
 import type { DeviatingFile, DriftCategory, DriftContext, DriftFinding, Evidence } from "./types.js";
+
+export { shannonEntropy };
 
 export function getLineContent(content: string, lineNum: number): string {
   return (content.split("\n")[lineNum - 1] ?? "").trim();
@@ -128,22 +131,6 @@ export function isAnalyzableSource(path: string): boolean {
 }
 
 // ─── Shannon entropy gate ────────────────────────────────────────────
-
-/**
- * Shannon entropy of a discrete distribution given raw counts.
- * Range: [0, log₂(k)] where k is the number of non-zero categories.
- */
-export function shannonEntropy(counts: number[]): number {
-  const total = counts.reduce((a, b) => a + b, 0);
-  if (total === 0) return 0;
-  let H = 0;
-  for (const c of counts) {
-    if (c === 0) continue;
-    const p = c / total;
-    H -= p * Math.log2(p);
-  }
-  return H;
-}
 
 export interface EntropyGateResult {
   /** "no_convention" if the distribution is too uniform to declare a winner;

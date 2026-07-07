@@ -15,7 +15,7 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile, Evidence } from "./types.js";
-import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, noConventionFinding, pickIntentHint } from "./utils.js";
+import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, isAnalyzableSource, noConventionFinding, pickIntentHint } from "./utils.js";
 
 type ImportPathStyle = "relative" | "alias";
 
@@ -25,15 +25,9 @@ interface FileImportProfile {
   evidence: Evidence[];
 }
 
-function isSourceFile(path: string): boolean {
-  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\.test\.|\.spec\.)/i.test(path)) return false;
-  if (/(?:\.config\.|\.d\.ts$|node_modules|dist\/|build\/)/i.test(path)) return false;
-  return true;
-}
-
 function analyzeImports(file: DriftFile): FileImportProfile | null {
   if (!file.language || !["javascript", "typescript"].includes(file.language)) return null;
-  if (!isSourceFile(file.path)) return null;
+  if (!isAnalyzableSource(file.path)) return null;
 
   const lines = file.content.split("\n");
   let relativeCount = 0;

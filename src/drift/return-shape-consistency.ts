@@ -35,6 +35,7 @@ import type {
 import {
   buildPatternDistribution,
   collectDeviatingFiles,
+  directoryOf,
   isAnalyzableSource,
   pickDominantFiles,
   pickIntentHint,
@@ -194,12 +195,6 @@ function classifyShape(body: string): ReturnShape | null {
 export function classifyReturnShapeLabel(body: string): string | null {
   const shape = classifyShape(body);
   return shape ? SHAPE_NAMES[shape] : null;
-}
-
-/** Directory of a relative path — "src/handlers/user.ts" → "src/handlers". */
-function directoryOf(filePath: string): string {
-  const idx = filePath.lastIndexOf("/");
-  return idx === -1 ? "." : filePath.slice(0, idx);
 }
 
 /**

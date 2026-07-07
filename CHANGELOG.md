@@ -6,6 +6,16 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.14.9 — 2026-07-06
+
+### Fixed
+
+- **Fewer false-positive unused exports.** An export used only through a
+  destructured dynamic import (`const { thing } = await import("./module.js")`)
+  is now recognized as used. Lazy-loaded modules — common in CLIs and
+  code-split apps — are no longer flagged as unused, and the files they load are
+  no longer counted as orphaned.
+
 ## 0.14.8 — 2026-07-01
 
 ### Changed

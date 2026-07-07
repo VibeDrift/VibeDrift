@@ -1,4 +1,5 @@
 import type { ScanResult } from "../core/types.js";
+import { grade } from "./coherence.js";
 
 const TIMEOUT_MS = 30_000;
 
@@ -20,7 +21,7 @@ export async function fetchAiSummary(
     project: result.context.rootDir.split("/").pop() ?? "project",
     score: result.compositeScore,
     maxScore: result.maxCompositeScore,
-    grade: getGrade(result.compositeScore, result.maxCompositeScore),
+    grade: grade(result.compositeScore, result.maxCompositeScore),
     fileCount: result.context.files.length,
     totalLines: result.context.totalLines,
     languages: [...result.context.languageBreakdown.entries()]
@@ -80,11 +81,4 @@ export async function fetchAiSummary(
   }
 }
 
-function getGrade(score: number, max: number): string {
-  const pct = max > 0 ? (score / max) * 100 : 0;
-  if (pct >= 90) return "A";
-  if (pct >= 75) return "B";
-  if (pct >= 50) return "C";
-  if (pct >= 25) return "D";
-  return "F";
-}
+

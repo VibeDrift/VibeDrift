@@ -64,7 +64,7 @@ interface SerializedBaseline extends Omit<RepoDriftBaseline, "minhashIndex"> {
   minhashIndex: Array<Omit<MinhashEntry, "signature"> & { signature: number[] }>;
 }
 
-function projectHash(rootDir: string): string {
+export function projectHash(rootDir: string): string {
   return createHash("sha256").update(rootDir).digest("hex").slice(0, 16);
 }
 

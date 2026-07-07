@@ -3,6 +3,7 @@ import { homedir } from "os";
 import { createHash } from "crypto";
 import { join } from "path";
 import type { CategoryScores, Finding, DriftFindingReport } from "./types.js";
+import { projectHash } from "./baseline.js";
 
 /**
  * Per-project scan history.
@@ -35,10 +36,6 @@ import type { CategoryScores, Finding, DriftFindingReport } from "./types.js";
 const ROOT_DIR = join(homedir(), ".vibedrift", "scans");
 const HISTORY_SCHEMA_VERSION = 3;
 const HISTORY_RETENTION = 10;
-
-function projectHash(rootDir: string): string {
-  return createHash("sha256").update(rootDir).digest("hex").slice(0, 16);
-}
 
 function projectDir(rootDir: string): string {
   return join(ROOT_DIR, projectHash(rootDir));

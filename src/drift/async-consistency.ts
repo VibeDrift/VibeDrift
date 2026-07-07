@@ -17,7 +17,7 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile, Evidence } from "./types.js";
-import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, noConventionFinding, pickIntentHint } from "./utils.js";
+import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, isAnalyzableSource, noConventionFinding, pickIntentHint } from "./utils.js";
 import { asyncCounts, classifyAsyncStyle, ASYNC_STYLE_NAMES as STYLE_NAMES, type AsyncStyle } from "./async-style.js";
 
 interface FileAsyncProfile {
@@ -28,15 +28,9 @@ interface FileAsyncProfile {
   evidence: Evidence[];
 }
 
-function isSourceFile(path: string): boolean {
-  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\.test\.|\.spec\.)/i.test(path)) return false;
-  if (/(?:\.config\.|\.d\.ts$|node_modules|dist\/|build\/)/i.test(path)) return false;
-  return true;
-}
-
 function analyzeAsync(file: DriftFile): FileAsyncProfile | null {
   if (!file.language || !["javascript", "typescript"].includes(file.language)) return null;
-  if (!isSourceFile(file.path)) return null;
+  if (!isAnalyzableSource(file.path)) return null;
 
   // Counting + classification live in the shared async-style module so the
   // detector and the MCP validate_change tool agree on the vocabulary. Evidence
