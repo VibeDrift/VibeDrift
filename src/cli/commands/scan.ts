@@ -6,8 +6,8 @@ import ora from "ora";
 import { buildAnalysisContext, recomputeContextStats } from "../../core/discovery.js";
 import { parseFiles } from "../../utils/ast.js";
 import { createAnalyzerRegistry } from "../../analyzers/index.js";
-import { runDriftDetection, attachEngineComposite } from "../../drift/index.js";
-import { computeScores, SCORING_VERSION } from "../../scoring/engine.js";
+import { runDriftDetection, attachEngineComposite, scoredDriftView } from "../../drift/index.js";
+import { computeScores, applySecurityMinPeerFloor, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
 import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, renderLocalReportLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
@@ -395,6 +395,23 @@ async function buildScanResult(
   const previousHygieneScores = await loadPreviousHygieneScores(rootDir);
   const previousScoringVersion = await loadPreviousScoringVersion(rootDir);
 
+  // Demote thin (below-floor) route-consistency security findings to the
+  // advisory hygiene id BEFORE this array becomes result.findings. Applied
+  // here (not only inside computeScores) so the re-tag reaches every render
+  // path that reads result.findings directly (terminal hygiene pane, HTML
+  // hygiene section). computeScores only ever saw a local copy, so a finding
+  // re-tagged there never made it back to the rendered set. Mutates
+  // allFindings in place, mirroring the dedup replace above, so every
+  // downstream reader of this same array reference (result.findings, the
+  // tease generator, the diff digests) sees the demoted id. computeScores
+  // re-applies the same floor on its own copy for standalone callers and
+  // tests; that second pass is a no-op here since the ids are already advisory.
+  const flooredFindings = applySecurityMinPeerFloor(allFindings);
+  if (flooredFindings !== allFindings) {
+    allFindings.length = 0;
+    allFindings.push(...flooredFindings);
+  }
+
   // Score
   if (spinner) spinner.text = "Computing scores...";
   const {
@@ -463,14 +480,26 @@ async function buildScanResult(
     }
   }
 
+  // The DRIFT representation that rendering reads excludes below-floor
+  // route-consistency security findings (demoted to advisory; still present in
+  // `allFindings`/`result.findings` as hygiene-kind so we are never silent).
+  // Applying it here, at the single point where result.driftFindings /
+  // result.driftScores are produced, keeps every raw-driftFindings consumer
+  // (findings library, codebase intent, coherence heatmap, pattern consensus,
+  // CSV/DOCX, context.md) and the per-category breakdown consistent with the
+  // category's N/A WITHOUT a gate in each widget. driftResult.driftFindings
+  // itself is untouched, so the baseline (assembleBaseline) and the diff
+  // digests below keep reading the raw drift representation unchanged.
+  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines);
+
   const result: ScanResult = {
     context: ctx,
     findings: allFindings,
-    driftFindings: driftResult.driftFindings,
+    driftFindings: rendered.driftFindings,
     // Mirror the single authoritative composite onto driftScores so the
     // uploaded payload + dashboard (result_json.driftScores.composite) match
     // the headline. One composite formula (the engine) — see Phase 0 collapse.
-    driftScores: attachEngineComposite(driftResult.driftScores, compositeScore),
+    driftScores: attachEngineComposite(rendered.driftScores, compositeScore),
     scores,
     compositeScore,
     maxCompositeScore,
@@ -1239,6 +1268,13 @@ export async function runScan(
   // Save history (per-project, in user home dir — not in the project itself).
   // Persisting `scoringVersion` lets future scans detect that this scan was
   // computed under a different formula and skip cross-version deltas.
+  //
+  // Use the RAW driftResult.driftFindings (not the rendered/filtered
+  // result.driftFindings) so the persisted drift digests match the ones the
+  // scan-over-scan diff computes from the same raw array (see buildScanResult).
+  // If these two sources diverged, a below-floor security finding present in
+  // one but not the other would show as a spurious "new/resolved drift finding"
+  // on every scan. Baseline + diff track the raw representation for continuity.
   await saveScanResult(
     rootDir,
     result.scores,
@@ -1246,7 +1282,7 @@ export async function runScan(
     result.hygieneScores,
     result.hygieneScore,
     result.findings,
-    result.driftFindings,
+    pipeline.driftResult.driftFindings,
     result.scoringVersion,
   );
 

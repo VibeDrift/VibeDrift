@@ -129,6 +129,30 @@ export function applySecurityMinPeerFloor(findings: Finding[]): Finding[] {
   return changed ? out : findings;
 }
 
+// The route-consistency drift finding's `driftCategory`: SECURITY_DRIFT_ID
+// (the `Finding.analyzerId`) without the "drift-" prefix. The raw
+// `DriftFindingReport` array keeps this category tag but has no `analyzerId`,
+// so renderers that read `driftFindings` directly test the floor on this
+// instead of on the demoted analyzer id.
+const SECURITY_DRIFT_CATEGORY = "security_posture";
+
+/**
+ * DriftFinding-report view of the same min-peer floor `applySecurityMinPeerFloor`
+ * applies to `Finding`s. Output renderers (HTML, CSV, DOCX) read the raw
+ * `result.driftFindings` (`DriftFindingReport[]`), which has no `analyzerId`,
+ * so the Finding-level floor never touches it. They use this predicate to
+ * exclude below-floor route-consistency security findings from every surface
+ * that lists a drift finding, keeping those exports from contradicting the
+ * category's N/A. Single source of truth for the below-floor test so the three
+ * renderers cannot drift apart from each other or from applySecurityMinPeerFloor.
+ */
+export function isBelowSecurityPeerFloor(d: {
+  driftCategory: string;
+  totalRelevantFiles: number;
+}): boolean {
+  return d.driftCategory === SECURITY_DRIFT_CATEGORY && d.totalRelevantFiles < MIN_SECURITY_PEERS;
+}
+
 /**
  * Place a composite Vibe Drift Score on a peer percentile against a bundled
  * corpus of real-world repos in the same language. Pure, local, deterministic,

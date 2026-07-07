@@ -691,6 +691,9 @@ function buildDriftFindingsLibrary(result: ScanResult): string {
   const groups = order.map((cat) => ({
     cat,
     label: DRIFT_CAT_LABEL[cat] ?? cat,
+    // result.driftFindings already excludes below-floor route-consistency
+    // security findings (scoredDriftView at the scan source), so no per-widget
+    // gate is needed here.
     findings: (result.driftFindings ?? []).filter((f) => f.driftCategory === cat),
   })).filter((g) => g.findings.length > 0);
   if (groups.length === 0) return "";
@@ -956,6 +959,9 @@ function buildEmbeddedData(result: ScanResult): string {
     fileCount: result.context.files.length,
     totalLines: result.context.totalLines,
     scanTimeMs: result.scanTimeMs,
+    // result.driftFindings already excludes below-floor security findings
+    // (scoredDriftView at the scan source), so the client-side "Export CSV"
+    // data cannot list one under "DRIFT FINDINGS" either.
     driftFindings: (result.driftFindings ?? []).map((d) => ({
       severity: d.severity,
       category: d.driftCategory,

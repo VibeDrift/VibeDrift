@@ -1,7 +1,7 @@
 import type { AnalysisContext, Finding } from "../core/types.js";
 import type { DriftContext, DriftFinding, DriftDetector, DriftCategory } from "./types.js";
 import { DRIFT_WEIGHTS } from "./types.js";
-import { categoryHealth } from "../scoring/engine.js";
+import { categoryHealth, isBelowSecurityPeerFloor } from "../scoring/engine.js";
 import { architecturalContradiction } from "./architectural-contradiction.js";
 import { conventionOscillation } from "./convention-oscillation.js";
 import { securityConsistency } from "./security-consistency.js";
@@ -148,6 +148,39 @@ function computeDriftScores(findings: Finding[], totalLines: number): DriftScore
 
   // The loop populates every DriftCategory key, so the cast is safe.
   return scores as unknown as DriftScores;
+}
+
+/**
+ * The DRIFT representation that RENDERING should read: the raw drift findings
+ * minus the below-floor route-consistency security findings, plus the
+ * per-category `driftScores` breakdown recomputed from that same scored set.
+ *
+ * A route-consistency security finding whose peer sample is below
+ * MIN_SECURITY_PEERS is demoted to an advisory hygiene finding on the `Finding`
+ * track (see `applySecurityMinPeerFloor`), so the category scores N/A. Every
+ * consumer that reads the raw `driftFindings` (the findings library, codebase
+ * intent, the coherence heatmap, pattern consensus, CSV/DOCX drift sections,
+ * context.md, the deep-scan coherence input) must therefore NOT see it, or it
+ * would contradict that N/A. Excluding it here, at ONE source point, keeps them
+ * all consistent without a gate in each widget. Recomputing `driftScores` from
+ * the scored set (rather than filtering the raw breakdown) is what makes
+ * `driftScores.security_posture` match the listed drift findings even in the
+ * multi-sub-check case (e.g. auth voted over 5 mutating routes stays scored
+ * while validation voted over 2 is below floor).
+ *
+ * The finding still surfaces as advisory via `result.findings` (hygiene-kind),
+ * so a small insecure repo is never silent. The RAW `driftFindings` produced by
+ * `runDriftDetection` are intentionally left untouched for the baseline
+ * (`assembleBaseline`) and the scan-over-scan diff, which track the raw drift
+ * representation for continuity.
+ */
+export function scoredDriftView(
+  driftFindings: DriftFinding[],
+  totalLines: number,
+): { driftFindings: DriftFinding[]; driftScores: DriftScores } {
+  const scored = driftFindings.filter((d) => !isBelowSecurityPeerFloor(d));
+  const driftScores = computeDriftScores(scored.map(driftFindingToFinding), totalLines);
+  return { driftFindings: scored, driftScores };
 }
 
 /**
