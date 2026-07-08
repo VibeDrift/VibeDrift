@@ -120,3 +120,35 @@ export function extractJsRoutesAst(
   }
   return routes;
 }
+
+/**
+ * Router/app-level middleware registered via `router.use(...)` / `app.use(...)`
+ * (Express/Hono/Fastify/Koa). This is the AST counterpart of the jsAuth /
+ * jsRateLimit / jsValidation regexes in security-consistency.ts's
+ * buildFileMiddlewareIndex, gated the same way extractJsRoutesAst is: the
+ * receiver must look like a router/app identifier (ROUTER_RECEIVER), so
+ * unrelated `.use()` calls (an EventEmitter, an express `app.use` for static
+ * assets with no middleware keyword, etc.) don't get picked up.
+ */
+export function extractFileMiddlewareAst(tree: Tree): FileMiddleware {
+  let hasAuth = false;
+  let hasValidation = false;
+  let hasRateLimit = false;
+  const calls = tree.rootNode.descendantsOfType("call_expression");
+  for (const call of calls) {
+    if (!call) continue;
+    const fn = call.childForFieldName("function");
+    if (!fn || fn.type !== "member_expression") continue;
+    const obj = fn.childForFieldName("object");
+    const prop = fn.childForFieldName("property");
+    if (!obj || !prop || prop.text !== "use") continue;
+    const receiver = receiverName(obj);
+    if (!receiver || !SECURITY_AST.ROUTER_RECEIVER.test(receiver)) continue;
+
+    const argText = call.childForFieldName("arguments")?.text ?? "";
+    if (SECURITY_AST.AUTH_MW.test(argText)) hasAuth = true;
+    if (SECURITY_AST.VAL_MW.test(argText)) hasValidation = true;
+    if (SECURITY_AST.RATE_MW.test(argText)) hasRateLimit = true;
+  }
+  return { hasAuth, hasValidation, hasRateLimit };
+}

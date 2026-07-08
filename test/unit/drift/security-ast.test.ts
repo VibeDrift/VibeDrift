@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
+import { extractJsRoutesAst, extractFileMiddlewareAst } from "../../../src/drift/security-ast.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 
 describe("extractJsRoutesAst", () => {
@@ -28,5 +28,16 @@ describe("extractJsRoutesAst", () => {
     const f = await fileWithTree("r.ts",
       `router.get("/me", passport.authenticate("jwt"), getMe);\n`);
     expect(extractJsRoutesAst(f.tree!, f.path, undefined)[0].hasAuth).toBe(true);
+  });
+});
+
+describe("extractFileMiddlewareAst", () => {
+  it("detects router-level auth middleware from .use()", async () => {
+    const f = await fileWithTree("app.ts", `router.use(requireAuth);\nrouter.get("/x", h);\n`);
+    expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: true, hasValidation: false, hasRateLimit: false });
+  });
+  it("ignores .use() on non-router receivers", async () => {
+    const f = await fileWithTree("m.ts", `emitter.use(requireAuth);\n`);
+    expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: false, hasValidation: false, hasRateLimit: false });
   });
 });

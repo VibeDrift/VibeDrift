@@ -34,7 +34,7 @@
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
 import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
-import { extractJsRoutesAst } from "./security-ast.js";
+import { extractJsRoutesAst, extractFileMiddlewareAst } from "./security-ast.js";
 
 const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
 
@@ -120,11 +120,21 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
     if (!file.language) continue;
     const c = file.content;
 
-    // JS/TS — Express / Hono / Fastify / Koa
-    // router.use(requireAuth) | app.use(passport.authenticate(...)) | router.use(authMiddleware)
-    const jsAuth = /(?:router|app|router\w*|api\w*)\s*\.\s*use\s*\(\s*[^,)]*?(?:auth|requireAuth|isAuthenticated|passport|verifyToken|jwt)/i.test(c);
-    const jsRateLimit = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:rateLimit|throttle|limiter)/i.test(c);
-    const jsValidation = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:validate|validator|joi|zod|celebrate)/i.test(c);
+    // JS/TS — Express / Hono / Fastify / Koa. AST when a parsed tree is
+    // available (structural: gated on a router/app receiver, not just
+    // proximity of the keyword); regex fallback otherwise.
+    let jsAuth: boolean, jsRateLimit: boolean, jsValidation: boolean;
+    if (file.tree && (file.language === "javascript" || file.language === "typescript")) {
+      const mw = extractFileMiddlewareAst(file.tree);
+      jsAuth = mw.hasAuth;
+      jsRateLimit = mw.hasRateLimit;
+      jsValidation = mw.hasValidation;
+    } else {
+      // router.use(requireAuth) | app.use(passport.authenticate(...)) | router.use(authMiddleware)
+      jsAuth = /(?:router|app|router\w*|api\w*)\s*\.\s*use\s*\(\s*[^,)]*?(?:auth|requireAuth|isAuthenticated|passport|verifyToken|jwt)/i.test(c);
+      jsRateLimit = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:rateLimit|throttle|limiter)/i.test(c);
+      jsValidation = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:validate|validator|joi|zod|celebrate)/i.test(c);
+    }
 
     // Go — Echo / Gin / Chi
     // e.Use(AuthMiddleware) | r.Use(authMiddleware) | g := e.Group(...); g.Use(...)
