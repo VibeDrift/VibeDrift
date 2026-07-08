@@ -55,10 +55,24 @@ export function injectNamingDrift(baseline: BaselineFile[], rate: number): Basel
   });
 }
 
+export function injectSecurityDrift(baseline: BaselineFile[], rate: number): BaselineFile[] {
+  const eligible = baseline.filter((f) => /^src\/routes\//.test(f.path)).length;
+  const count = Math.round(eligible * rate);
+  if (count === 0) return baseline;
+
+  return mutate(baseline, /^src\/routes\//, count, (content) =>
+    // Strip the auth middleware arg: router.post("/x", requireAuth, handler)
+    // -> router.post("/x", handler). The route survives as a valid (still
+    // mutating) route, just missing the auth arg the AST extractor reads.
+    content.replace(/,\s*requireAuth\s*,/g, ", "),
+  );
+}
+
 export const INJECTORS: Record<string, (base: BaselineFile[], rate: number) => BaselineFile[]> = {
   architectural: injectArchDrift,
   error_handling: injectErrorHandlingDrift,
   naming: injectNamingDrift,
+  security: injectSecurityDrift,
 };
 
 /**

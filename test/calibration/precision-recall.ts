@@ -28,6 +28,7 @@ const INJECTOR_CATEGORY: Record<string, string> = {
   naming: "naming_conventions",
   architectural: "architectural_consistency",
   error_handling: "architectural_consistency",
+  security: "security_posture",
 };
 const INJECT_RATE = 0.34; // ~2 of 6 eligible files — a clear minority = unambiguous drift
 

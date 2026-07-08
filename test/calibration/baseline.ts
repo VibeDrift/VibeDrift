@@ -1,8 +1,8 @@
 /**
  * Generates a uniform-pattern baseline TS project in memory.
- * ~18 files with consistent naming, architecture, and error handling.
- * Every file below is "dominant pattern" — so any deviation injected
- * on top of this baseline is unambiguously drift.
+ * ~31 files with consistent naming, architecture, error handling, and
+ * (route files) security posture. Every file below is "dominant pattern" —
+ * so any deviation injected on top of this baseline is unambiguously drift.
  */
 
 export interface BaselineFile {
@@ -73,6 +73,30 @@ export async function create${cap}(input: { name: string }) {
   };
 }
 
+// Route files: every one registers a mutating (POST) endpoint uniformly
+// guarded by `requireAuth`, using real `router.post("/x", requireAuth, handler)`
+// syntax the AST route extractor (security-ast.ts) understands — receiver
+// "router", a leading-slash path literal, and a middleware arg between the
+// path and the handler. All 8 live in the same directory (src/routes/) so
+// the route-consistency detector's per-directory dominance vote groups them
+// together: a dominant "authed" pattern to deviate from.
+function route(name: string): BaselineFile {
+  return {
+    path: `src/routes/${name}.ts`,
+    content: `import { Router } from "express";
+import { requireAuth } from "../middleware/auth.js";
+
+const router = Router();
+
+router.post("/${name}", requireAuth, async (req, res) => {
+  res.json({ ok: true });
+});
+
+export default router;
+`,
+  };
+}
+
 export function generateBaseline(): BaselineFile[] {
   const entities = ["user", "order", "product", "payment", "invoice", "cart"];
   const files: BaselineFile[] = [];
@@ -129,6 +153,19 @@ export function generateBaseline(): BaselineFile[] {
 }
 `,
   });
+
+  files.push({
+    path: "src/middleware/auth.ts",
+    content: `export function requireAuth(req: unknown, res: unknown, next: () => void) {
+  next();
+}
+`,
+  });
+
+  const routeNames = ["users", "orders", "products", "payments", "invoices", "carts", "sessions", "notifications"];
+  for (const r of routeNames) {
+    files.push(route(r));
+  }
 
   return files;
 }
