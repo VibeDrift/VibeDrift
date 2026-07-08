@@ -1,6 +1,9 @@
+import { createRequire } from "node:module";
 import { Parser, Language } from "web-tree-sitter";
 import type { Tree } from "web-tree-sitter";
 import type { SupportedLanguage, SourceFile } from "../core/types.js";
+
+const require = createRequire(import.meta.url);
 
 let initialized = false;
 const languageCache = new Map<string, Language>();
@@ -24,16 +27,13 @@ async function getLanguage(lang: SupportedLanguage): Promise<Language> {
   const cached = languageCache.get(grammarName);
   if (cached) return cached;
 
-  const wasmModule = await import("tree-sitter-wasms");
-  const wasmPath =
-    (wasmModule as Record<string, string>)[`tree_sitter_${grammarName}`] ??
-    (wasmModule.default as Record<string, string>)?.[
-      `tree_sitter_${grammarName}`
-    ];
-
-  if (!wasmPath) {
-    throw new Error(`No WASM grammar found for language: ${lang}`);
-  }
+  // Load the grammar WASM by direct file path. The tree-sitter-wasms package
+  // `main` field points at a nonexistent `bindings/node`, so importing the
+  // package throws; the grammar files live under its out/ directory. Pinned to
+  // web-tree-sitter ^0.25.10 because 0.26.x cannot load these grammars (tree-
+  // sitter issue #5171 — wasm dylink ABI mismatch with older tree-sitter-cli).
+  const pkgJson = require.resolve("tree-sitter-wasms/package.json");
+  const wasmPath = `${pkgJson.slice(0, -"package.json".length)}out/tree-sitter-${grammarName}.wasm`;
 
   const language = await Language.load(wasmPath);
   languageCache.set(grammarName, language);
