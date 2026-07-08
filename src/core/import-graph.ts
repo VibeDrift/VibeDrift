@@ -167,10 +167,10 @@ export function sourceLookupKey(source: string): string {
 
 /** Lookup key derived from a file's path, used to match against import sources. */
 export function fileBasename(filePath: string): string {
-  const file = filePath.split("/").pop() ?? filePath;
+  const file = filePath.split(/[/\\]/).pop() ?? filePath;
   const noExt = file.replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, "");
   if (noExt === "index") {
-    const parts = filePath.split("/");
+    const parts = filePath.split(/[/\\]/);
     return parts.length >= 2 ? parts[parts.length - 2] : noExt;
   }
   return noExt;

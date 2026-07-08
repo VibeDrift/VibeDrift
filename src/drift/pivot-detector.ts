@@ -50,7 +50,7 @@ function gatherFiles(
   // Dominant files keep their dominant label; deviators bring their own.
   const ageByFile = new Map<string, number | null>();
   for (const f of ctx.files) {
-    ageByFile.set(f.path, f.git?.lastModifiedDaysAgo ?? null);
+    ageByFile.set(f.relativePath, f.git?.lastModifiedDaysAgo ?? null);
   }
 
   const buckets: FileBucket[] = [];

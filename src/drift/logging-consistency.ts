@@ -99,7 +99,7 @@ interface FileLoggerProfile {
 
 function detectFamilies(file: DriftFile): FileLoggerProfile | null {
   if (!file.language) return null;
-  if (!isAnalyzableSource(file.path)) return null;
+  if (!isAnalyzableSource(file.relativePath)) return null;
 
   const matches: { pattern: LoggerFamily; evidence: Evidence[] }[] = [];
   for (const family of Object.keys(FAMILY_PATTERNS) as LoggerFamily[]) {
@@ -107,7 +107,7 @@ function detectFamilies(file: DriftFile): FileLoggerProfile | null {
     if (ev.length > 0) matches.push({ pattern: family, evidence: ev });
   }
   if (matches.length === 0) return null;
-  return { file: file.path, patterns: matches };
+  return { file: file.relativePath, patterns: matches };
 }
 
 export const loggingConsistency: DriftDetector = {

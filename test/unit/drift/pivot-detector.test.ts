@@ -4,7 +4,7 @@ import type { DriftContext, DriftFile, DriftFinding } from "../../../src/drift/t
 
 function makeFile(path: string, daysAgo: number | null): DriftFile {
   return {
-    path,
+    relativePath: path,
     language: "typescript",
     content: "",
     lineCount: 1,

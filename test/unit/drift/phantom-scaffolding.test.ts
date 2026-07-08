@@ -12,7 +12,7 @@ function mkCtx(files: DriftFile[]): DriftContext {
 }
 
 function file(path: string, content: string): DriftFile {
-  return { path, language: "typescript", content, lineCount: content.split("\n").length };
+  return { relativePath: path, language: "typescript", content, lineCount: content.split("\n").length };
 }
 
 describe("phantom-scaffolding detector", () => {

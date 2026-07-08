@@ -72,7 +72,7 @@ export const commentStyleConsistency: DriftDetector = {
     let analyzed = 0;
 
     for (const file of ctx.files) {
-      if (!isAnalyzableSource(file.path)) continue;
+      if (!isAnalyzableSource(file.relativePath)) continue;
       if (!file.language) continue;
       // Python/Ruby/etc use #; JS/TS/Go/Rust use //. To avoid false drift
       // from language mix, restrict this check to JS/TS projects where
@@ -82,8 +82,8 @@ export const commentStyleConsistency: DriftDetector = {
       analyzed++;
       const style = dominantStyle(file);
       const list = byStyle.get(style);
-      if (list) list.push(file.path);
-      else byStyle.set(style, [file.path]);
+      if (list) list.push(file.relativePath);
+      else byStyle.set(style, [file.relativePath]);
     }
 
     if (analyzed < 5) return [];

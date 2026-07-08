@@ -30,7 +30,7 @@ interface FileAsyncProfile {
 
 function analyzeAsync(file: DriftFile): FileAsyncProfile | null {
   if (!file.language || !["javascript", "typescript"].includes(file.language)) return null;
-  if (!isAnalyzableSource(file.path)) return null;
+  if (!isAnalyzableSource(file.relativePath)) return null;
 
   // Counting + classification live in the shared async-style module so the
   // detector and the MCP validate_change tool agree on the vocabulary. Evidence
@@ -50,7 +50,7 @@ function analyzeAsync(file: DriftFile): FileAsyncProfile | null {
     if (isAwait || isThen) evidence.push({ line: i + 1, code: t.slice(0, 100) });
   }
 
-  return { file: file.path, style, awaitCount, thenCount, evidence };
+  return { file: file.relativePath, style, awaitCount, thenCount, evidence };
 }
 
 export const asyncConsistency: DriftDetector = {

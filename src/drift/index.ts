@@ -40,7 +40,7 @@ export function createDriftDetectors(): DriftDetector[] {
 export function buildDriftContext(ctx: AnalysisContext): DriftContext {
   return {
     files: ctx.files.map((f) => ({
-      path: f.relativePath,
+      relativePath: f.relativePath,
       language: f.language,
       content: f.content,
       lineCount: f.lineCount,

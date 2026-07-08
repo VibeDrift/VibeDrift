@@ -85,7 +85,7 @@ export async function discoverFiles(rootDir: string): Promise<{ files: SourceFil
       }
 
       const fullPath = join(dir, entry.name);
-      const relPath = relative(rootDir, fullPath);
+      const relPath = relative(rootDir, fullPath).replace(/\\/g, "/");
 
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;

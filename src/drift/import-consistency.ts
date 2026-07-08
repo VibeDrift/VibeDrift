@@ -27,7 +27,7 @@ interface FileImportProfile {
 
 function analyzeImports(file: DriftFile): FileImportProfile | null {
   if (!file.language || !["javascript", "typescript"].includes(file.language)) return null;
-  if (!isAnalyzableSource(file.path)) return null;
+  if (!isAnalyzableSource(file.relativePath)) return null;
 
   const lines = file.content.split("\n");
   let relativeCount = 0;
@@ -68,7 +68,7 @@ function analyzeImports(file: DriftFile): FileImportProfile | null {
     relativeCount === 0 ? "alias" :
     relativeCount >= aliasCount ? "relative" : "alias";
 
-  return { file: file.path, pathStyle, evidence };
+  return { file: file.relativePath, pathStyle, evidence };
 }
 
 const PATH_STYLE_NAMES: Record<ImportPathStyle, string> = {

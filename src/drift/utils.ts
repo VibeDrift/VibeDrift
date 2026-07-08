@@ -265,7 +265,7 @@ export function buildFileAgeMap(ctx: DriftContext): Map<string, number> | undefi
   if (!ctx.hasGitMetadata) return undefined;
   const m = new Map<string, number>();
   for (const f of ctx.files) {
-    if (f.git) m.set(f.path, f.git.lastModifiedDaysAgo);
+    if (f.git) m.set(f.relativePath, f.git.lastModifiedDaysAgo);
   }
   return m.size > 0 ? m : undefined;
 }

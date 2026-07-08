@@ -50,11 +50,11 @@ function indexFunctions(files: DriftFile[]): IndexedFunction[] {
   const out: IndexedFunction[] = [];
   for (const file of files) {
     if (!file.language) continue;
-    if (!isAnalyzableSource(file.path)) continue;
+    if (!isAnalyzableSource(file.relativePath)) continue;
 
     const adapted = {
-      path: file.path,
-      relativePath: file.path,
+      path: file.relativePath,
+      relativePath: file.relativePath,
       language: file.language as ExtractedFunction["language"],
       content: file.content,
       lineCount: file.lineCount,

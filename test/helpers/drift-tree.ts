@@ -9,5 +9,5 @@ export async function fileWithTree(
   const tree = await parseFile({
     path, relativePath: path, language, content, lineCount: content.split("\n").length,
   });
-  return { path, language, content, lineCount: content.split("\n").length, tree: tree ?? undefined };
+  return { relativePath: path, language, content, lineCount: content.split("\n").length, tree: tree ?? undefined };
 }

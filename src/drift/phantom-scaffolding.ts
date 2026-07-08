@@ -55,7 +55,7 @@ function extractRouteRegistrations(file: DriftFile): RouteRegistration[] {
     // Go Echo: .GET("/path", handler) or .POST("/path", handler.Method)
     const echoMatch = line.match(/\.\s*(GET|POST|PUT|PATCH|DELETE)\s*\(\s*"([^"]+)"\s*,\s*(\w+(?:\.\w+)?)/);
     if (echoMatch) {
-      routes.push({ method: echoMatch[1], path: echoMatch[2], handlerName: echoMatch[3].split(".").pop()!, file: file.path, line: i + 1 });
+      routes.push({ method: echoMatch[1], path: echoMatch[2], handlerName: echoMatch[3].split(".").pop()!, file: file.relativePath, line: i + 1 });
       continue;
     }
 
@@ -63,14 +63,14 @@ function extractRouteRegistrations(file: DriftFile): RouteRegistration[] {
     const gorillaMatch = line.match(/HandleFunc\s*\(\s*"([^"]+)"\s*,\s*(\w+(?:\.\w+)?)\)/);
     if (gorillaMatch) {
       const methodMatch = lines.slice(i, i + 2).join("").match(/Methods\s*\(\s*"(\w+)"/);
-      routes.push({ method: methodMatch?.[1] ?? "ANY", path: gorillaMatch[1], handlerName: gorillaMatch[2].split(".").pop()!, file: file.path, line: i + 1 });
+      routes.push({ method: methodMatch?.[1] ?? "ANY", path: gorillaMatch[1], handlerName: gorillaMatch[2].split(".").pop()!, file: file.relativePath, line: i + 1 });
       continue;
     }
 
     // JS/TS Express: app.get('/path', handler)
     const expressMatch = line.match(/\.\s*(get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"](?:\s*,\s*(\w+))?/);
     if (expressMatch && expressMatch[3]) {
-      routes.push({ method: expressMatch[1].toUpperCase(), path: expressMatch[2], handlerName: expressMatch[3], file: file.path, line: i + 1 });
+      routes.push({ method: expressMatch[1].toUpperCase(), path: expressMatch[2], handlerName: expressMatch[3], file: file.relativePath, line: i + 1 });
       continue;
     }
 
@@ -80,7 +80,7 @@ function extractRouteRegistrations(file: DriftFile): RouteRegistration[] {
       const nextDef = lines.slice(i + 1, i + 5).find((l) => /^(?:async\s+)?def\s+(\w+)/.test(l.trim()));
       const handlerName = nextDef?.match(/def\s+(\w+)/)?.[1] ?? "";
       if (handlerName) {
-        routes.push({ method: pyMatch[1].toUpperCase(), path: pyMatch[2], handlerName, file: file.path, line: i + 1 });
+        routes.push({ method: pyMatch[1].toUpperCase(), path: pyMatch[2], handlerName, file: file.relativePath, line: i + 1 });
       }
     }
   }
@@ -98,8 +98,8 @@ export const phantomScaffolding: DriftDetector = {
     const jsFiles: SourceFile[] = ctx.files
       .filter((f) => f.language === "javascript" || f.language === "typescript")
       .map((f) => ({
-        path: f.path,
-        relativePath: f.path,
+        path: f.relativePath,
+        relativePath: f.relativePath,
         language: f.language as "javascript" | "typescript",
         content: f.content,
         lineCount: f.lineCount,

@@ -4,7 +4,7 @@ import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 
 function makeCtx(files: Partial<DriftFile>[]): DriftContext {
   const fullFiles: DriftFile[] = files.map((f) => ({
-    path: f.path ?? "src/test.ts",
+    relativePath: f.relativePath ?? "src/test.ts",
     language: f.language ?? "typescript",
     content: f.content ?? "",
     lineCount: (f.content ?? "").split("\n").length,
@@ -19,7 +19,7 @@ function makeCtx(files: Partial<DriftFile>[]): DriftContext {
 // Sibling helpers in the same dir — reach the MIN_GROUP_SIZE=3 threshold.
 function makeHandlers(entries: { name: string; body: string }[]): DriftFile[] {
   return entries.map((e) => ({
-    path: `src/handlers/${e.name}.ts`,
+    relativePath: `src/handlers/${e.name}.ts`,
     language: "typescript",
     content: `export function ${e.name}() {\n${e.body}\n}\n`,
     lineCount: e.body.split("\n").length + 2,
@@ -95,27 +95,27 @@ describe("return-shape-consistency detector", () => {
     // 4 Go funcs returning (x, err); 1 Go func panicking. Tuple dominates.
     const ctx = makeCtx([
       {
-        path: "handlers/a.go",
+        relativePath: "handlers/a.go",
         language: "go",
         content: `func getA(id string) (User, error) {\n  if id == "" { return nil, err }\n  return user, nil\n}\n`,
       },
       {
-        path: "handlers/b.go",
+        relativePath: "handlers/b.go",
         language: "go",
         content: `func getB(id string) (User, error) {\n  if id == "" { return nil, err }\n  return user, nil\n}\n`,
       },
       {
-        path: "handlers/c.go",
+        relativePath: "handlers/c.go",
         language: "go",
         content: `func getC(id string) (User, error) {\n  if id == "" { return nil, err }\n  return user, nil\n}\n`,
       },
       {
-        path: "handlers/d.go",
+        relativePath: "handlers/d.go",
         language: "go",
         content: `func getD(id string) (User, error) {\n  if id == "" { return nil, err }\n  return user, nil\n}\n`,
       },
       {
-        path: "handlers/e.go",
+        relativePath: "handlers/e.go",
         language: "go",
         content: `func getE(id string) { if id == "" { panic("bad id") } }\n`,
       },
@@ -135,7 +135,7 @@ describe("return-shape-consistency detector", () => {
         { name: "getC", body: "  if (!id) throw new Error('x');\n  return data;" },
       ]),
       {
-        path: "src/handlers/getA.test.ts",
+        relativePath: "src/handlers/getA.test.ts",
         language: "typescript",
         content: `it("does x", () => { if (!x) return null; });\n`,
       },

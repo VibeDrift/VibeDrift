@@ -112,7 +112,7 @@ export const commitArchaeology: DriftDetector = {
     let filesWithHistory = 0;
     let filesWithGit = 0;
     for (const f of ctx.files) {
-      if (!isAnalyzableSource(f.path)) continue;
+      if (!isAnalyzableSource(f.relativePath)) continue;
       if (!f.git) continue;
       filesWithGit++;
       if (f.git.commitCountTotal >= 2) filesWithHistory++;
@@ -137,7 +137,7 @@ export const commitArchaeology: DriftDetector = {
     // false findings.
     const profilesByDir = new Map<string, BurstProfile[]>();
     for (const p of profiles) {
-      const dir = directoryOf(p.file.path);
+      const dir = directoryOf(p.file.relativePath);
       const list = profilesByDir.get(dir) ?? [];
       list.push(p);
       profilesByDir.set(dir, list);
@@ -158,7 +158,7 @@ export const commitArchaeology: DriftDetector = {
       const deviating: DeviatingFile[] = burstyInDir.map((p) => {
         const evidence: Evidence[] = [{ line: 1, code: p.reasons.join(" · ") }];
         return {
-          path: p.file.path,
+          path: p.file.relativePath,
           detectedPattern: `burst authorship (score ${p.score}/3)`,
           evidence,
         };
@@ -180,7 +180,7 @@ export const commitArchaeology: DriftDetector = {
         deviatingFiles: deviating,
         dominantFiles: group
           .filter((p) => p.score < BURST_SCORE_THRESHOLD)
-          .map((p) => p.file.path)
+          .map((p) => p.file.relativePath)
           .sort()
           .slice(0, 3),
         recommendation: `Burst-authored files in ${dir}/ deviate from the directory's normal commit shape. Review for AI-generated code that was never touched by a second reviewer.`,

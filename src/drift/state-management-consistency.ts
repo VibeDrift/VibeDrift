@@ -63,7 +63,7 @@ interface StateProfile {
 function analyze(file: DriftFile): StateProfile | null {
   if (!file.language) return null;
   if (file.language !== "javascript" && file.language !== "typescript") return null;
-  if (!isAnalyzableSource(file.path)) return null;
+  if (!isAnalyzableSource(file.relativePath)) return null;
 
   const lines = file.content.split("\n");
   const hits = new Map<StateStrategy, Evidence[]>();
@@ -80,7 +80,7 @@ function analyze(file: DriftFile): StateProfile | null {
 
   if (hits.size === 0) return null;
   const patterns = [...hits.entries()].map(([pattern, evidence]) => ({ pattern, evidence }));
-  return { file: file.path, patterns };
+  return { file: file.relativePath, patterns };
 }
 
 export const stateManagementConsistency: DriftDetector = {

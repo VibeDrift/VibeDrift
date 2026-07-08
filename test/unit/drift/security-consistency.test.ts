@@ -12,7 +12,7 @@ function mkCtx(files: DriftFile[]): DriftContext {
 }
 
 function file(path: string, content: string): DriftFile {
-  return { path, language: "typescript", content, lineCount: content.split("\n").length };
+  return { relativePath: path, language: "typescript", content, lineCount: content.split("\n").length };
 }
 
 describe("security-consistency detector", () => {
@@ -125,7 +125,7 @@ describe("security-consistency detector", () => {
       (f) =>
         f.confidence === 0.75 &&
         f.dominantPattern === "Auth middleware applied" &&
-        f.deviatingFiles.some((d) => d.path === pub.path),
+        f.deviatingFiles.some((d) => d.path === pub.relativePath),
     );
     expect(dominanceFinding).toBeUndefined();
 
@@ -172,7 +172,7 @@ describe("security-consistency detector", () => {
     const gapFinding = findings.find(
       (f) =>
         f.subCategory === "Auth middleware" &&
-        f.deviatingFiles.some((d) => d.path === orders.path),
+        f.deviatingFiles.some((d) => d.path === orders.relativePath),
     );
     expect(gapFinding).toBeDefined();
     // Machinery-only evidence (no declared CLAUDE.md/AGENTS.md hint) -> the

@@ -62,14 +62,14 @@ function buildTestProfiles(files: DriftFile[], classifier: (c: string) => string
   for (const file of files) {
     if (!file.language) continue;
     if (file.language !== "javascript" && file.language !== "typescript") continue;
-    if (!isTestFile(file.path)) continue;
+    if (!isTestFile(file.relativePath)) continue;
     const family = classifier(file.content);
     if (!family) continue;
     // Empty evidence: framework / mock-style classification is a file-level
     // property. A synthetic line-1 entry would render as a misleading code
     // snippet in the report.
     profiles.push({
-      file: file.path,
+      file: file.relativePath,
       patterns: [{ pattern: family, evidence: [] }],
     });
   }

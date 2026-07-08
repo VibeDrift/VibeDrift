@@ -7,7 +7,7 @@ describe("extractJsRoutesAst", () => {
     const f = await fileWithTree("routes.ts",
       `router.post("/orders", requireAuth, createOrder);\n` +
       `router.get("/orders", listOrders);\n`);
-    const routes = extractJsRoutesAst(f.tree!, f.path, undefined);
+    const routes = extractJsRoutesAst(f.tree!, f.relativePath, undefined);
     expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual([
       "POST /orders auth=true",
       "GET /orders auth=false",
@@ -21,13 +21,13 @@ describe("extractJsRoutesAst", () => {
       `req.headers.get("content-type");\n` +
       `config.get("PORT");\n` +
       `axios.get("https://x.test/y");\n`);
-    expect(extractJsRoutesAst(f.tree!, f.path, undefined)).toEqual([]);
+    expect(extractJsRoutesAst(f.tree!, f.relativePath, undefined)).toEqual([]);
   });
 
   it("reads passport.authenticate(...) call middleware", async () => {
     const f = await fileWithTree("r.ts",
       `router.get("/me", passport.authenticate("jwt"), getMe);\n`);
-    expect(extractJsRoutesAst(f.tree!, f.path, undefined)[0].hasAuth).toBe(true);
+    expect(extractJsRoutesAst(f.tree!, f.relativePath, undefined)[0].hasAuth).toBe(true);
   });
 });
 

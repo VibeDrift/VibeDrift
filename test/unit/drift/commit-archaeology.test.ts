@@ -8,7 +8,7 @@ function makeFile(
   git: Partial<FileGitMetadata> | null,
 ): DriftFile {
   return {
-    path,
+    relativePath: path,
     language: "typescript",
     content: "// test",
     lineCount: 1,
