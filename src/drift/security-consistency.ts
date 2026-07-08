@@ -34,6 +34,7 @@
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
 import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
+import { extractJsRoutesAst } from "./security-ast.js";
 
 const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
 
@@ -94,13 +95,13 @@ function analyzeUniformAuthGap(
   };
 }
 
-interface FileMiddleware {
+export interface FileMiddleware {
   hasAuth: boolean;
   hasValidation: boolean;
   hasRateLimit: boolean;
 }
 
-interface RouteInfo {
+export interface RouteInfo {
   method: string;
   path: string;
   file: string;
@@ -202,9 +203,17 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
 }
 
 function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
+  const fileMiddleware = fileMw.get(file.path);
+  if (file.tree) {
+    routes.push(...extractJsRoutesAst(file.tree, file.path, fileMiddleware));
+    return;
+  }
+  extractJsRoutesRegex(file, routes, fileMiddleware);
+}
+
+function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddleware: FileMiddleware | undefined) {
   const lines = file.content.split("\n");
   const expressPattern = /\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]/;
-  const fileMiddleware = fileMw.get(file.path);
 
   for (let i = 0; i < lines.length; i++) {
     const match = lines[i].match(expressPattern);
