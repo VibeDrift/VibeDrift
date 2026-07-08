@@ -1,5 +1,27 @@
 # CLI backlog
 
+- **Security Consistency is not at parity across supported languages.** The
+  route/auth consistency detector (`extractRoutes`, `security-consistency.ts`)
+  covers 3 of the 5 supported languages, at uneven precision, and the AST
+  precision upgrade from the Phase 1 wedge is JS/TS-only:
+  - **Rust: zero coverage.** There is no Rust route extractor at all — the
+    `extractRoutes` dispatch silently skips Rust, so Axum/Actix/Rocket services
+    produce no security-consistency signal. (The Phase 1 plan text claiming a
+    "regex fallback for Go/Python/Rust" was wrong; no Rust extractor ever
+    existed. Corrected in the plan.)
+  - **Python/Go: still line-window regex, un-upgraded and unverified.**
+    `extractPythonRoutes` / `extractGoRoutes` read auth/validation/rate-limit
+    from a ±10–30 line proximity window, not from parsed middleware args, so
+    they both false-positive (auth keyword nearby but not applied) and
+    false-negate (auth applied via a pattern not in the regex). They did NOT get
+    the receiver whitelist, `router.use()` inheritance, or the over-capture fix
+    (`cache.get`) the JS/TS AST path got, and were not smoke-tested on the latest
+    build (only JS was exercised in the Phase 1 verification).
+  Full remediation is drafted as a dedicated phase:
+  `PLAN-security-conformance-phase-multilang.md` (port the AST extractor to
+  Python + Go, add a first Rust extractor, per-language calibration). Warrants
+  its own branch, not a fold into the current work.
+
 - **Mounted-router middleware resolution needs proper module resolution.** The
   Security Consistency detector should resolve `app.use('/api', apiRouter)`
   cross-file so a router-level guard propagates to the mounted routes. A
