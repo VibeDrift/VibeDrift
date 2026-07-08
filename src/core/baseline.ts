@@ -19,6 +19,7 @@ import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 
 import { buildAnalysisContext } from "./discovery.js";
 import { runDriftDetection } from "../drift/index.js";
+import { parseFiles } from "../utils/ast.js";
 import { extractAllFunctions } from "../codedna/function-extractor.js";
 import { buildSignature } from "../codedna/minhash.js";
 import type { AnalysisContext } from "./types.js";
@@ -183,6 +184,7 @@ export function assembleBaseline(
 /** Standalone builder: scans `rootDir` from scratch, then assembles. */
 export async function buildBaseline(rootDir: string): Promise<RepoDriftBaseline> {
   const { ctx } = await buildAnalysisContext(rootDir);
+  await parseFiles(ctx.files);
   const { driftFindings } = runDriftDetection(ctx);
   return assembleBaseline(rootDir, ctx, driftFindings);
 }

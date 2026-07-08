@@ -1,4 +1,5 @@
 import type { Finding, FileGitMetadata } from "../core/types.js";
+import type { Tree } from "web-tree-sitter";
 
 export interface DriftDetector {
   id: string;
@@ -58,6 +59,10 @@ export interface DriftFile {
   language: string | null;
   content: string;
   lineCount: number;
+  /** Pre-parsed tree-sitter tree (populated by parseFiles before detection).
+   *  Absent when the language is unsupported or parsing failed — detectors
+   *  must fall back to regex on `content`. */
+  tree?: Tree;
   /** Populated when hasGitMetadata is true; null for files not in history. */
   git?: FileGitMetadata | null;
 }

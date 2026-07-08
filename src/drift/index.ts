@@ -44,6 +44,7 @@ export function buildDriftContext(ctx: AnalysisContext): DriftContext {
       language: f.language,
       content: f.content,
       lineCount: f.lineCount,
+      tree: f.tree,
       git: f.git ?? null,
     })),
     totalLines: ctx.totalLines,
