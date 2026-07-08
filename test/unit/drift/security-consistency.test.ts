@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { securityConsistency } from "../../../src/drift/security-consistency.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
+import { fileWithTree } from "../../helpers/drift-tree.js";
 
 function mkCtx(files: DriftFile[]): DriftContext {
   return {
@@ -97,5 +98,85 @@ describe("security-consistency detector", () => {
     // 4 mutating routes all authed → no auth deviation; the public GET is NOT
     // in the denominator (old behavior voted over all 5 routes and flagged it).
     expect(authFinding).toBeUndefined();
+  });
+
+  it("does not raise a high-confidence dominance-vote finding against public routes in a different directory", async () => {
+    const admin = await fileWithTree("src/routes/admin/users.ts",
+      `router.post("/admin/users", requireAuth, a);\n` +
+      `router.put("/admin/users/:id", requireAuth, b);\n` +
+      `router.delete("/admin/users/:id", requireAuth, c);\n` +
+      `router.patch("/admin/users/:id", requireAuth, d);\n`);
+    const pub = await fileWithTree("src/routes/public/catalog.ts",
+      `router.post("/catalog/feedback", submitFeedback);\n`);
+    const ctx = { files: [admin, pub], totalLines: 5, dominantLanguage: "typescript" };
+    const findings = securityConsistency.detect(ctx as any);
+
+    // Without directory scoping, the 4 admin (authed) + 1 public (unauthed)
+    // mutating routes would combine into ONE pool of 5: ratio = 4/5 = 0.8,
+    // which clears the >0.75 dominance threshold. analyzeSecurityProperty
+    // would then flag the single public route as a deviation from the
+    // admin-dominated "Auth middleware applied" pattern at confidence 0.75
+    // — the exact cross-directory false positive this task fixes.
+    //
+    // With directory scoping, admin (4/4 authed — uniform, no deviator) and
+    // public (1 route — below the dominance vote's 2-route minimum) never
+    // combine into that pool, so no such finding fires.
+    const dominanceFinding = findings.find(
+      (f) =>
+        f.confidence === 0.75 &&
+        f.dominantPattern === "Auth middleware applied" &&
+        f.deviatingFiles.some((d) => d.path === pub.path),
+    );
+    expect(dominanceFinding).toBeUndefined();
+
+    // NOTE: the lower-confidence uniform-auth-gap fallback (confidence 0.6)
+    // MAY still fire on the public group here — it is uniformly unauthed
+    // (0/1) and the repo has auth machinery elsewhere (admin's inline
+    // requireAuth). That is intentional: recall over precision for the
+    // "an AI forgot auth entirely" safety net. Legitimate-public exceptions
+    // are handled by suppression in a later phase, not by hiding this signal.
+  });
+
+  // ── Recall regression: machinery evidence must stay repo-global ──
+  //
+  // Task 4 originally scoped repoHasAuthMachinery() to per-group files, on
+  // the theory that a route file's own inline auth usage is "directory-local"
+  // evidence that shouldn't leak into another group's baseline. That over-
+  // corrected: when the ONLY "this repo authenticates" evidence anywhere is
+  // inline requireAuth() in a route file that belongs to a DIFFERENT group
+  // (no standalone middleware/auth.ts, no CLAUDE.md/AGENTS.md hint), the
+  // scoped version silently suppressed the uniform-auth-gap safety net for
+  // every other group — exactly the "AI wrote every endpoint unauthed"
+  // pattern that safety net exists to catch, and more likely to occur now
+  // that routes are grouped by directory. This test guards the fix.
+  it("flags a uniformly-unauthed route group even when the only auth evidence is another group's inline call", async () => {
+    const admin = await fileWithTree("src/routes/admin/users.ts",
+      `router.post("/admin/users", requireAuth, a);\n` +
+      `router.put("/admin/users/:id", requireAuth, b);\n` +
+      `router.delete("/admin/users/:id", requireAuth, c);\n` +
+      `router.patch("/admin/users/:id", requireAuth, d);\n`);
+    const orders = await fileWithTree("src/routes/orders/orders.ts",
+      `router.post("/orders", createOrder);\n` +
+      `router.put("/orders/:id", updateOrder);\n` +
+      `router.delete("/orders/:id", deleteOrder);\n` +
+      `router.patch("/orders/:id", patchOrder);\n`);
+    // No standalone middleware/auth.ts file and no intent hint — the ONLY
+    // auth evidence anywhere in this repo is admin/users.ts's own inline
+    // requireAuth() calls, which belong to a different directory group than
+    // orders/orders.ts.
+    const ctx = { files: [admin, orders], totalLines: 8, dominantLanguage: "typescript" };
+    const findings = securityConsistency.detect(ctx as any);
+
+    // Orders is uniformly unauthed (0/4) so the dominance vote (ratio 0)
+    // stays silent; the uniform-auth-gap fallback must fire instead.
+    const gapFinding = findings.find(
+      (f) =>
+        f.subCategory === "Auth middleware" &&
+        f.deviatingFiles.some((d) => d.path === orders.path),
+    );
+    expect(gapFinding).toBeDefined();
+    // Machinery-only evidence (no declared CLAUDE.md/AGENTS.md hint) -> the
+    // softer 0.6 confidence tier, per analyzeUniformAuthGap.
+    expect(gapFinding!.confidence).toBe(0.6);
   });
 });
