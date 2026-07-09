@@ -1,5 +1,17 @@
 # CLI backlog
 
+- **Security suppression: regex-fallback over-suppression on unterminated strings.**
+  In `src/drift/security-suppression.ts`, the AST comment-node path is immune, but
+  the textual regex fallback's `stripStringLiterals` only blanks CLOSED quote spans.
+  An unterminated string containing `// @vibedrift-public` therefore survives and is
+  read as a comment, dropping the route from the security denominator (over-suppression
+  hides a route). Only reachable in a global no-parser degraded mode (tree-sitter WASM
+  fails to init), so low risk. Two fixes: (1) correct the inverted safe-direction code
+  comment at `security-suppression.ts:55-58` (it wrongly says under-strip is safe);
+  (2) strip an unterminated quote to end-of-line before scanning for a comment marker,
+  so the fallback fails to the safe under-match side. Never-over-suppress is the
+  dominating invariant.
+
 - **Security Consistency is not at parity across supported languages.** The
   route/auth consistency detector (`extractRoutes`, `security-consistency.ts`)
   covers 3 of the 5 supported languages, at uneven precision, and the AST
