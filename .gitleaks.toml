@@ -14,5 +14,7 @@ useDefault = true
 description = "Synthetic security-test fixtures and placeholder templates (verified: no real secrets)"
 paths = [
   '''test/unit/analyzers/security\.test\.ts''',
+  '''test/unit/analyzers/security-floor\.test\.ts''',
+  '''test/calibration/injectors\.ts''',
   '''\.env\.example$''',
 ]
