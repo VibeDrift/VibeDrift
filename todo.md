@@ -35,13 +35,6 @@
   and attribute a guard only on a single exact-path match. Security-critical (a
   false attribution is a missed vulnerability) — design deliberately.
 
-- **AST route middleware: unpack array-literal middleware.** `middlewareNames`
-  in `src/drift/security-ast.ts` doesn't unpack `router.post("/x", [requireAuth],
-  handler)` (middleware passed as an array), so a genuinely-authed route reads as
-  an unauthed deviator. Safe direction (over-flags, never falsely blesses) and
-  narrow, but a ~3-line fix: when a middleware arg is an `array` node, recurse
-  over its `namedChildren`.
-
 - **Security calibration: exercise the primary dominance vote.** The `security`
   calibration injector strips auth at the shared `INJECT_RATE` (0.34), which puts
   the authed ratio below the 0.75 dominance-vote gate, so calibration only

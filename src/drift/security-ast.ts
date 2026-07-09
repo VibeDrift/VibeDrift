@@ -69,6 +69,9 @@ function middlewareNames(arg: SyntaxNode): string[] {
     if (fn) return [fn.text];
   }
   if (arg.type === "member_expression") return [arg.text];
+  if (arg.type === "array") {
+    return arg.namedChildren.filter((n): n is SyntaxNode => n !== null).flatMap(middlewareNames);
+  }
   return [];
 }
 

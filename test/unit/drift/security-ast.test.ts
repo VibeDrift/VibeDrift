@@ -29,6 +29,18 @@ describe("extractJsRoutesAst", () => {
       `router.get("/me", passport.authenticate("jwt"), getMe);\n`);
     expect(extractJsRoutesAst(f.tree!, f.relativePath, undefined)[0].hasAuth).toBe(true);
   });
+
+  it("unpacks array-literal middleware ([requireAuth]) to detect auth", async () => {
+    const f = await fileWithTree("r.ts",
+      `router.post("/x", [requireAuth], (req,res)=>{});\n`);
+    expect(extractJsRoutesAst(f.tree!, f.relativePath, undefined)[0].hasAuth).toBe(true);
+  });
+
+  it("still reads hasAuth:false for a route with no middleware", async () => {
+    const f = await fileWithTree("r.ts",
+      `router.post("/x", (req,res)=>{});\n`);
+    expect(extractJsRoutesAst(f.tree!, f.relativePath, undefined)[0].hasAuth).toBe(false);
+  });
 });
 
 describe("extractFileMiddlewareAst", () => {
