@@ -64,6 +64,10 @@ describe("classifyRouteAuth", () => {
 // is to apply auth. Otherwise honest silence (null).
 const UNAUTHED_POST = 'router.post("/x", (req, res) => { res.json({}); });';
 const GUARDED_POST = 'router.post("/x", requireAuth, (req, res) => { res.json({}); });';
+// Task B1: Express .all() is a mutating method (it handles every verb), so an
+// unauthed .all() route must be caught by the same in-loop classifier as
+// .post()/.put()/.patch()/.delete(). It previously was not.
+const UNAUTHED_ALL = 'router.all("/orders", (req, res) => { res.json({}); });';
 const PLAIN_FN = "export function add(a, b) { return a + b; }";
 const PY_ROUTE = '@app.post("/x")\ndef handler():\n    return {}';
 
@@ -136,6 +140,15 @@ describe("checkRouteAuthDrift", () => {
   it("does not flag a guarded mutating route even with an auth vote", async () => {
     const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), GUARDED_POST, "new.ts");
     expect(c).toBeNull();
+  });
+
+  it("emits a low-confidence conflict for an unauthed Express .all() route vs an 'Auth middleware' vote (Task B1)", async () => {
+    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), UNAUTHED_ALL, "new.ts");
+    expect(c).not.toBeNull();
+    expect(c!.dimension).toBe("security_posture");
+    expect(c!.dominantPattern).toBe("Auth middleware applied");
+    expect(c!.yourPattern).toBe("no auth guard visible in this change");
+    expect(c!.fixHint).toContain("8 of 9");
   });
 
   it("does not flag a non-route body", async () => {

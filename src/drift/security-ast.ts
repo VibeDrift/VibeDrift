@@ -24,7 +24,13 @@ import type { Tree, SyntaxNode } from "../core/types.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
 
 const ROUTE_METHODS = new Set(["get", "post", "put", "patch", "delete", "all"]);
-const MUTATING = new Set(["post", "put", "patch", "delete"]);
+// State-changing methods: POST/PUT/PATCH/DELETE and Express `.all()` (a
+// wildcard handler that matches every verb on the path, so an unauthed
+// `.all()` route is exactly as unsafe as an unauthed POST). Canonical for
+// both the batch detector (security-consistency.ts derives its upper-cased
+// MUTATION_METHODS from this) and the in-loop classifier
+// (route-auth-classify.ts), so the two can never disagree.
+const MUTATING = new Set(["post", "put", "patch", "delete", "all"]);
 
 // Receiver identifiers that plausibly register routes. Combined with the
 // "first arg is a string path starting with /" gate below, this excludes the

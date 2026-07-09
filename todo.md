@@ -1,5 +1,14 @@
 # CLI backlog
 
+- **Gin `.Any()` / Chi `.Method()` routes are not extracted at all.** Task B1
+  (2026-07-08, canonical mutating-method classification) fixed the
+  vote-exclusion bug for Express `.all()` and Flask `methods=[...]`, but Go's
+  `extractGoRoutes` (`src/drift/security-consistency.ts`) never recognizes
+  `r.Any(...)` (Gin) or `r.Method(...)` (Chi) as route registrations in the
+  first place, so these routes are missing from the route list entirely, not
+  just excluded from the mutating-method vote. Separate coverage gap, not a
+  vote-exclusion bug.
+
 - **Security floor precision gate only covers `private-key`.** The calibration
   floor-precision gate (`test/calibration/precision-recall.ts`) exercises only the
   `private-key` floor rule because the fixture corpus has no `.go` files, so

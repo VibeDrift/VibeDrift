@@ -4,8 +4,9 @@
  * It deliberately reuses the SAME AST route extractor the batch security
  * detector uses (`extractJsRoutesAst`), so its verdict can never contradict the
  * batch detector for the same body. Given a single proposed function body, it
- * reports whether that body registers a mutating route (POST/PUT/PATCH/DELETE)
- * and whether EVERY such route carries a visible per-route auth guard.
+ * reports whether that body registers a mutating route (POST/PUT/PATCH/DELETE
+ * and Express `.all()`) and whether EVERY such route carries a visible
+ * per-route auth guard.
  *
  * Router-scope middleware (`router.use(requireAuth)`) is intentionally NOT
  * consulted here: a single proposed body cannot see its router's setup, so we
@@ -33,7 +34,8 @@ const JS_TS_EXT: Record<string, SupportedLanguage> = {
 };
 
 export interface RouteAuthClassification {
-  /** At least one route in the body uses a mutating method (POST/PUT/PATCH/DELETE). */
+  /** At least one route in the body uses a mutating method (POST/PUT/PATCH/DELETE
+   *  and Express `.all()`). */
   isMutatingRoute: boolean;
   /** EVERY mutating route in the body carries a visible per-route auth guard.
    *  Conservative: a single unguarded mutating route makes this false. */

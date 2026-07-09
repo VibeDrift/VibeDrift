@@ -34,10 +34,16 @@
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
 import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
-import { extractJsRoutesAst, extractFileMiddlewareAst } from "./security-ast.js";
+import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
 import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
 
-const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+// Canonical mutating set (upper-cased), shared with the in-loop classifier via
+// SECURITY_AST.MUTATING so batch and in-loop can never disagree. Includes ALL
+// (Express .all() handles every verb) so an unauthed .all() route is not
+// silently excluded from the auth vote.
+const MUTATION_METHODS = [...SECURITY_AST.MUTATING].map((m) => m.toUpperCase());
+// Body-bearing methods for the validation vote (DELETE usually has no body).
+const BODY_METHODS = ["POST", "PUT", "PATCH", "ALL"];
 
 // Does the codebase use auth machinery anywhere? If it does, a mutating route
 // with no auth is drift ("you know how to auth — this route forgot"), not an
@@ -256,7 +262,21 @@ function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<s
     const match = lines[i].match(routePattern);
     if (!match) continue;
     const path = match[1];
-    const method = lines[i].match(/\.(get|post|put|patch|delete)/)?.[1]?.toUpperCase() ?? "ANY";
+    // Flask's @app.route defaults to GET when no methods= kwarg is present, NOT an
+    // unknown "ANY". Decorator-verb style (@app.post) resolves directly; the
+    // methods=[...] kwarg (Flask/others) is parsed so a mutating verb classifies
+    // the route as mutating. Scan the decorator + up to 2 continuation lines,
+    // since the kwarg can wrap.
+    const decoratorVerb = lines[i].match(/\.(get|post|put|patch|delete)\s*\(/)?.[1]?.toUpperCase();
+    let method = decoratorVerb ?? "GET";
+    const decoratorWindow = lines.slice(i, Math.min(lines.length, i + 3)).join(" ");
+    const methodsKw = decoratorWindow.match(/methods\s*=\s*\[([^\]]*)\]/i);
+    if (methodsKw) {
+      const verbs = (methodsKw[1].match(/["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']/gi) ?? [])
+        .map((v) => v.replace(/["']/g, "").toUpperCase());
+      const mutating = verbs.find((v) => MUTATION_METHODS.includes(v));
+      method = mutating ?? verbs[0] ?? method;
+    }
     const context = lines.slice(i, Math.min(lines.length, i + 30)).join("\n");
 
     const perAuth = /login_required|jwt_required|@requires|permission|token/.test(context);
@@ -404,7 +424,7 @@ export const securityConsistency: DriftDetector = {
     }
 
     for (const group of groups) {
-      const groupMutationRoutes = group.filter((r) => ["POST", "PUT", "PATCH"].includes(r.method));
+      const groupMutationRoutes = group.filter((r) => BODY_METHODS.includes(r.method));
       const valFinding = analyzeSecurityProperty(groupMutationRoutes, SECURITY_SUBCATEGORIES.validation, (r) => r.hasValidation, healthPaths);
       if (valFinding) findings.push(valFinding);
     }
