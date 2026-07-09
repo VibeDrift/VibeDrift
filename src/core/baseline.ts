@@ -22,6 +22,7 @@ import { runDriftDetection } from "../drift/index.js";
 import { parseFiles } from "../utils/ast.js";
 import { extractAllFunctions } from "../codedna/function-extractor.js";
 import { buildSignature } from "../codedna/minhash.js";
+import { SECURITY_SUPPRESSION_SUBCATEGORY } from "../drift/security-suppression.js";
 import type { AnalysisContext } from "./types.js";
 import type { DriftFinding, DriftCategory } from "../drift/types.js";
 import type { IntentHint } from "../intent/types.js";
@@ -94,12 +95,23 @@ export function computeBaselineKey(files: Array<{ path: string; hash: string }>)
  * covering the most files — the most representative dominant for the category.
  * Fully-consistent categories emit no finding, so they have no entry here and
  * tools report them as 100%-consistent by inference.
+ *
+ * The suppression-audit finding (security-suppression.ts, subCategory
+ * SECURITY_SUPPRESSION_SUBCATEGORY) is excluded: it is a hygiene audit trail
+ * ("N routes excluded"), not a dominance vote, so it must never win the
+ * security_posture slot in place of a real auth/validation/rate-limit vote
+ * (or occupy that slot when no real vote fires at all, which would make
+ * check_file_drift report a nonsensical "route excluded from the security
+ * consistency check" deviation for the suppressed file). It still reaches
+ * `result.findings` for the CLI render; only the persisted baseline vote
+ * excludes it.
  */
 export function votesFromFindings(
   findings: DriftFinding[],
 ): Partial<Record<DriftCategory, CategoryVote>> {
   const out: Partial<Record<DriftCategory, CategoryVote>> = {};
   for (const f of findings) {
+    if (f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY) continue;
     const existing = out[f.driftCategory];
     if (existing && existing.totalRelevantFiles >= f.totalRelevantFiles) continue;
     out[f.driftCategory] = toCategoryVote(f);
@@ -126,7 +138,10 @@ export function toCategoryVote(f: DriftFinding): CategoryVote {
  * Like votesFromFindings but for the security sub-conventions, keyed by
  * `subCategory` instead of `driftCategory`. Only security_posture findings that
  * carry a subCategory participate; each sub-key keeps the widest-denominator
- * finding (same tie-break as votesFromFindings).
+ * finding (same tie-break as votesFromFindings). The suppression-audit
+ * subCategory is excluded for the same reason as in votesFromFindings above:
+ * it is an audit trail, not a sub-convention vote, so it must not leave a
+ * bogus "Suppression audit" entry in the persisted securitySubVotes.
  */
 export function securitySubVotesFromFindings(
   findings: DriftFinding[],
@@ -134,6 +149,7 @@ export function securitySubVotesFromFindings(
   const out: Partial<Record<string, CategoryVote>> = {};
   for (const f of findings) {
     if (f.driftCategory !== "security_posture" || !f.subCategory) continue;
+    if (f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY) continue;
     const key = f.subCategory;
     const existing = out[key];
     if (existing && existing.totalRelevantFiles >= f.totalRelevantFiles) continue;
