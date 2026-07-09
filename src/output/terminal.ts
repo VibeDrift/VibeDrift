@@ -12,6 +12,7 @@ import { CATEGORY_CONFIG, ALL_CATEGORIES, DRIFT_DISPLAY_CATEGORIES, getAnalyzerK
 import { scoreBar, padRight, formatCount } from "./format.js";
 import { scorePercentiles } from "../scoring/engine.js";
 import { isPeerGroundedEntitled, type Plan } from "../auth/plan.js";
+import { hasFloorTrip } from "./floor-badge.js";
 
 /**
  * Public GitHub repo for the post-scan "star us" CTA. Empty string keeps the
@@ -189,7 +190,7 @@ function findingConsequence(f: Finding): string | null {
   }
 
   // Static analyzers
-  if (id === "security") {
+  if (id === "security" || id === "security-floor") {
     return "Hardcoded secrets or injection risks may be in production";
   }
   if (id === "dead-code") {
@@ -237,7 +238,7 @@ function findingPriority(f: Finding): number {
   const sev = f.severity === "error" ? 3 : f.severity === "warning" ? 2 : 1;
 
   // Security — always top priority
-  if (id === "security" || tags.includes("security_posture") || id.startsWith("drift-security")) return 10 * sev;
+  if (id === "security" || id === "security-floor" || tags.includes("security_posture") || id.startsWith("drift-security")) return 10 * sev;
   // Architectural drift — competing patterns are the core VibeDrift signal
   if (tags.includes("architectural_consistency") || id.startsWith("drift-architectural") || id === "codedna-pattern" || id === "codedna-deviation") return 8 * sev;
   // Intent divergence — team said one thing, code does another
@@ -618,6 +619,19 @@ function renderCategoryBars(result: ScanResult): string[] {
   );
   const scopeSuffix = scopeNote ? `  ${chalk.dim(scopeNote)}` : "";
   lines.push(`  ${padRight("Vibe Drift Score:", 28)} ${totalColor(`${result.compositeScore.toFixed(0)}/${result.maxCompositeScore}`)}${scopeSuffix}`);
+  // Floor-gate badge (render-only): an absolute security floor trip (committed
+  // secret, disabled TLS, unsanitized input reaching eval/exec) is surfaced as
+  // a warning line but NEVER changes compositeScore or the letter grade — see
+  // src/output/floor-badge.ts and the grade-invariance test in
+  // test/unit/output/floor-badge.test.ts.
+  const floorTrip = hasFloorTrip(result.findings);
+  if (floorTrip.tripped) {
+    lines.push(
+      chalk.dim(
+        `  ${chalk.yellow("⚠")} Security floor: ${floorTrip.reasons.join(", ")}. Fix before shipping (does not change the score).`,
+      ),
+    );
+  }
   // Hygiene composite — only rendered when there's a non-zero hygiene
   // surface (some hygiene category applies). Presented as a separate
   // scalar so it's clearly NOT part of the drift score.

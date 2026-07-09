@@ -63,6 +63,9 @@ function categoryLabel(f: Finding): string {
  * new analyzers.
  */
 const ANALYZER_RECOMMENDATIONS: Record<string, string> = {
+  // "security-floor" (src/analyzers/security.ts absolute-floor subset:
+  // committed secrets, disabled TLS) reuses this same copy via
+  // fallbackRecommendation below rather than a duplicated entry here.
   security:
     "Review each flagged line. If it's a real secret, rotate it immediately and move it to an environment variable or secret manager. If it's a test fixture (hardcoded example strings for security tests), move the string into a dedicated `.fixtures.ts` file under `test/` and reference it via import — the scanner excludes fixture files.",
   "dead-code":
@@ -90,6 +93,11 @@ const ANALYZER_RECOMMENDATIONS: Record<string, string> = {
 };
 
 function fallbackRecommendation(analyzerId: string): string | null {
+  // "security-floor" (committed secrets, disabled TLS — see
+  // src/analyzers/security.ts) is the absolute-floor subset of "security"
+  // findings; it gets the same specific "rotate the secret" guidance rather
+  // than falling through to the generic per-category fallback.
+  if (analyzerId === "security-floor") return ANALYZER_RECOMMENDATIONS.security ?? null;
   if (ANALYZER_RECOMMENDATIONS[analyzerId]) return ANALYZER_RECOMMENDATIONS[analyzerId];
   // Strip common prefixes ("drift-" etc.) and try again
   const stripped = analyzerId.replace(/^drift-/, "").replace(/^codedna-/, "");

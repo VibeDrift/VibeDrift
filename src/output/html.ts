@@ -6,6 +6,7 @@ import { hasMeaningfulImpact } from "./fix-plan-select.js";
 import { getAnalyzerKind, DRIFT_DISPLAY_CATEGORIES } from "../scoring/categories.js";
 import { applicableCategoryCount, compositeScopeNote } from "./terminal.js";
 import { formatCount } from "./format.js";
+import { hasFloorTrip } from "./floor-badge.js";
 
 const SCORING_CATEGORY_LABELS: Record<string, string> = {
   architecturalConsistency: "Architectural",
@@ -407,11 +408,21 @@ function buildSummaryHero(result: ScanResult, detailedUrl: string): string {
     ? `<a class="btn btn-primary" href="#fix-first">Fix the top drifts</a>`
     : "";
 
+  // Floor-gate badge (render-only): reuses the existing .badge.warn chip
+  // (yellow accent, no new color) already used in the findings library.
+  // Never changes compositeScore or g.letter above — see the grade-invariance
+  // test in test/unit/output/floor-badge.test.ts.
+  const floorTrip = hasFloorTrip(result.findings);
+  const floorBadge = floorTrip.tripped
+    ? `<span class="badge warn" title="${esc(floorTrip.reasons.join(", "))}">Security floor tripped</span>`
+    : "";
+
   return `<section class="va-hero">
     <div class="va-hero-top">
       <div class="va-scorewrap">
         <span class="va-score num" style="color:${g.color}">${compositeScore.toFixed(1)}<span class="s"> /${maxCompositeScore}</span></span>
         <span class="va-grade" style="background:${g.tint};color:${g.color}">${g.letter}</span>
+        ${floorBadge}
       </div>
       ${trend}
     </div>
@@ -430,14 +441,21 @@ function buildSummaryHero(result: ScanResult, detailedUrl: string): string {
 
 function buildCategoryBreakdown(result: ScanResult): string {
   const scores = result.scores as unknown as Record<string, { score: number; maxScore: number; applicable: boolean }>;
+  // Floor-gate badge (render-only): folded into the Security Consistency
+  // card's gloss note below. Never affects the card's score/color — see the
+  // grade-invariance test in test/unit/output/floor-badge.test.ts.
+  const floorTrip = hasFloorTrip(result.findings);
   // Dependency Health is not shown on the drift score display — it has no drift
   // detector and lives on the Hygiene track. Exclude it from the drift cards.
   const cards = SCORING_CATEGORY_ORDER.filter((cat) => cat !== "dependencyHealth").map((cat) => {
     const s = scores[cat];
     const label = esc(SCORING_CATEGORY_LABELS[cat]);
+    const floorNote = cat === "securityPosture" && floorTrip.tripped
+      ? `<div class="note"><span class="badge warn">Security floor</span> ${esc(floorTrip.reasons.join(", "))}. Fix before shipping (does not change the score).</div>`
+      : "";
     const gloss =
       cat === "securityPosture"
-        ? `<div class="note">Consistency of this repo's own auth and validation patterns, not the absence of vulnerabilities.</div>`
+        ? `<div class="note">Consistency of this repo's own auth and validation patterns, not the absence of vulnerabilities.</div>${floorNote}`
         : "";
     if (!s || !s.applicable) {
       // These drift detectors ran but found no applicable code in this repo.
