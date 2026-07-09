@@ -6,7 +6,13 @@ import { renderCsvReport } from "../../../src/output/csv.js";
 import { renderDocxReport } from "../../../src/output/docx.js";
 import { applySecurityMinPeerFloor, MIN_SECURITY_PEERS, computeScores } from "../../../src/scoring/engine.js";
 import { scoredDriftView, driftFindingToFinding, attachEngineComposite } from "../../../src/drift/index.js";
+import {
+  buildSuppressionAuditFinding,
+  SECURITY_SUPPRESSION_SUBCATEGORY,
+  SECURITY_SUPPRESSION_ANALYZER_ID,
+} from "../../../src/drift/security-suppression.js";
 import type { DriftFinding } from "../../../src/drift/types.js";
+import type { SuppressionRecord } from "../../../src/drift/security-suppression.js";
 import type { ScanResult, PerFileScore } from "../../../src/core/types.js";
 
 /**
@@ -328,6 +334,78 @@ describe("min-peer-floor render consistency (root fix)", () => {
       const html = renderHtmlReport(result, "detailed");
       const library = htmlSection(html, "Drift findings", "File ranking");
       expect(library).toContain("1 mutating route(s) lack auth (at floor)");
+    });
+  });
+
+  // The suppression-audit finding (security-suppression.ts) is a hygiene audit
+  // trail, not a dominance vote, so it must never appear in the DRIFT
+  // representation regardless of how many routes were suppressed. Its
+  // `totalRelevantFiles` is just the suppressed-route count, so at
+  // n >= MIN_SECURITY_PEERS the below-floor check alone does not exclude it
+  // (it only excludes n < MIN_SECURITY_PEERS) — scoredDriftView must also
+  // filter on subCategory. These tests cover both sides of that boundary.
+  describe("suppression-audit finding stays out of the DRIFT view at any suppression count", () => {
+    function suppressedRoutes(n: number): SuppressionRecord[] {
+      return Array.from({ length: n }, (_, i) => ({
+        path: `src/routes/r${i}.ts`,
+        line: 1,
+        reason: "annotation" as const,
+        source: "@vibedrift-public",
+      }));
+    }
+
+    it.each([1, MIN_SECURITY_PEERS, MIN_SECURITY_PEERS + 6])(
+      "scoredDriftView excludes the audit finding at n=%i suppressed routes (below and at/above the peer floor)",
+      (n) => {
+        const audit = buildSuppressionAuditFinding(suppressedRoutes(n));
+        expect(audit.totalRelevantFiles).toBe(n);
+
+        const { driftFindings } = scoredDriftView([audit, rawArch()], TOTAL_LINES);
+
+        expect(driftFindings.some((d) => d.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY)).toBe(false);
+        expect(
+          driftFindings.some((d) => d.dominantPattern === "route excluded from the security consistency check"),
+        ).toBe(false);
+        // The unrelated arch finding still comes through — only the audit
+        // finding is excluded, not the whole set.
+        expect(driftFindings.map((d) => d.driftCategory)).toContain("architectural_consistency");
+      },
+    );
+
+    it("stays present in result.findings (hygiene pane) at n>=MIN_SECURITY_PEERS even though it is dropped from result.driftFindings", () => {
+      const n = MIN_SECURITY_PEERS + 6; // 10: past the floor, the leak case before the fix
+      const audit = buildSuppressionAuditFinding(suppressedRoutes(n));
+      const result = mkPipelineResult([audit, rawArch()]);
+
+      expect(result.findings.some((f) => f.analyzerId === SECURITY_SUPPRESSION_ANALYZER_ID)).toBe(true);
+      expect(result.driftFindings.some((d) => d.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY)).toBe(false);
+    });
+
+    it("html: no DRIFT security row for the audit finding at n>=MIN_SECURITY_PEERS, but it still renders in the hygiene section", () => {
+      const n = MIN_SECURITY_PEERS + 6;
+      const audit = buildSuppressionAuditFinding(suppressedRoutes(n));
+      const result = mkPipelineResult([audit, rawArch()]);
+
+      const html = renderHtmlReport(result, "detailed");
+      const library = htmlSection(html, "Drift findings", "File ranking");
+      expect(library).not.toContain("route excluded from the security consistency check");
+      expect(html).toContain(`${n} route(s) excluded from the security consistency check`);
+    });
+
+    it("csv: DRIFT FINDINGS omits the audit finding, ALL FINDINGS still surfaces it under its hygiene analyzerId", () => {
+      const n = MIN_SECURITY_PEERS + 6;
+      const audit = buildSuppressionAuditFinding(suppressedRoutes(n));
+      const result = mkPipelineResult([audit, rawArch()]);
+
+      const csv = renderCsvReport(result);
+      const driftFindingsStart = csv.indexOf("DRIFT FINDINGS");
+      const allFindingsStart = csv.indexOf("ALL FINDINGS");
+      const driftFindingsSection = csv.slice(driftFindingsStart, allFindingsStart);
+      expect(driftFindingsSection).not.toContain("route excluded from the security consistency check");
+
+      const allFindingsSection = csv.slice(allFindingsStart);
+      expect(allFindingsSection).toContain(SECURITY_SUPPRESSION_ANALYZER_ID);
+      expect(allFindingsSection).toContain("route(s) excluded from the security consistency check");
     });
   });
 });

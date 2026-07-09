@@ -80,6 +80,13 @@
   match the rendered (scored) view, feed `scoredDriftView(...).driftFindings` to
   both the diff digest (buildScanResult) and `saveScanResult` together (keep the
   two sources identical or a spurious per-scan diff reappears).
+  Same root cause covers the suppression-audit finding (subCategory
+  `SECURITY_SUPPRESSION_SUBCATEGORY`, `security-suppression.ts`): the diff
+  digest also reads raw `driftFindings`, so adding or removing a
+  `@vibedrift-public` annotation or allowlist entry can show up as a "new" or
+  "resolved" drift finding in the diff banner and get committed into
+  `.vibedrift/context.md`. The same fix (feed the diff digest source from
+  `scoredDriftView(...).driftFindings`) would exclude it too.
 - **`watch` renderer shows signed-out copy while authenticated** (v0.14.8): watch
   output includes the "Sign in with `vibedrift login`…" hint and free-tier deep
   tease even on a logged-in session. Fix the auth-state branch in the renderer.

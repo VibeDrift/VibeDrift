@@ -176,12 +176,24 @@ function computeDriftScores(findings: Finding[], totalLines: number): DriftScore
  * `runDriftDetection` are intentionally left untouched for the baseline
  * (`assembleBaseline`) and the scan-over-scan diff, which track the raw drift
  * representation for continuity.
+ *
+ * The suppression-audit finding (security-suppression.ts, subCategory
+ * SECURITY_SUPPRESSION_SUBCATEGORY) is excluded here too, independent of the
+ * below-floor check: it is a hygiene audit trail ("N routes excluded"), not a
+ * dominance vote, and `driftFindingToFinding` already routes it to the
+ * hygiene-kind analyzerId. Its `totalRelevantFiles` is just the count of
+ * suppressed routes, so at >= MIN_SECURITY_PEERS suppressions the below-floor
+ * check alone does not catch it and it would otherwise leak into the scored
+ * DRIFT representation (and every renderer that reads it) mislabeled as
+ * "DRIFT: N route(s) excluded from the security consistency check".
  */
 export function scoredDriftView(
   driftFindings: DriftFinding[],
   totalLines: number,
 ): { driftFindings: DriftFinding[]; driftScores: DriftScores } {
-  const scored = driftFindings.filter((d) => !isBelowSecurityPeerFloor(d));
+  const scored = driftFindings.filter(
+    (d) => !isBelowSecurityPeerFloor(d) && d.subCategory !== SECURITY_SUPPRESSION_SUBCATEGORY,
+  );
   const driftScores = computeDriftScores(scored.map(driftFindingToFinding), totalLines);
   return { driftFindings: scored, driftScores };
 }
