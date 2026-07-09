@@ -24,13 +24,29 @@ import { INJECTORS } from "./injectors.js";
 import { classify, findingCategory, type CategoryMetrics, type DriftLabel, type ScoredFinding } from "./metrics.js";
 
 // Each injector's expected detector category (what a correct detector emits).
+// security_floor -> "security-floor": the floor rules (private-key, aws-key,
+// go-tls-skip-verify, ...) are emitted under analyzerId "security-floor"
+// (src/analyzers/security.ts), tagged ["security", ...] rather than
+// ["drift", ...], so `findingCategory` (metrics.ts) falls through to the
+// analyzerId itself rather than a driftCategory tag. Verified empirically
+// against a scored injected corpus before wiring this in — see task-7-report.md.
 const INJECTOR_CATEGORY: Record<string, string> = {
   naming: "naming_conventions",
   architectural: "architectural_consistency",
   error_handling: "architectural_consistency",
   security: "security_posture",
+  security_floor: "security-floor",
 };
 const INJECT_RATE = 0.34; // ~2 of 6 eligible files — a clear minority = unambiguous drift
+
+// Absolute-floor calibration gate (Phase 2 acceptance criterion): the
+// high-precision security-floor rules (private-key, aws-key,
+// go-tls-skip-verify, ...) must hold precision >= 0.95 on the clean-baseline
+// + injected corpus, or the run fails. Do not lower this to make a run pass —
+// a drop below 0.95 means the floor rules are false-firing on clean code and
+// that is a real bug to fix, not a threshold to soften.
+const FLOOR_CATEGORY = INJECTOR_CATEGORY.security_floor;
+const FLOOR_PRECISION_GATE = 0.95;
 
 async function writeFixture(root: string, files: BaselineFile[]): Promise<void> {
   await rm(root, { recursive: true, force: true });
@@ -128,6 +144,14 @@ async function main(): Promise<void> {
     console.log(`    ${unmeasured.map((r) => `${r.category}(${r.fp})`).join(", ")}`);
   }
 
+  // Gate: the floor rules must hold >= FLOOR_PRECISION_GATE precision on the
+  // clean baseline (step 1 above, already merged into `agg`) + the injected
+  // corpus. This is the one row in `rows` this script actually enforces —
+  // everything else here is report-only. A drop below the gate means the
+  // floor rules are false-firing on clean code; fix the rule, do not lower
+  // the gate.
+  const floorRow = rows.find((r) => r.category === FLOOR_CATEGORY);
+
   const report = { generatedAt: new Date().toISOString(), injectRate: INJECT_RATE, measured: rows, unmeasured };
   const reportDir = join(process.cwd(), "test/calibration/reports");
   await mkdir(reportDir, { recursive: true });
@@ -136,6 +160,20 @@ async function main(): Promise<void> {
   await writeFile(join(reportDir, "latest.json"), JSON.stringify(report, null, 2));
   console.log(`\n  Baseline written to test/calibration/reports/latest.json`);
   await rm(root, { recursive: true, force: true });
+
+  if (!floorRow || floorRow.precision == null) {
+    throw new Error(
+      `security floor calibration gate: no measurable '${FLOOR_CATEGORY}' findings. The injector produced no signal to score.`,
+    );
+  }
+  if (floorRow.precision < FLOOR_PRECISION_GATE) {
+    throw new Error(
+      `security floor calibration gate FAILED: precision ${floorRow.precision.toFixed(3)} < ${FLOOR_PRECISION_GATE} ` +
+        `(tp=${floorRow.tp} fp=${floorRow.fp} fn=${floorRow.fn}). The security-floor rules are false-firing on the clean corpus; ` +
+        `investigate the rule, do not lower this gate.`,
+    );
+  }
+  console.log(`  \x1b[32m✓\x1b[0m security floor precision gate: ${floorRow.precision.toFixed(3)} >= ${FLOOR_PRECISION_GATE}`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

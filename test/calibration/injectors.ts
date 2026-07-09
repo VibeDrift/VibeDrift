@@ -68,11 +68,36 @@ export function injectSecurityDrift(baseline: BaselineFile[], rate: number): Bas
   );
 }
 
+/**
+ * Distinct from `injectSecurityDrift` above, which STRIPS auth from routes (a
+ * dominance-vote drift signal on `drift-security_posture`). This plants an
+ * ABSOLUTE floor violation — a committed private key literal — into
+ * otherwise-clean, non-route files. It trips the high-precision
+ * `security-floor` rule (`private-key`, src/analyzers/security.ts), which is
+ * scored on its own axis (analyzerId "security-floor") independent of any
+ * auth vote, so it calibrates a different rule family than `security` does.
+ */
+export function injectSecurityFloor(baseline: BaselineFile[], rate: number): BaselineFile[] {
+  const eligible = baseline.filter((f) => /^src\/handlers\/.+Handler\.ts$/.test(f.path)).length;
+  const count = Math.round(eligible * rate);
+  if (count === 0) return baseline;
+
+  return mutate(baseline, /^src\/handlers\/.+Handler\.ts$/, count, (content) =>
+    `${content}\n` +
+    `// Committed by mistake during a deploy debugging session (do not do this).\n` +
+    "const DEPLOY_KEY = `-----BEGIN PRIVATE KEY-----\n" +
+    "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDU9fpAstUbeMwd\n" +
+    "Qhq3iF0vG6dGzq2Q4h8mR3jK7yN1pW5xL9tC8sV2bE6oA4uY7wZ0rD3nF1kJ5xHq\n" +
+    "-----END PRIVATE KEY-----`;\n",
+  );
+}
+
 export const INJECTORS: Record<string, (base: BaselineFile[], rate: number) => BaselineFile[]> = {
   architectural: injectArchDrift,
   error_handling: injectErrorHandlingDrift,
   naming: injectNamingDrift,
   security: injectSecurityDrift,
+  security_floor: injectSecurityFloor,
 };
 
 /**
