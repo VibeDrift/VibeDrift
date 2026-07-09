@@ -218,10 +218,20 @@ const AUTH_REQUIRED_HINT = "auth_required"; // intent-hint pattern (src/intent/p
 const ROUTER_CAVEAT =
   "Note: router-level middleware is not visible to this in-loop check, so this is a hint, not a verdict.";
 
+/** The peer-majority "Auth middleware applied" vote, or null when the stored
+ *  vote (if any) is a different pattern (e.g. the aspirational uniform-gap
+ *  label) or there is no vote at all. Shared by checkRouteAuthDrift (to decide
+ *  whether it has a truthful count to cite) and run() (to populate
+ *  referenceFiles from the same vote when it is the auth conflict's source). */
+function appliedAuthVote(baseline: RepoDriftBaseline) {
+  const vote = baseline.securitySubVotes?.[AUTH_SUBKEY];
+  return vote && vote.dominantPattern === AUTH_APPLIED ? vote : null;
+}
+
 /**
  * In-loop auth-drift check for a SINGLE proposed body. Emits a Conflict only
  * when the body registers a mutating route with NO visible per-route guard AND
- * the repo's own convention says auth is applied/required — either a peer
+ * the repo's own convention says auth is applied/required: either a peer
  * "Auth middleware applied" majority vote, or a declared `auth_required` intent
  * hint. Returns null (honest silence) otherwise, including the healthy case
  * where there is neither a vote nor a hint to compare against.
@@ -229,12 +239,13 @@ const ROUTER_CAVEAT =
  * Async because it parses the body (via the shared classifier, which reuses the
  * batch AST route extractor so it can never disagree with the batch detector).
  * Not folded into the pure `validateChange` for that reason. The caller forces
- * `confidence: "low"` when this fires — router-scope auth is invisible here.
+ * `confidence: "low"` when this fires, because router-scope auth is invisible
+ * here.
  */
 export async function checkRouteAuthDrift(
   baseline: RepoDriftBaseline,
-  relTarget: string,
   body: string,
+  relTarget: string,
 ): Promise<Conflict | null> {
   const cls = await classifyRouteAuth(body, relTarget);
   if (!cls || !cls.isMutatingRoute || cls.hasVisibleAuth) return null;
@@ -242,8 +253,8 @@ export async function checkRouteAuthDrift(
   // Prefer the peer-majority vote: its dominantCount/total is a truthful count
   // to cite. Reuses the exact get-dominant-pattern.ts read path (securitySubVotes
   // keyed by the Auth sub-category).
-  const vote = baseline.securitySubVotes?.[AUTH_SUBKEY];
-  if (vote && vote.dominantPattern === AUTH_APPLIED) {
+  const vote = appliedAuthVote(baseline);
+  if (vote) {
     return {
       dimension: "security_posture",
       dominantPattern: AUTH_APPLIED,
@@ -257,7 +268,7 @@ export async function checkRouteAuthDrift(
 
   // No applied-majority vote: fall back to a DECLARED auth-required rule. This
   // also covers the uniformly-unauthed-but-declared repo, whose stored vote (if
-  // any) is the aspirational rule, not the applied majority — so we cite the
+  // any) is the aspirational rule, not the applied majority, so we cite the
   // declaration rather than a misleading "0 of N" count.
   const hint = topHintFor(baseline.intentHints ?? [], "security_posture");
   if (hint && hint.pattern === AUTH_REQUIRED_HINT) {
@@ -310,14 +321,26 @@ export async function run({
   // In-loop security check (async, so it lives here rather than in the pure
   // validateChange): a proposed mutating route with no visible guard against a
   // repo that applies/declares auth. Appended to conflicts and forced to low
-  // confidence — the check cannot see router-scope middleware, so it never
-  // claims high confidence. ok recomputes false via the same rule, which is the
-  // intended signal (informative, not a hard block).
-  const authConflict = await checkRouteAuthDrift(baseline, relTarget, body);
+  // confidence, because the check cannot see router-scope middleware, so it
+  // never claims high confidence. ok recomputes false via the same rule, which
+  // is the intended signal (informative, not a hard block). Captured in a local
+  // so the deep block below can re-assert the low confidence instead of letting
+  // a cloud hit silently overstate this hedge.
+  const authConflict = await checkRouteAuthDrift(baseline, body, relTarget);
   if (authConflict) {
     out.conflicts = [...out.conflicts, authConflict];
     out.confidence = "low";
     out.ok = out.conflicts.length === 0 && out.duplicateOf.length === 0;
+    // validateChange only seeds referenceFiles from its own conflicts[0], so
+    // when the auth conflict is the sole conflict, referenceFiles is still [].
+    // Borrow the same peer-majority vote's dominantFiles the fixHint already
+    // cited (matching how the other dimensions populate referenceFiles).
+    // Stays empty when the source was the declared-hint branch, which has no
+    // file list to offer.
+    if (out.referenceFiles.length === 0) {
+      const vote = appliedAuthVote(baseline);
+      if (vote) out.referenceFiles = vote.dominantFiles.slice(0, 3);
+    }
   }
 
   if (!deep) return out;
@@ -347,7 +370,11 @@ export async function run({
   if (deepHits > 0) {
     out.ok = false; // cloud found real drift the local pass can't see
     out.status = "partial"; // local + deep both contributed
-    out.confidence = "high";
+    // The security auth-conflict hedge must win over the deep pass: the auth
+    // check cannot see router-scope middleware, so its own fixHint says "hint,
+    // not a verdict" regardless of what the cloud found. Never surface it at
+    // confidence:"high".
+    out.confidence = authConflict ? "low" : "high";
   }
   return out;
 }

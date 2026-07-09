@@ -50,7 +50,7 @@ export async function classifyRouteAuth(
 ): Promise<RouteAuthClassification | null> {
   const ext = relTarget.split(".").pop()?.toLowerCase() ?? "";
   const language = JS_TS_EXT[ext];
-  if (!language) return null; // JS/TS only — the AST route extractor is JS/TS.
+  if (!language) return null; // JS/TS only: the AST route extractor is JS/TS.
 
   const file: SourceFile = {
     path: relTarget,

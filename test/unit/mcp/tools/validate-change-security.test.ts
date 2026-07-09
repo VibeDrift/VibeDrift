@@ -15,6 +15,7 @@ vi.mock("../../../../src/mcp/deep-index.js", () => ({ deepDuplicatesViaIndex: vi
 import { checkRouteAuthDrift, run } from "../../../../src/mcp/tools/validate-change.js";
 import { buildBaseline, writeBaseline, type RepoDriftBaseline } from "../../../../src/core/baseline.js";
 import { __clearBaselineCache } from "../../../../src/mcp/baseline-provider.js";
+import { deepDuplicatesViaIndex } from "../../../../src/mcp/deep-index.js";
 
 // ── Shared classifier ───────────────────────────────────────────────────────
 // classifyRouteAuth reuses the SAME AST route extractor the batch security
@@ -106,7 +107,7 @@ const AUTH_REQUIRED_HINT = {
 
 describe("checkRouteAuthDrift", () => {
   it("emits a low-confidence conflict for an unauthed mutating route vs an 'Auth middleware' vote", async () => {
-    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), "new.ts", UNAUTHED_POST);
+    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), UNAUTHED_POST, "new.ts");
     expect(c).not.toBeNull();
     expect(c!.dimension).toBe("security_posture");
     expect(c!.dominantPattern).toBe("Auth middleware applied");
@@ -118,7 +119,7 @@ describe("checkRouteAuthDrift", () => {
   });
 
   it("cites the declaration when there is no vote but an auth_required hint exists", async () => {
-    const c = await checkRouteAuthDrift(baseWith({}, [AUTH_REQUIRED_HINT]), "new.ts", UNAUTHED_POST);
+    const c = await checkRouteAuthDrift(baseWith({}, [AUTH_REQUIRED_HINT]), UNAUTHED_POST, "new.ts");
     expect(c).not.toBeNull();
     expect(c!.dimension).toBe("security_posture");
     expect(c!.dominantPattern).toBe("Auth middleware applied");
@@ -128,22 +129,22 @@ describe("checkRouteAuthDrift", () => {
   });
 
   it("stays silent when there is neither a vote nor an auth hint (healthy 100%-authed repo)", async () => {
-    const c = await checkRouteAuthDrift(baseWith({}, []), "new.ts", UNAUTHED_POST);
+    const c = await checkRouteAuthDrift(baseWith({}, []), UNAUTHED_POST, "new.ts");
     expect(c).toBeNull();
   });
 
   it("does not flag a guarded mutating route even with an auth vote", async () => {
-    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), "new.ts", GUARDED_POST);
+    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), GUARDED_POST, "new.ts");
     expect(c).toBeNull();
   });
 
   it("does not flag a non-route body", async () => {
-    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), "new.ts", PLAIN_FN);
+    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), PLAIN_FN, "new.ts");
     expect(c).toBeNull();
   });
 
   it("does not flag a Python body (JS/TS-only gate)", async () => {
-    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), "new.py", PY_ROUTE);
+    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), PY_ROUTE, "new.py");
     expect(c).toBeNull();
   });
 
@@ -162,7 +163,7 @@ describe("checkRouteAuthDrift", () => {
         deviators: [],
       },
     };
-    const c = await checkRouteAuthDrift(baseWith(machineryVote), "new.ts", UNAUTHED_POST);
+    const c = await checkRouteAuthDrift(baseWith(machineryVote), UNAUTHED_POST, "new.ts");
     expect(c).toBeNull();
   });
 });
@@ -176,6 +177,7 @@ describe("checkRouteAuthDrift", () => {
 describe("validate_change security check (run wiring)", () => {
   let repo: string;
   let authVote: string | undefined;
+  let authVoteFiles: string[] | undefined;
   beforeAll(async () => {
     repo = mkdtempSync(join(tmpdir(), "vd-vc-sec-"));
     mkdirSync(join(repo, "routes"), { recursive: true });
@@ -195,6 +197,7 @@ describe("validate_change security check (run wiring)", () => {
     const built = await buildBaseline(repo);
     await writeBaseline(built);
     authVote = built.securitySubVotes?.["Auth middleware"]?.dominantPattern;
+    authVoteFiles = built.securitySubVotes?.["Auth middleware"]?.dominantFiles;
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
   beforeEach(() => __clearBaselineCache());
@@ -203,7 +206,7 @@ describe("validate_change security check (run wiring)", () => {
     expect(authVote).toBe("Auth middleware applied");
   });
 
-  it("appends a low-confidence security conflict for an unauthed mutating route change", async () => {
+  it("appends a low-confidence security conflict for an unauthed mutating route change, with referenceFiles from the vote", async () => {
     const out = await run({ rootDir: repo, targetPath: join(repo, "routes", "new.ts"), body: UNAUTHED_POST });
     expect(["ok", "stale"]).toContain(out.status);
     expect(out.ok).toBe(false);
@@ -211,10 +214,69 @@ describe("validate_change security check (run wiring)", () => {
     const sec = out.conflicts.find((c) => c.dimension === "security_posture");
     expect(sec, "expected a security_posture conflict").toBeTruthy();
     expect(sec!.yourPattern).toBe("no auth guard visible in this change");
+    // FINDING 2: the auth conflict is the only conflict, so validateChange's own
+    // referenceFiles computation never runs. run() must backfill it from the
+    // SAME auth vote the fixHint already cites (dominantFiles, capped at 3).
+    expect(authVoteFiles?.length, "fixture vote should carry dominantFiles").toBeGreaterThan(0);
+    expect(out.referenceFiles).toEqual((authVoteFiles ?? []).slice(0, 3));
   });
 
   it("does not append a security conflict for a guarded route change", async () => {
     const out = await run({ rootDir: repo, targetPath: join(repo, "routes", "new.ts"), body: GUARDED_POST });
     expect(out.conflicts.some((c) => c.dimension === "security_posture")).toBe(false);
+  });
+
+  // ── FINDING 1: deep path must never override the security-forced low
+  // confidence ────────────────────────────────────────────────────────────────
+  // The auth conflict's own fixHint says "this is a hint, not a verdict"
+  // because router-level middleware is invisible to the in-loop check. A cloud
+  // deep hit is genuinely high-confidence on ITS OWN finding, but must not
+  // launder the hedged auth conflict up to confidence:"high" just because it
+  // rode along in the same result.
+  describe("deep path vs. the security-forced low confidence", () => {
+    beforeEach(() => {
+      (deepDuplicatesViaIndex as ReturnType<typeof vi.fn>).mockReset();
+    });
+
+    it("a deep hit does NOT override confidence when an auth conflict also fired", async () => {
+      (deepDuplicatesViaIndex as ReturnType<typeof vi.fn>).mockResolvedValue({
+        degraded: false,
+        intentMismatches: [],
+        duplicates: [
+          { kind: "duplicate", detail: "new.ts::x ~ a.ts::twin", confidence: 0.93, verdict: "semantic_duplicate" },
+        ],
+      });
+      const out = await run({
+        rootDir: repo,
+        targetPath: join(repo, "routes", "new.ts"),
+        body: UNAUTHED_POST,
+        deep: true,
+      });
+      // The deep hit genuinely fired (proves this isn't a vacuous test)...
+      expect(out.deep?.duplicates).toHaveLength(1);
+      const sec = out.conflicts.find((c) => c.dimension === "security_posture");
+      expect(sec, "expected a security_posture conflict").toBeTruthy();
+      // ...but the auth conflict's hedge still wins at the result level.
+      expect(out.confidence).toBe("low");
+    });
+
+    it("a deep hit DOES set confidence high when there is no auth conflict (regression)", async () => {
+      (deepDuplicatesViaIndex as ReturnType<typeof vi.fn>).mockResolvedValue({
+        degraded: false,
+        intentMismatches: [],
+        duplicates: [
+          { kind: "duplicate", detail: "new.ts::x ~ a.ts::twin", confidence: 0.93, verdict: "semantic_duplicate" },
+        ],
+      });
+      const out = await run({
+        rootDir: repo,
+        targetPath: join(repo, "routes", "new.ts"),
+        body: GUARDED_POST,
+        deep: true,
+      });
+      expect(out.deep?.duplicates).toHaveLength(1);
+      expect(out.conflicts.some((c) => c.dimension === "security_posture")).toBe(false);
+      expect(out.confidence).toBe("high");
+    });
   });
 });
