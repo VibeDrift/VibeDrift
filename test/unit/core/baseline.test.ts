@@ -12,6 +12,7 @@ import {
   votesFromFindings,
   securitySubVotesFromFindings,
   toCategoryVote,
+  BASELINE_VERSION,
 } from "../../../src/core/baseline.js";
 import { buildAnalysisContext } from "../../../src/core/discovery.js";
 import { runDriftDetection } from "../../../src/drift/index.js";
@@ -327,6 +328,13 @@ describe("buildBaseline + persistence round-trip", () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.key).toBe(built.key);
     expect(loaded!.rootDir).toBe(repo);
+  });
+
+  it("assembleBaseline stamps the baseline with the current BASELINE_VERSION", async () => {
+    const { ctx } = await buildAnalysisContext(repo);
+    const { driftFindings } = runDriftDetection(ctx);
+    const assembled = assembleBaseline(repo, ctx, driftFindings);
+    expect(assembled.version).toBe(BASELINE_VERSION);
   });
 
   it("assembleBaseline (the scan side-effect path) agrees with standalone buildBaseline", async () => {

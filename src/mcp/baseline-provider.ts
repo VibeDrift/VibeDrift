@@ -20,6 +20,7 @@ import {
   writeBaseline,
   computeBaselineKey,
   loadBaselineUnchecked,
+  BASELINE_VERSION,
   type RepoDriftBaseline,
 } from "../core/baseline.js";
 
@@ -108,6 +109,19 @@ export async function getBaseline(
     baseline = await buildAndCacheBaseline(rootDir);
     if (!baseline) return { baseline: null, status: "no_baseline" };
     return { baseline, status: "ok" };
+  }
+
+  // A baseline built under an older BASELINE_VERSION is missing current vote
+  // shape (e.g. securitySubVotes) and would serve wrong answers forever; the
+  // stale tag alone never rebuilds. A version mismatch forces a one-time rebuild
+  // (same lazy path as a never-scanned repo). Content-only drift stays "stale"
+  // (cheap re-hash, no rebuild) as before.
+  if (baseline && baseline.version !== BASELINE_VERSION) {
+    memCache.delete(rootDir);
+    const rebuilt = await buildAndCacheBaseline(rootDir);
+    if (rebuilt) return { baseline: rebuilt, status: "ok" };
+    // Rebuild failed (e.g. files vanished): fall through and serve the old one
+    // rather than returning no_baseline, so the tool still answers.
   }
 
   const fresh = (await liveKey(rootDir, baseline)) === baseline.key;

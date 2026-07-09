@@ -30,7 +30,7 @@ import type { IntentHint } from "../intent/types.js";
 
 const CACHE_DIR = join(homedir(), ".vibedrift", "baseline-cache");
 /** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 2;
+export const BASELINE_VERSION = 3;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;
@@ -70,6 +70,11 @@ export interface RepoDriftBaseline {
   intentHints: IntentHint[];
   minhashIndex: MinhashEntry[];
   builtAt: number;
+  /** BASELINE_VERSION at build time. A mismatch against the current
+   *  BASELINE_VERSION means the persisted vote shape may be stale (e.g.
+   *  missing securitySubVotes) and forces a one-time rebuild; see
+   *  getBaseline in src/mcp/baseline-provider.ts. */
+  version: number;
 }
 
 /** On-disk shape: signatures degrade to number[] (JSON has no typed arrays). */
@@ -200,6 +205,7 @@ export function assembleBaseline(
     intentHints: ctx.intentHints ?? [],
     minhashIndex,
     builtAt: Date.now(),
+    version: BASELINE_VERSION,
   };
 }
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBaseline, writeBaseline } from "../../../src/core/baseline.js";
+import { buildBaseline, writeBaseline, BASELINE_VERSION } from "../../../src/core/baseline.js";
 import { getBaseline, __clearBaselineCache } from "../../../src/mcp/baseline-provider.js";
 
 describe("baseline provider", () => {
@@ -73,5 +73,60 @@ describe("baseline provider", () => {
     const { baseline, status } = await getBaseline(repo);
     expect(status).toBe("stale");
     expect(baseline).not.toBeNull(); // serve cached + tag, never hang/rebuild in-call
+  });
+
+  it("rebuilds once when the on-disk baseline predates BASELINE_VERSION, then serves the rebuilt baseline without rebuilding again", async () => {
+    const fresh = mkdtempSync(join(tmpdir(), "vd-version-"));
+    try {
+      writeFileSync(join(fresh, "x.ts"), "export async function x(){ return await fetch('/a'); }\n");
+      writeFileSync(join(fresh, "y.ts"), "export async function y(){ return await fetch('/b'); }\n");
+      const built = await buildBaseline(fresh);
+      // Simulate a baseline persisted under an older BASELINE_VERSION (e.g.
+      // missing securitySubVotes / the belowPeerFloor vote shape).
+      await writeBaseline({ ...built, version: 1 });
+      __clearBaselineCache();
+
+      const rebuiltResult = await getBaseline(fresh);
+      expect(rebuiltResult.status).toBe("ok");
+      expect(rebuiltResult.baseline).not.toBeNull();
+      expect(rebuiltResult.baseline!.version).toBe(BASELINE_VERSION);
+      const firstBuiltAt = rebuiltResult.baseline!.builtAt;
+
+      // Content is unchanged and the on-disk baseline is now at the current
+      // version, so a second call (after dropping the mem cache, forcing a
+      // disk load) must be SERVED, not rebuilt again: builtAt is identical.
+      __clearBaselineCache();
+      const servedResult = await getBaseline(fresh);
+      expect(servedResult.status).toBe("ok");
+      expect(servedResult.baseline).not.toBeNull();
+      expect(servedResult.baseline!.version).toBe(BASELINE_VERSION);
+      expect(servedResult.baseline!.builtAt).toBe(firstBuiltAt);
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+
+  it("a current-version baseline with content-only drift still returns 'stale' (cheap re-hash), not a rebuild", async () => {
+    const fresh = mkdtempSync(join(tmpdir(), "vd-version-content-"));
+    try {
+      writeFileSync(join(fresh, "x.ts"), "export async function x(){ return await fetch('/a'); }\n");
+      await writeBaseline(await buildBaseline(fresh));
+      __clearBaselineCache();
+      const first = await getBaseline(fresh);
+      expect(first.status).toBe("ok");
+      const originalBuiltAt = first.baseline!.builtAt;
+
+      __clearBaselineCache();
+      writeFileSync(join(fresh, "x.ts"), "export async function x(){ return await fetch('/CHANGED'); }\n");
+      const { baseline, status } = await getBaseline(fresh);
+      expect(status).toBe("stale");
+      expect(baseline).not.toBeNull();
+      // Content-only drift never rebuilds: same version, same builtAt as the
+      // originally-persisted baseline.
+      expect(baseline!.version).toBe(BASELINE_VERSION);
+      expect(baseline!.builtAt).toBe(originalBuiltAt);
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
   });
 });
