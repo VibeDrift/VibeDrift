@@ -656,7 +656,7 @@ describe("canonical mutating methods (Task B1)", () => {
     // 7 authed POST routes keep the auth-vote ratio above the 75% dominance
     // threshold even while both trailing routes (the misclassified /read
     // under the old bug, and the genuinely-unauthed /danger) count against
-    // it — so the vote actually fires and the bug's false-positive on /read
+    // it, so the vote actually fires and the bug's false-positive on /read
     // is observable, rather than the vote going silent.
     const pyRoutes = file(
       "src/routes/orders.py",
@@ -702,6 +702,60 @@ describe("canonical mutating methods (Task B1)", () => {
     ).toBe(false);
     // /danger (line 24) is a genuine unauthed mutating route and should
     // still be correctly flagged.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 24),
+    ).toBe(true);
+  });
+
+  it("does not let an unbalanced literal paren in a route path bleed an adjacent route's methods=[...]", () => {
+    // A route path string can legitimately contain a "(". The decorator-arg
+    // scanner must skip parens inside string literals, otherwise the unbalanced
+    // "(" in "/weird(path" keeps the paren depth open and the scan leaks into
+    // the immediately-adjacent /danger route's methods=["POST"], misclassifying
+    // this bare GET route as a mutating route (a false positive).
+    const pyRoutes = file(
+      "src/routes/orders.py",
+      [
+        `@app.post("/orders/1")`,
+        `@requires_auth`,
+        `def r1(): return {}`,
+        `@app.post("/orders/2")`,
+        `@requires_auth`,
+        `def r2(): return {}`,
+        `@app.post("/orders/3")`,
+        `@requires_auth`,
+        `def r3(): return {}`,
+        `@app.post("/orders/4")`,
+        `@requires_auth`,
+        `def r4(): return {}`,
+        `@app.post("/orders/5")`,
+        `@requires_auth`,
+        `def r5(): return {}`,
+        `@app.post("/orders/6")`,
+        `@requires_auth`,
+        `def r6(): return {}`,
+        `@app.post("/orders/7")`,
+        `@requires_auth`,
+        `def r7(): return {}`,
+        `@app.route("/weird(path")`,
+        `def weird(): return {}`,
+        `@app.route("/danger", methods=["POST"])`,
+        `def danger(): return {}`,
+      ].join("\n"),
+      "python",
+    );
+    const ctx = mkCtx([pyRoutes]);
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    // The bare @app.route("/weird(path") on line 22 defaults to GET and must
+    // never be reported as a missing-auth mutating route, even though the
+    // unbalanced literal "(" would, without string skipping, leak the adjacent
+    // /danger route's methods=["POST"] into its classification.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 22),
+    ).toBe(false);
+    // /danger (line 24) is a genuine unauthed mutating route and stays flagged.
     expect(
       authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 24),
     ).toBe(true);

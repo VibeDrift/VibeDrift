@@ -256,13 +256,35 @@ function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddlewa
 /** Text inside a Python route decorator's parentheses: from the first "(" on
  *  line `start` to its matching ")", spanning continuation lines. Bounded by
  *  paren depth so `methods=` is read from THIS decorator only and can never
- *  bleed into an adjacent route's decorator. */
+ *  bleed into an adjacent route's decorator. Parens inside string literals
+ *  (e.g. a route path like "/weird(path") are skipped, so an unbalanced literal
+ *  paren cannot throw off the depth count and leak into the next route. */
 function balancedDecoratorArgs(lines: string[], start: number): string {
   let depth = 0;
   let started = false;
   let out = "";
+  let quote: string | null = null; // active string-literal quote char, or null
   for (let j = start; j < lines.length; j++) {
-    for (const ch of lines[j]) {
+    const line = lines[j];
+    for (let k = 0; k < line.length; k++) {
+      const ch = line[k];
+      if (quote) {
+        // Inside a string literal: only a matching unescaped quote ends it;
+        // parens here are path/text, not structure.
+        if (ch === "\\") {
+          if (started) out += ch + (line[k + 1] ?? "");
+          k++; // skip the escaped char
+          continue;
+        }
+        if (ch === quote) quote = null;
+        if (started) out += ch;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        if (started) out += ch;
+        continue;
+      }
       if (ch === "(") {
         depth++;
         started = true;
