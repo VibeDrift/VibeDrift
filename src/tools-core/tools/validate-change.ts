@@ -255,12 +255,19 @@ export async function checkRouteAuthDrift(
   // keyed by the Auth sub-category).
   const vote = appliedAuthVote(baseline);
   if (vote) {
+    // Below MIN_SECURITY_PEERS relevant routes, the vote is too thin to move
+    // the composite score (isBelowSecurityPeerFloor), so the in-loop check must
+    // hedge it the same way rather than citing it as a confident verdict.
+    const thin = vote.belowPeerFloor
+      ? "This is a thin sample (below the reliable-sample floor), so treat it as advisory. "
+      : "";
     return {
       dimension: "security_posture",
       dominantPattern: AUTH_APPLIED,
       yourPattern: "no auth guard visible in this change",
       fixHint:
         `Repo applies auth on ${vote.dominantCount} of ${vote.totalRelevantFiles} mutating routes. ` +
+        thin +
         `Add the guard, or annotate the route // @vibedrift-public if it is intentionally public. ` +
         ROUTER_CAVEAT,
     };

@@ -61,10 +61,15 @@ export function dominantPatternFor(
     };
   }
   const pct = Math.round(vote.consistencyScore);
+  const unit = SECURITY_SUB_DIM[dimension] ? "routes" : "files";
+  const base = `${vote.dominantCount} of ${vote.totalRelevantFiles} ${unit} (${pct}%)`;
+  const consistency = vote.belowPeerFloor
+    ? `${base} - thin sample (below the reliable-sample floor), treat as advisory`
+    : base;
   return {
     dimension,
     dominantPattern: vote.dominantPattern,
-    consistency: `${vote.dominantCount} of ${vote.totalRelevantFiles} files (${pct}%)`,
+    consistency,
     examples: vote.dominantFiles.slice(0, 3),
   };
 }

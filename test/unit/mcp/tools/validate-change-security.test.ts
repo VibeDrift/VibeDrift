@@ -99,6 +99,23 @@ const AUTH_APPLIED_VOTE: RepoDriftBaseline["securitySubVotes"] = {
   },
 };
 
+// Below MIN_SECURITY_PEERS (4) relevant routes: 2 of 3 mutating routes authed.
+// Too thin a sample to move the composite score (isBelowSecurityPeerFloor),
+// so the in-loop check must hedge this as advisory, not cite it as a
+// confident verdict.
+const AUTH_APPLIED_VOTE_THIN: RepoDriftBaseline["securitySubVotes"] = {
+  "Auth middleware": {
+    driftCategory: "security_posture",
+    dominantPattern: "Auth middleware applied",
+    dominantCount: 2,
+    totalRelevantFiles: 3,
+    consistencyScore: 67,
+    dominantFiles: ["routes/users.ts"],
+    deviators: [],
+    belowPeerFloor: true,
+  },
+};
+
 const AUTH_REQUIRED_HINT = {
   category: "security_posture" as const,
   pattern: "auth_required",
@@ -159,6 +176,22 @@ describe("checkRouteAuthDrift", () => {
   it("does not flag a Python body (JS/TS-only gate)", async () => {
     const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), PY_ROUTE, "new.py");
     expect(c).toBeNull();
+  });
+
+  it("adds a thin-sample advisory note when the applied-auth vote is below the peer floor", async () => {
+    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE_THIN), UNAUTHED_POST, "new.ts");
+    expect(c).not.toBeNull();
+    expect(c!.fixHint).toContain("2 of 3");
+    expect(c!.fixHint).toMatch(/thin sample/i);
+    // Both caveats present: thin-sample AND the existing router-scope caveat.
+    expect(c!.fixHint).toContain("router-level middleware is not visible");
+    expect(c!.fixHint).not.toMatch(/—|--/);
+  });
+
+  it("does not add the thin-sample note when the applied-auth vote is at or above the peer floor", async () => {
+    const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), UNAUTHED_POST, "new.ts");
+    expect(c).not.toBeNull();
+    expect(c!.fixHint).not.toMatch(/thin sample/i);
   });
 
   it("stays silent when the auth vote is not the applied-majority signal and no hint is declared", async () => {

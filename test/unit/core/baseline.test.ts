@@ -11,6 +11,7 @@ import {
   computeBaselineKey,
   votesFromFindings,
   securitySubVotesFromFindings,
+  toCategoryVote,
 } from "../../../src/core/baseline.js";
 import { buildAnalysisContext } from "../../../src/core/discovery.js";
 import { runDriftDetection } from "../../../src/drift/index.js";
@@ -93,6 +94,38 @@ describe("votesFromFindings", () => {
     expect(subVotes["Auth middleware"]!.dominantPattern).toBe("Auth middleware applied");
     expect(subVotes["Rate limiting"]!.dominantPattern).toBe("Rate limiting applied");
     expect(subVotes["Auth middleware"]!.totalRelevantFiles).toBe(5);
+  });
+});
+
+// ── belowPeerFloor: thin-sample security votes flagged advisory ─────────────
+//
+// A security_posture vote below MIN_SECURITY_PEERS (4) relevant routes is too
+// thin a sample to move the composite score (applySecurityMinPeerFloor /
+// isBelowSecurityPeerFloor in src/scoring/engine.ts), yet the same vote is
+// persisted into securitySubVotes and served by get_dominant_pattern /
+// validate_change as if it were an ordinary dominance vote. toCategoryVote
+// reuses isBelowSecurityPeerFloor (the single source of truth for the
+// below-floor test) to flag it so those tools can hedge instead of asserting.
+describe("toCategoryVote: belowPeerFloor flag", () => {
+  it("flags a security_posture vote below MIN_SECURITY_PEERS (4) relevant routes", () => {
+    const vote = toCategoryVote(
+      fakeFinding({ driftCategory: "security_posture", totalRelevantFiles: 3 }),
+    );
+    expect(vote.belowPeerFloor).toBe(true);
+  });
+
+  it("does not flag a security_posture vote at or above MIN_SECURITY_PEERS relevant routes", () => {
+    const vote = toCategoryVote(
+      fakeFinding({ driftCategory: "security_posture", totalRelevantFiles: 5 }),
+    );
+    expect(vote.belowPeerFloor).toBeFalsy();
+  });
+
+  it("does not flag a non-security-posture vote even with a thin sample", () => {
+    const vote = toCategoryVote(
+      fakeFinding({ driftCategory: "async_patterns", totalRelevantFiles: 1 }),
+    );
+    expect(vote.belowPeerFloor).toBeFalsy();
   });
 });
 
