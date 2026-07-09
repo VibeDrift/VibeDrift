@@ -49,12 +49,18 @@ import {
  *        analyzer in computeScores. Sparse reimplementation stays informational.
  *        Deep-scan scores move for repos with concentrated reimplementation;
  *        local / free scores are unchanged.
+ *   v10: security route classification. Express `.all()` and Flask
+ *        `@app.route(methods=[...])` mutating routes now enter the security
+ *        auth/validation votes, so a repo with previously-uncounted unauthed
+ *        mutating routes reflects the security_posture drift it always had.
+ *        Only repos with those route shapes move; every other repo is byte
+ *        identical, and the bundled calibration corpus is unchanged.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v9";
+export const SCORING_VERSION = "v10";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
