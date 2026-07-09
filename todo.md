@@ -1,5 +1,14 @@
 # CLI backlog
 
+- **Security floor precision gate only covers `private-key`.** The calibration
+  floor-precision gate (`test/calibration/precision-recall.ts`) exercises only the
+  `private-key` floor rule because the fixture corpus has no `.go` files, so
+  `go-tls-skip-verify`'s false-positive rate is unmeasured (not just under-weighted).
+  Add a Go fixture to the calibration corpus so the "floor precision >= 0.95" claim
+  covers all five floor rules, not one. (The composite `calibrate:monotonic`
+  non-responsiveness at low injection rates is pre-existing and tracked with the
+  scoring-formula responsiveness work, not here.)
+
 - **Security suppression: regex-fallback over-suppression on unterminated strings.**
   In `src/drift/security-suppression.ts`, the AST comment-node path is immune, but
   the textual regex fallback's `stripStringLiterals` only blanks CLOSED quote spans.
