@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { relative, resolve } from "node:path";
 import type { DriftCategory } from "../../drift/types.js";
-import type { RepoDriftBaseline } from "../../core/baseline.js";
+import type { CategoryVote, RepoDriftBaseline } from "../../core/baseline.js";
 import { getBaseline } from "../../mcp/baseline-provider.js";
 import { noBaselineData, type Status } from "../result.js";
 
@@ -36,22 +36,50 @@ export function fileDriftFromBaseline(
   relativePath: string,
 ): { fits: boolean; deviations: Deviation[] } {
   const deviations: Deviation[] = [];
+  const subVotes = baseline.securitySubVotes;
   for (const cat of Object.keys(baseline.perCategoryVote) as DriftCategory[]) {
+    // Security is read from the granular sub-votes below, not the collapsed
+    // widest-denominator security_posture slot (which hides auth deviators
+    // behind whichever sub-convention had the most routes). Fall through to the
+    // collapsed slot only for older baselines that predate securitySubVotes.
+    if (cat === "security_posture" && subVotes) continue;
     const vote = baseline.perCategoryVote[cat]!;
     const dev = vote.deviators.find((d) => d.path === relativePath);
     if (!dev) continue;
-    const exemplar = vote.dominantFiles[0];
-    const pct = Math.round(vote.consistencyScore);
-    deviations.push({
-      dimension: cat,
-      deviates: true,
-      yourPattern: dev.detectedPattern,
-      dominantPattern: vote.dominantPattern,
-      consistency: `${vote.dominantCount} of ${vote.totalRelevantFiles} files (${pct}%)`,
-      fixHint: `Match the repo: use ${vote.dominantPattern}${exemplar ? `; see ${exemplar}` : ""}.`,
-    });
+    deviations.push(deviationFrom(cat, vote, dev, "files"));
+  }
+  if (subVotes) {
+    for (const vote of Object.values(subVotes)) {
+      if (!vote) continue;
+      const dev = vote.deviators.find((d) => d.path === relativePath);
+      if (!dev) continue;
+      deviations.push(deviationFrom("security_posture", vote, dev, "routes"));
+    }
   }
   return { fits: deviations.length === 0, deviations };
+}
+
+/** Build one Deviation from a matched vote. `unit` is "routes" for the security
+ *  dimension (sub-convention votes count routes) and "files" everywhere else. A
+ *  below-peer-floor vote (thin sample) is hedged as advisory but still counts as
+ *  a non-fit, so callers never bless a file the granular vote flagged. */
+function deviationFrom(
+  dimension: DriftCategory,
+  vote: CategoryVote,
+  dev: { path: string; detectedPattern: string },
+  unit: "files" | "routes",
+): Deviation {
+  const exemplar = vote.dominantFiles[0];
+  const pct = Math.round(vote.consistencyScore);
+  const advisory = vote.belowPeerFloor ? " (thin sample - advisory)" : "";
+  return {
+    dimension,
+    deviates: true,
+    yourPattern: dev.detectedPattern,
+    dominantPattern: vote.dominantPattern,
+    consistency: `${vote.dominantCount} of ${vote.totalRelevantFiles} ${unit} (${pct}%)${advisory}`,
+    fixHint: `Match the repo: use ${vote.dominantPattern}${exemplar ? `; see ${exemplar}` : ""}.${advisory}`,
+  };
 }
 
 export interface CheckFileDriftOut {
