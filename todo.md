@@ -1,5 +1,15 @@
 # CLI backlog
 
+- **Landing-page release notes for SCORING_VERSION v10 (cross-repo).** The
+  security release bumps `SCORING_VERSION` v9 -> v10 (Express `.all()` + Flask
+  `@app.route(methods=[...])` mutating routes now enter the security auth vote,
+  so repos with those shapes reflect security_posture drift they always had).
+  The one-time scoring-refined notice (`src/core/scoring-notice.ts`) points
+  users to `https://vibedrift.ai/releases`, so that page must describe the v10
+  change before/at publish. Calibration corpus is byte-identical (no percentile
+  regeneration needed). Belongs in `vibedrift-landing-page`, tracked here so the
+  CLI publish does not ship a notice pointing at an undocumented change.
+
 - **Gin `.Any()` / Chi `.Method()` routes are not extracted at all.** Task B1
   (2026-07-08, canonical mutating-method classification) fixed the
   vote-exclusion bug for Express `.all()` and Flask `methods=[...]`, but Go's
@@ -84,9 +94,16 @@
   text into the committed `.vibedrift/context.md` in the same scenario (a more
   durable surface than the ephemeral terminal line).
   This is deliberate for now: the baseline (`assembleBaseline`) and diff track
-  the raw representation for continuity, and the first-scan-after-upgrade case is
-  already silenced by the SCORING_VERSION-mismatch guard. If we want the diff to
-  match the rendered (scored) view, feed `scoredDriftView(...).driftFindings` to
+  the raw representation for continuity. CORRECTION (2026-07-08 audit, issue #34
+  item C1): the claim below that the first-scan-after-upgrade case is "already
+  silenced by the SCORING_VERSION-mismatch guard" is FALSE — verified against
+  source. `diffScans` (`src/output/history-diff.ts`) only gates on
+  `previous.schemaVersion`, never on `scoringVersion`; `previousScoresMismatch`
+  (the actual guard, set in `scan.ts`) is never read by `diffScans` or
+  `src/output/context-md.ts`. A scan taken right after a `SCORING_VERSION` bump
+  WILL diff its `compositeScore` against the prior version's and can commit a
+  cross-version "Vibe Drift Score delta" into `.vibedrift/context.md`. If we
+  want the diff to match the rendered (scored) view, feed `scoredDriftView(...).driftFindings` to
   both the diff digest (buildScanResult) and `saveScanResult` together (keep the
   two sources identical or a spurious per-scan diff reappears).
   Same root cause covers the suppression-audit finding (subCategory
@@ -104,3 +121,37 @@
   coherence audit, AI-validated findings, and intent-mismatch checks only
   appear with `--format terminal`. Add a short AI summary (coherence grade +
   top finding) to the default deep render.
+
+- **Issue #34 audit findings (2026-07-08). B1-B4 RELEASE BLOCKERS + D2 are
+  FIXED on branch `security-blockers-34` (2026-07-08); the items below are
+  correctness/polish, NOT release blockers:**
+  - **C2 — `computeDriftScores` credits an empty security_posture category
+    full health** (`drift/index.ts:115-154`, `categoryHealth([...], ...)`
+    returns 1 for an empty array with no "not measured" branch, unlike
+    `computeCategoryScore`). Produces `{score:14, maxScore:14, findings:0}`,
+    uploaded as-is in `result_json.driftScores` next to the composite's N/A.
+  - **C4 — `applyReimplementationConcentrationGate` re-tag never propagates
+    out of `computeScores`** (`engine.ts:88-103,732`; re-tags a local copy of
+    `findings`, not returned). Same "local copy" bug class already fixed once
+    for the security floor (see `scan.ts:405-420`'s comment) but never
+    hoisted here — a concentrated reimplementation finding correctly dents the
+    score but still renders/labels as hygiene everywhere (CSV/HTML/DOCX/context.md).
+  - **C5 — per-file Drift/Static tallies still tag-based, headline is
+    kind-based (mismatch)** (`docx.ts:398-399`, `html.ts:285-286` use
+    `f.tags?.includes("drift")`; the headline sections
+    (`docx.ts:424-427`, `html.ts:827-829`) were fixed to use
+    `getAnalyzerKind`). A demoted `security_posture-advisory` finding tallies
+    as "Drift" in the per-file table but lists under "Static"/"Hygiene" in the
+    headline.
+  - **D1 — N/A category card says "No findings in this repo"**
+    (`html.ts:462`, `terminal.ts:588`) even when a demoted advisory finding
+    exists and its actual message renders further down the same output
+    (hygiene section, `html.ts:827-829` / `terminal.ts:512-533`).
+  - **D3 — "consistent, not safe" gloss omits rate limiting**
+    (`terminal.ts:604`, `html.ts:458` say "auth and validation patterns" only;
+    `SECURITY_SUBCATEGORIES` has a third sub-convention, `rateLimit`).
+  - **E1 — `allFindings.push(...flooredFindings)` spreads a whole array as
+    call args** (`scan.ts:419`, also `:363`) — RangeError risk on very large
+    finding sets.
+  Full file:line evidence + quotes: see `LOGBOOK.md` "2026-07-08 (later 4)"
+  at the workspace root.
