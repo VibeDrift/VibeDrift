@@ -114,6 +114,12 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
     analyzers: [
       // Generic OWASP regex checks
       { id: "security", applicableLanguages: "all", kind: "hygiene" },
+      // Absolute-floor subset of the OWASP regex checks (private-key,
+      // aws-key, hardcoded-api-key, hardcoded-token, go-tls-skip-verify),
+      // emitted under a distinct id (see security.ts) so a high-precision
+      // badge can be rendered separately. Hygiene-kind: never dents the
+      // Vibe Drift composite, same as its parent "security" analyzer.
+      { id: "security-floor", applicableLanguages: "all", kind: "hygiene" },
       // Cross-file auth/validation/rate-limiting consistency — real drift
       // (analyzerId `drift-security_posture`, from driftCategory).
       { id: "drift-security_posture", applicableLanguages: "all", kind: "drift" },
