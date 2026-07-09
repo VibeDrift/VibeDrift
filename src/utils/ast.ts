@@ -14,7 +14,7 @@ async function ensureInit(): Promise<void> {
   initialized = true;
 }
 
-async function getLanguage(lang: SupportedLanguage): Promise<Language> {
+async function getLanguage(lang: SupportedLanguage, filePath?: string): Promise<Language> {
   const grammarMap: Record<SupportedLanguage, string> = {
     javascript: "javascript",
     typescript: "typescript",
@@ -23,7 +23,11 @@ async function getLanguage(lang: SupportedLanguage): Promise<Language> {
     rust: "rust",
   };
 
-  const grammarName = grammarMap[lang];
+  // Use the tsx grammar for .tsx files (the typescript grammar doesn't understand JSX)
+  let grammarName = grammarMap[lang];
+  if (filePath && /\.tsx$/i.test(filePath)) {
+    grammarName = "tsx";
+  }
   const cached = languageCache.get(grammarName);
   if (cached) return cached;
 
@@ -45,7 +49,7 @@ export async function parseFile(file: SourceFile): Promise<Tree | null> {
 
   try {
     await ensureInit();
-    const language = await getLanguage(file.language);
+    const language = await getLanguage(file.language, file.relativePath);
     const parser = new Parser();
     parser.setLanguage(language);
     const tree = parser.parse(file.content);

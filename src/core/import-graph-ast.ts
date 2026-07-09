@@ -14,7 +14,7 @@ import type { FileExport, FileImports } from "./import-graph.js";
 
 /**
  * Extract imports from a parsed AST tree.
- * Handles: static imports, dynamic imports (including nested), re-exports, require().
+ * Handles: static imports, re-exports, dynamic imports and require() (via recursive tree scan).
  */
 export function parseImportsAst(tree: Tree): FileImports {
   const names = new Set<string>();
@@ -29,9 +29,6 @@ export function parseImportsAst(tree: Tree): FileImports {
     } else if (node.type === "export_statement") {
       // Re-exports: export { X } from "./y" / export * from "./y"
       extractReExportSource(node, sources);
-    } else if (node.type === "lexical_declaration" || node.type === "variable_declaration") {
-      // Dynamic imports: const { X } = await import("./y")
-      extractDynamicImport(node, names, sources);
     }
   }
 
@@ -55,7 +52,7 @@ export function parseExportsAst(tree: Tree, relativePath: string): FileExport[] 
 
     const hasDefault = node.children.some((c) => c?.type === "default");
     const exportClause = findChild(node, "export_clause");
-    const declaration = node.children.find((c) => c?.type.includes("declaration"));
+    const declaration = node.children.find((c) => c?.type.includes("declaration") || c?.type === "class");
     const source = findChild(node, "string");
 
     if (exportClause && !source) {
@@ -79,7 +76,7 @@ export function parseExportsAst(tree: Tree, relativePath: string): FileExport[] 
         const line = node.startPosition.row + 1;
         exports.push({ name: ident.text, file: relativePath, line, isDefault: true });
       }
-    } else if (node.children.some((c) => c?.type === "*")) {
+    } else if (node.children.some((c) => c?.type === "*") || findChild(node, "namespace_export")) {
       // export * from "./y" — namespace re-export, no named exports from here
       // The namespace_export case: export * as stuff from "./y"
       const nsExport = findChild(node, "namespace_export");
@@ -141,54 +138,6 @@ function extractReExportSource(node: SyntaxNode, sources: Set<string>): void {
   }
 }
 
-function extractDynamicImport(node: SyntaxNode, names: Set<string>, sources: Set<string>): void {
-  // Walk variable declarators looking for: X = await import("./y")
-  for (let i = 0; i < node.childCount; i++) {
-    const declarator = node.child(i)!;
-    if (declarator.type !== "variable_declarator") continue;
-
-    // Find the await_expression → call_expression with import
-    const awaitExpr = findDescendant(declarator, "await_expression");
-    if (!awaitExpr) continue;
-
-    const callExpr = findChild(awaitExpr, "call_expression");
-    if (!callExpr) continue;
-
-    // Check that it's an import() call
-    const callee = callExpr.child(0);
-    if (!callee || callee.type !== "import") continue;
-
-    // Extract source from arguments
-    const args = findChild(callExpr, "arguments");
-    if (!args) continue;
-    const sourceNode = findChild(args, "string");
-    if (!sourceNode) continue;
-    const source = extractStringValue(sourceNode);
-    if (source) sources.add(source);
-
-    // Extract names from the destructuring pattern (if any)
-    const pattern = declarator.child(0);
-    if (!pattern) continue;
-
-    if (pattern.type === "object_pattern") {
-      // const { x, y } = await import(...)
-      for (let j = 0; j < pattern.childCount; j++) {
-        const prop = pattern.child(j)!;
-        if (prop.type === "shorthand_property_identifier_pattern") {
-          names.add(prop.text);
-        } else if (prop.type === "pair_pattern") {
-          // { foo: localName } — the imported name is the key
-          const key = prop.child(0);
-          if (key?.type === "property_identifier") names.add(key.text);
-        }
-      }
-    } else if (pattern.type === "identifier") {
-      // const mod = await import(...)
-      names.add(pattern.text);
-    }
-  }
-}
-
 function extractExportClauseNames(
   clause: SyntaxNode,
   relativePath: string,
@@ -212,8 +161,9 @@ function extractDeclarationName(declaration: SyntaxNode): string | null {
   // function_declaration → identifier child
   // lexical_declaration → variable_declarator → identifier child
   // class_declaration → identifier child
-  if (declaration.type === "function_declaration" || declaration.type === "class_declaration") {
-    const ident = findChild(declaration, "identifier");
+  if (declaration.type === "function_declaration" || declaration.type === "class_declaration"
+    || declaration.type === "class" || declaration.type === "abstract_class_declaration") {
+    const ident = findChild(declaration, "identifier") ?? findChild(declaration, "type_identifier");
     return ident?.text ?? null;
   }
   if (declaration.type === "lexical_declaration") {

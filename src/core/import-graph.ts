@@ -14,7 +14,7 @@
  *
  * Resolution:
  *   - Primary: AST-based extraction (tree-sitter) + real relative-path resolution
- *     with extension mapping (.js→.ts) and tsconfig path-alias support.
+ *     with extension mapping (.js→.ts) and configurable path aliases (defaults to @/* → src/*).
  *   - Fallback: regex-based extraction + basename matching for files without a
  *     parsed tree or specifiers that cannot be resolved. The basename fallback
  *     may over-match in rare cases (two unrelated files named the same).
@@ -204,7 +204,7 @@ export function buildImportGraph(files: SourceFile[], config?: ResolverConfig): 
   // Build file index for real path resolution
   const fileIndex = buildFileIndex(files.map((f) => f.relativePath));
 
-  // Resolver config: tsconfig path aliases (caller-supplied or default)
+  // Resolver config: path aliases (caller-supplied or default @/* → src/*)
   const resolverConfig: ResolverConfig = config ?? {
     pathAliases: { "@/*": "src/*" },
   };
