@@ -6,12 +6,13 @@ import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
 } from "../../../src/drift/security-suppression.js";
 import { computeScores } from "../../../src/scoring/engine.js";
+import { fileWithTree } from "../../helpers/drift-tree.js";
 import type { DriftFile } from "../../../src/drift/types.js";
 import type { RouteInfo } from "../../../src/drift/security-consistency.js";
 import type { Finding } from "../../../src/core/types.js";
 
-function file(path: string, content: string): DriftFile {
-  return { relativePath: path, language: "typescript", content, lineCount: content.split("\n").length };
+function file(path: string, content: string, language: DriftFile["language"] = "typescript"): DriftFile {
+  return { relativePath: path, language, content, lineCount: content.split("\n").length };
 }
 
 function route(overrides: Partial<RouteInfo> & { file: string; line: number }): RouteInfo {
@@ -68,8 +69,8 @@ describe("applyRouteSuppressions", () => {
     expect(suppressed).toHaveLength(1);
   });
 
-  it("matches a Python-style hash comment annotation", () => {
-    const files = [file("src/routes/a.py", `# @vibedrift-public\n@app.route("/x")\n`)];
+  it("matches a Python-style hash comment annotation on a python file", () => {
+    const files = [file("src/routes/a.py", `# @vibedrift-public\n@app.route("/x")\n`, "python")];
     const routes = [route({ file: "src/routes/a.py", line: 2 })];
     const { kept, suppressed } = applyRouteSuppressions(routes, files);
     expect(kept).toHaveLength(0);
@@ -144,6 +145,146 @@ describe("applyRouteSuppressions", () => {
     const { kept, suppressed } = applyRouteSuppressions(routes, []);
     expect(kept).toHaveLength(1);
     expect(suppressed).toHaveLength(0);
+  });
+
+  // ── Finding 1: a trailing annotation must bind to its OWN route only ──
+  //
+  // A trailing `// @vibedrift-public` on route N's own line ALSO sits on the
+  // line immediately above route N+1 when they are consecutive. The preceding-
+  // line arm must NOT bind that comment to N+1 (which would silently drop an
+  // un-annotated route from the vote and hide its auth drift). The comment
+  // belongs to N, whose own registration line it shares.
+  it("does NOT let a trailing annotation on route N leak onto the consecutive route N+1 (over-suppression)", () => {
+    const files = [
+      file(
+        "src/routes/api.ts",
+        `router.post("/public", h); // @vibedrift-public\n` +
+          `router.post("/danger", wipeEverything);\n`,
+      ),
+    ];
+    const routes = [
+      route({ file: "src/routes/api.ts", line: 1, path: "/public" }),
+      route({ file: "src/routes/api.ts", line: 2, path: "/danger" }),
+    ];
+    const { kept, suppressed } = applyRouteSuppressions(routes, files);
+
+    // Only /public (its own trailing comment) is suppressed. /danger, on the
+    // line below, is kept — its "preceding line" is /public's own route line.
+    expect(suppressed).toHaveLength(1);
+    expect(suppressed[0].line).toBe(1);
+    expect(kept.map((r) => r.path)).toEqual(["/danger"]);
+  });
+
+  // A genuine standalone annotation above a route still binds (regression that
+  // the Finding 1 guard didn't over-correct and break the normal case).
+  it("still binds a STANDALONE annotation on the line above (preceding line is not a route)", () => {
+    const files = [
+      file(
+        "src/routes/api.ts",
+        `router.post("/one", h1);\n` +
+          `// @vibedrift-public\n` +
+          `router.post("/two", h2);\n`,
+      ),
+    ];
+    const routes = [
+      route({ file: "src/routes/api.ts", line: 1, path: "/one" }),
+      route({ file: "src/routes/api.ts", line: 3, path: "/two" }),
+    ];
+    const { kept, suppressed } = applyRouteSuppressions(routes, files);
+    expect(suppressed).toHaveLength(1);
+    expect(suppressed[0].line).toBe(3);
+    expect(kept.map((r) => r.path)).toEqual(["/one"]);
+  });
+
+  // ── Finding 2: comment-vs-code awareness (no string-literal / cross-lang FPs) ──
+  it("does NOT suppress when @vibedrift-public appears inside a STRING LITERAL on the line above (regex fallback)", () => {
+    const files = [
+      file(
+        "src/routes/api.ts",
+        `const msg = "see // @vibedrift-public docs";\n` +
+          `router.post("/x", handler);\n`,
+      ),
+    ];
+    const routes = [route({ file: "src/routes/api.ts", line: 2 })];
+    const { kept, suppressed } = applyRouteSuppressions(routes, files);
+    expect(suppressed).toHaveLength(0);
+    expect(kept).toHaveLength(1);
+  });
+
+  it("does NOT suppress when @vibedrift-public appears inside a STRING LITERAL on the route's own line (regex fallback)", () => {
+    const files = [
+      file("src/routes/api.ts", `router.post("/x", handler, "// @vibedrift-public");\n`),
+    ];
+    const routes = [route({ file: "src/routes/api.ts", line: 1 })];
+    const { kept, suppressed } = applyRouteSuppressions(routes, files);
+    expect(suppressed).toHaveLength(0);
+    expect(kept).toHaveLength(1);
+  });
+
+  it("does NOT apply the Python `#` comment form to a JS/TS route (regex fallback)", () => {
+    const files = [
+      file(
+        "src/routes/api.ts",
+        `# @vibedrift-public\n` + `router.post("/x", handler);\n`,
+      ),
+    ];
+    const routes = [route({ file: "src/routes/api.ts", line: 2 })];
+    const { kept, suppressed } = applyRouteSuppressions(routes, files);
+    expect(suppressed).toHaveLength(0);
+    expect(kept).toHaveLength(1);
+  });
+
+  it("still suppresses a genuine `// @vibedrift-public` comment (trailing and standalone-above) in the regex fallback", () => {
+    const trailing = applyRouteSuppressions(
+      [route({ file: "src/routes/a.ts", line: 1 })],
+      [file("src/routes/a.ts", `router.post("/x", handler); // @vibedrift-public\n`)],
+    );
+    expect(trailing.suppressed).toHaveLength(1);
+
+    const above = applyRouteSuppressions(
+      [route({ file: "src/routes/b.ts", line: 2 })],
+      [file("src/routes/b.ts", `// @vibedrift-public\nrouter.post("/x", handler);\n`)],
+    );
+    expect(above.suppressed).toHaveLength(1);
+  });
+
+  // ── Finding 2, AST path: comment NODES only, string literals excluded ──
+  it("uses comment NODES (AST path): a string-literal `// @vibedrift-public` above a route does not suppress", async () => {
+    const f = await fileWithTree(
+      "src/routes/api.ts",
+      `const msg = "see // @vibedrift-public docs";\n` + `router.post("/x", handler);\n`,
+    );
+    const routes = [route({ file: "src/routes/api.ts", line: 2 })];
+    const { kept, suppressed } = applyRouteSuppressions(routes, [f]);
+    expect(suppressed).toHaveLength(0);
+    expect(kept).toHaveLength(1);
+  });
+
+  it("uses comment NODES (AST path): a genuine trailing `// @vibedrift-public` still suppresses", async () => {
+    const f = await fileWithTree(
+      "src/routes/api.ts",
+      `router.post("/x", handler); // @vibedrift-public\n`,
+    );
+    const routes = [route({ file: "src/routes/api.ts", line: 1 })];
+    const { kept, suppressed } = applyRouteSuppressions(routes, [f]);
+    expect(suppressed).toHaveLength(1);
+    expect(kept).toHaveLength(0);
+  });
+
+  it("AST path honors Finding 1: trailing annotation on route N does not leak onto consecutive route N+1", async () => {
+    const f = await fileWithTree(
+      "src/routes/api.ts",
+      `router.post("/public", h); // @vibedrift-public\n` +
+        `router.post("/danger", wipeEverything);\n`,
+    );
+    const routes = [
+      route({ file: "src/routes/api.ts", line: 1, path: "/public" }),
+      route({ file: "src/routes/api.ts", line: 2, path: "/danger" }),
+    ];
+    const { kept, suppressed } = applyRouteSuppressions(routes, [f]);
+    expect(suppressed).toHaveLength(1);
+    expect(suppressed[0].line).toBe(1);
+    expect(kept.map((r) => r.path)).toEqual(["/danger"]);
   });
 });
 

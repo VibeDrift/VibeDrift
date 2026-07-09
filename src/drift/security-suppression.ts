@@ -22,6 +22,7 @@
 
 import type { DeviatingFile, DriftCategory, DriftFile, DriftFinding } from "./types.js";
 import type { RouteInfo } from "./security-consistency.js";
+import type { Tree } from "../core/types.js";
 
 export interface SuppressionRecord {
   path: string;
@@ -30,21 +31,90 @@ export interface SuppressionRecord {
   source: string;
 }
 
-/** JS/TS line comment: `// @vibedrift-public`. */
-const LINE_COMMENT_RE = /\/\/\s*@vibedrift-public\b/;
-/** JS/TS/CSS-style block comment: `/* @vibedrift-public *\/`. */
-const BLOCK_COMMENT_RE = /\/\*\s*@vibedrift-public\b/;
-/** Python (and shell-style) comment: `# @vibedrift-public`. */
-const HASH_COMMENT_RE = /#\s*@vibedrift-public\b/;
+/** The annotation token itself, matched only INSIDE a real comment (never a
+ *  string literal) via the AST/textual comment-awareness below. */
+const ANNOTATION_RE = /@vibedrift-public\b/;
 
-function lineHasAnnotation(line: string | undefined): boolean {
+/**
+ * Comment markers per language family. Python (and shell-style) uses `#`;
+ * the C family (JS/TS/Go/Rust) uses `//` and `/*`. Applying the wrong marker
+ * across languages is a false-positive source (Finding 2): a leading `#` in a
+ * JS/TS file is not a comment at all, so it must never suppress a JS/TS route.
+ * Unknown/absent languages default to the C family (the common case for the
+ * regex-fallback path, which only runs when no parse tree is available).
+ */
+function commentMarkersFor(language: string | null | undefined): string[] {
+  if (language === "python") return ["#"];
+  return ["//", "/*"];
+}
+
+/**
+ * Blank out string-literal spans so an annotation living INSIDE a string
+ * (`const s = "see // @vibedrift-public"`) can never be mistaken for a real
+ * comment (Finding 2). Handles double, single, and backtick quotes with
+ * escapes. Only closed spans are stripped: an unterminated quote is left in
+ * place, which at worst leaves a rare, malformed line looking comment-like —
+ * acceptable because the AST path (which is exact) handles every parseable
+ * file, and this textual path is the conservative fallback only.
+ */
+function stripStringLiterals(line: string): string {
+  return line
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+}
+
+/** The comment portion of a line (everything from the earliest comment marker
+ *  onward), or null when the line carries no comment marker for its language. */
+function commentPortion(line: string, markers: string[]): string | null {
+  let earliest = -1;
+  for (const m of markers) {
+    const idx = line.indexOf(m);
+    if (idx !== -1 && (earliest === -1 || idx < earliest)) earliest = idx;
+  }
+  return earliest === -1 ? null : line.slice(earliest);
+}
+
+/** Regex-fallback (no parse tree): does this line carry the annotation inside a
+ *  real comment for its language? String literals are stripped first so a
+ *  quoted `// @vibedrift-public` never counts, and the marker set is chosen per
+ *  language so a `#` never matches a JS/TS line. */
+function lineHasAnnotationTextual(line: string | undefined, language: string | null | undefined): boolean {
   if (!line) return false;
-  return LINE_COMMENT_RE.test(line) || BLOCK_COMMENT_RE.test(line) || HASH_COMMENT_RE.test(line);
+  const comment = commentPortion(stripStringLiterals(line), commentMarkersFor(language));
+  return comment !== null && ANNOTATION_RE.test(comment);
+}
+
+/** AST path: 0-based rows on which a `comment` NODE containing the annotation
+ *  STARTS. Sourcing from comment nodes structurally excludes string literals
+ *  and cross-language marker confusion (Finding 2). */
+function annotationCommentRows(tree: Tree): Set<number> {
+  const rows = new Set<number>();
+  for (const c of tree.rootNode.descendantsOfType("comment")) {
+    if (!c) continue;
+    if (ANNOTATION_RE.test(c.text)) rows.add(c.startPosition.row);
+  }
+  return rows;
 }
 
 /**
  * Filters `routes` down to `kept` (fed into every downstream dominance vote
  * and the uniform-auth-gap fallback) plus a `suppressed` audit trail.
+ *
+ * An annotation binds to a route in exactly two ways:
+ *   (a) it is a comment on the route's OWN registration line (trailing or
+ *       full-line), or
+ *   (b) it is a STANDALONE comment on the line immediately above the route,
+ *       where "standalone" means that preceding line is NOT itself another
+ *       route's own registration line.
+ *
+ * Case (b)'s guard is the fix for the over-suppression bug (Finding 1): a
+ * trailing `// @vibedrift-public` on route N's own line also sits on the line
+ * immediately above route N+1 when they are consecutive. Without the guard,
+ * that trailing comment binds to BOTH N (correct) and N+1 (wrong), silently
+ * dropping an un-annotated route from the vote and hiding its auth drift. We
+ * reject the preceding-line match whenever the preceding line is some route's
+ * own registration line — that annotation belongs to that route, not this one.
  *
  * Only the annotation arm is implemented here (Task 4). Task 5 extends this
  * signature with a trailing config param carrying the glob allowlist arm
@@ -55,23 +125,62 @@ export function applyRouteSuppressions(
   routes: RouteInfo[],
   files: DriftFile[],
 ): { kept: RouteInfo[]; suppressed: SuppressionRecord[] } {
-  const linesByPath = new Map<string, string[]>();
-  for (const f of files) {
-    linesByPath.set(f.relativePath, f.content.split("\n"));
+  const filesByPath = new Map<string, DriftFile>();
+  for (const f of files) filesByPath.set(f.relativePath, f);
+
+  // Every route's OWN 1-based registration line, keyed `file:line`. Used to
+  // reject a preceding-line annotation that is really the PREVIOUS route's
+  // trailing comment (Finding 1).
+  const ownLineKeys = new Set<string>();
+  for (const r of routes) ownLineKeys.add(`${r.file}:${r.line}`);
+
+  // Per-file resolver: "does an annotation comment start on 0-based row X?"
+  // AST (comment nodes) when a tree is present, string-stripped textual check
+  // otherwise. Cached per file so we parse the comment set at most once.
+  const rowResolvers = new Map<string, (row: number) => boolean>();
+  function resolverFor(file: DriftFile): (row: number) => boolean {
+    const cached = rowResolvers.get(file.relativePath);
+    if (cached) return cached;
+    let resolver: (row: number) => boolean;
+    if (file.tree) {
+      const rows = annotationCommentRows(file.tree);
+      resolver = (row) => rows.has(row);
+    } else {
+      const lines = file.content.split("\n");
+      resolver = (row) => lineHasAnnotationTextual(lines[row], file.language);
+    }
+    rowResolvers.set(file.relativePath, resolver);
+    return resolver;
   }
 
   const kept: RouteInfo[] = [];
   const suppressed: SuppressionRecord[] = [];
 
   for (const route of routes) {
-    const lines = linesByPath.get(route.file);
-    // route.line is 1-based. Its own line is index (route.line - 1); the
-    // line immediately above it is index (route.line - 2), which only
-    // exists when route.line >= 2.
-    const ownLine = lines?.[route.line - 1];
-    const precedingLine = route.line - 2 >= 0 ? lines?.[route.line - 2] : undefined;
+    const file = filesByPath.get(route.file);
+    if (!file) {
+      // Can't resolve the file's content/tree — keep the route (safe default:
+      // under-matching an annotation never hides a vulnerability).
+      kept.push(route);
+      continue;
+    }
 
-    if (lineHasAnnotation(ownLine) || lineHasAnnotation(precedingLine)) {
+    const hasAnnotationOnRow = resolverFor(file);
+    // route.line is 1-based; the 0-based own row is (route.line - 1), the
+    // preceding row is (route.line - 2).
+    const ownRow = route.line - 1;
+    const precRow = route.line - 2;
+
+    const ownMatch = ownRow >= 0 && hasAnnotationOnRow(ownRow);
+    // Preceding-line match only when that line is a standalone annotation, not
+    // the previous route's own registration line (Finding 1). `route.line - 1`
+    // is the preceding line's 1-based number.
+    const precMatch =
+      precRow >= 0 &&
+      !ownLineKeys.has(`${route.file}:${route.line - 1}`) &&
+      hasAnnotationOnRow(precRow);
+
+    if (ownMatch || precMatch) {
       suppressed.push({
         path: route.file,
         line: route.line,
