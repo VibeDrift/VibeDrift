@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildBaseline, writeBaseline } from "../../../src/core/baseline.js";
+import { buildBaseline, writeBaseline, BASELINE_VERSION, type RepoDriftBaseline } from "../../../src/core/baseline.js";
 import { getBaseline, __clearBaselineCache } from "../../../src/mcp/baseline-provider.js";
+import { dominantPatternFor } from "../../../src/tools-core/tools/get-dominant-pattern.js";
 
 describe("baseline provider", () => {
   let repo: string;
@@ -73,5 +74,68 @@ describe("baseline provider", () => {
     const { baseline, status } = await getBaseline(repo);
     expect(status).toBe("stale");
     expect(baseline).not.toBeNull(); // serve cached + tag, never hang/rebuild in-call
+  });
+});
+
+// ── Issue #34 blocker 2: a persisted baseline from an older BASELINE_VERSION
+// must be rebuilt, not served forever. Pre-v2 baselines carry no
+// securitySubVotes, so serving one makes get_dominant_pattern("auth") answer
+// the no-vote projection ("consistent, no deviations detected") even when the
+// stale vote recorded deviators; and its version-prefixed key can never match
+// the working tree again, so the status read "stale" on every call.
+describe("baseline version gate", () => {
+  let repo: string;
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), "vd-vergate-"));
+    // 4 authed + 1 unauthed mutating routes: a real "Auth middleware applied"
+    // sub-vote (5 peers, at/above the scoring floor) with one recorded deviator.
+    writeFileSync(
+      join(repo, "api.ts"),
+      [
+        'router.post("/a", requireAuth, (req, res) => { res.json({}); });',
+        'router.put("/b", requireAuth, (req, res) => { res.json({}); });',
+        'router.patch("/c", requireAuth, (req, res) => { res.json({}); });',
+        'router.delete("/d", requireAuth, (req, res) => { res.json({}); });',
+        'router.post("/e", (req, res) => { res.json({}); });',
+        "",
+      ].join("\n"),
+    );
+  });
+  afterAll(() => rmSync(repo, { recursive: true, force: true }));
+  beforeEach(() => __clearBaselineCache());
+
+  it("rebuilds a pre-versioned (v1-shaped) on-disk baseline instead of serving it", async () => {
+    const built = await buildBaseline(repo);
+    // Doctor the persisted shape into a faithful v1 baseline: no version
+    // field, no securitySubVotes, and a key computed under the old version
+    // prefix (any value the current computeBaselineKey can't reproduce).
+    const v1 = { ...built, key: "0".repeat(64), builtAt: 12345 } as RepoDriftBaseline;
+    delete v1.version;
+    delete v1.securitySubVotes;
+    await writeBaseline(v1);
+    __clearBaselineCache();
+
+    const { baseline, status } = await getBaseline(repo);
+    expect(baseline).not.toBeNull();
+    expect(baseline!.builtAt).not.toBe(12345); // rebuilt, not served
+    expect(baseline!.version).toBe(BASELINE_VERSION);
+    expect(status).toBe("ok"); // no perpetual "stale" from the version-prefixed key
+
+    // The rebuilt baseline serves the auth sub-vote again: the projection is
+    // the real vote, not the no-vote "consistent" answer the stale file gave.
+    expect(baseline!.securitySubVotes?.["Auth middleware"]).toBeDefined();
+    const projection = dominantPatternFor(baseline!, "auth");
+    expect(projection.dominantPattern).toBe("Auth middleware applied");
+  });
+
+  it("serves an up-to-date on-disk baseline without rebuilding", async () => {
+    const built = await buildBaseline(repo);
+    await writeBaseline({ ...built, builtAt: 424242 }); // marker survives only if served from disk
+    __clearBaselineCache();
+
+    const { baseline, status } = await getBaseline(repo);
+    expect(status).toBe("ok");
+    expect(baseline!.builtAt).toBe(424242);
+    expect(baseline!.version).toBe(BASELINE_VERSION);
   });
 });

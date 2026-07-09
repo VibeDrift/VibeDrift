@@ -2,9 +2,13 @@
  * In-memory baseline holder for the long-lived MCP server.
  *
  * Loads a repo's RepoDriftBaseline from disk ONCE and caches it in process.
- * For a repo that already has a baseline it never rebuilds synchronously (a
- * rebuild is 3–8s and would blow the <500ms budget) — instead it re-hashes the
- * working tree to decide `ok` vs `stale` and always serves the cached baseline.
+ * For a repo that already has a CURRENT-version baseline it never rebuilds
+ * synchronously (a rebuild is 3–8s and would blow the <500ms budget) — instead
+ * it re-hashes the working tree to decide `ok` vs `stale` and always serves
+ * the cached baseline. A baseline persisted under an older BASELINE_VERSION is
+ * the one exception: it is rebuilt like the never-scanned case (see the
+ * version gate in getBaseline), because its shape/votes predate the current
+ * logic and its key can never read fresh again.
  *
  * For a repo that has NEVER been scanned, the first tool call builds the
  * baseline lazily (a one-time 3–8s), persists it, and returns it — so the MCP
@@ -20,6 +24,7 @@ import {
   writeBaseline,
   computeBaselineKey,
   loadBaselineUnchecked,
+  BASELINE_VERSION,
   type RepoDriftBaseline,
 } from "../core/baseline.js";
 
@@ -99,12 +104,25 @@ export async function getBaseline(
 ): Promise<{ baseline: RepoDriftBaseline | null; status: "ok" | "stale" | "no_baseline" }> {
   let baseline = memCache.get(rootDir) ?? null;
   if (!baseline) {
-    baseline = await loadBaselineUnchecked(rootDir);
-    if (baseline) memCache.set(rootDir, baseline);
+    const loaded = await loadBaselineUnchecked(rootDir);
+    // Version gate: a baseline persisted under an older BASELINE_VERSION
+    // predates the current vote logic (pre-v2 files, for example, carry no
+    // securitySubVotes, so auth projections would answer the no-vote
+    // "consistent" shape even when the stale vote recorded deviators), and
+    // because the version is baked into the cache key, its freshness check
+    // could never read "ok" again. Treat it exactly like a missing baseline:
+    // rebuild lazily once below, persist, and serve fresh. Absence of the
+    // field means the baseline predates versioned persistence, which is
+    // equally out of date.
+    if (loaded && loaded.version === BASELINE_VERSION) {
+      baseline = loaded;
+      memCache.set(rootDir, baseline);
+    }
   }
   if (!baseline) {
-    // Never scanned: build it lazily instead of failing the tool. The freshly
-    // built baseline matches the working tree, so it is "ok".
+    // Never scanned (or the persisted baseline failed the version gate):
+    // build it lazily instead of failing the tool. The freshly built
+    // baseline matches the working tree, so it is "ok".
     baseline = await buildAndCacheBaseline(rootDir);
     if (!baseline) return { baseline: null, status: "no_baseline" };
     return { baseline, status: "ok" };

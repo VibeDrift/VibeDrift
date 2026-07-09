@@ -53,6 +53,12 @@ export interface MinhashEntry {
 
 export interface RepoDriftBaseline {
   key: string;
+  /** BASELINE_VERSION this baseline was built with. Optional because baselines
+   *  persisted before the field shipped carry none; loaders treat absence as
+   *  pre-current and rebuild rather than serve (getBaseline's version gate).
+   *  assembleBaseline always sets it, so every newly persisted baseline is
+   *  versioned. */
+  version?: number;
   rootDir: string;
   ctxFiles: Array<{ path: string; hash: string }>;
   perCategoryVote: Partial<Record<DriftCategory, CategoryVote>>;
@@ -187,6 +193,7 @@ export function assembleBaseline(
 
   return {
     key: computeBaselineKey(ctxFiles),
+    version: BASELINE_VERSION,
     rootDir,
     ctxFiles,
     perCategoryVote: votesFromFindings(driftFindings),
