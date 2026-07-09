@@ -21,6 +21,7 @@ import {
   SECURITY_SUPPRESSION_ANALYZER_ID,
 } from "../../../src/drift/security-suppression.js";
 import { fileDriftFromBaseline } from "../../../src/tools-core/tools/check-file-drift.js";
+import { MIN_SECURITY_PEERS } from "../../../src/scoring/engine.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 import type { DriftContext } from "../../../src/drift/types.js";
 import type { DriftFinding } from "../../../src/drift/types.js";
@@ -93,6 +94,59 @@ describe("votesFromFindings", () => {
     expect(subVotes["Auth middleware"]!.dominantPattern).toBe("Auth middleware applied");
     expect(subVotes["Rate limiting"]!.dominantPattern).toBe("Rate limiting applied");
     expect(subVotes["Auth middleware"]!.totalRelevantFiles).toBe(5);
+  });
+
+  // ── Issue #34 blocker 4: sub-votes must respect the scoring min-peer floor ──
+  //
+  // Sub-votes were built from RAW drift findings with no MIN_SECURITY_PEERS
+  // floor, so the MCP served a 2-of-3-routes auth vote as the authoritative
+  // convention while the same scan demoted that finding as too thin to score.
+  it("drops a security sub-vote whose route sample is below MIN_SECURITY_PEERS", () => {
+    const subVotes = securitySubVotesFromFindings([
+      fakeFinding({
+        driftCategory: "security_posture",
+        subCategory: "Auth middleware",
+        dominantPattern: "Auth middleware applied",
+        dominantCount: MIN_SECURITY_PEERS - 2,
+        totalRelevantFiles: MIN_SECURITY_PEERS - 1,
+      }),
+    ]);
+    expect(subVotes["Auth middleware"]).toBeUndefined();
+    expect(Object.keys(subVotes)).toHaveLength(0);
+  });
+
+  it("keeps a security sub-vote at exactly MIN_SECURITY_PEERS (same boundary as the scoring floor)", () => {
+    const subVotes = securitySubVotesFromFindings([
+      fakeFinding({
+        driftCategory: "security_posture",
+        subCategory: "Auth middleware",
+        dominantPattern: "Auth middleware applied",
+        dominantCount: MIN_SECURITY_PEERS - 1,
+        totalRelevantFiles: MIN_SECURITY_PEERS,
+      }),
+    ]);
+    expect(subVotes["Auth middleware"]).toBeDefined();
+    expect(subVotes["Auth middleware"]!.totalRelevantFiles).toBe(MIN_SECURITY_PEERS);
+  });
+
+  // End-to-end with real detector output: a 3-route repo's uniform-auth-gap
+  // finding (the exact thin sample the scoring engine demotes to advisory)
+  // must not become the MCP's authoritative auth convention.
+  it("a real thin (3-route) detector finding produces no persisted auth sub-vote", async () => {
+    const f = await fileWithTree(
+      "src/routes/api.ts",
+      `router.post("/a", requireAuth, createA);\n` +
+        `router.put("/b", requireAuth, updateB);\n` +
+        `router.post("/c", createC);\n`,
+    );
+    const ctx: DriftContext = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding, "detector should still fire (advisory recall is kept)").toBeDefined();
+    expect(authFinding!.totalRelevantFiles).toBeLessThan(MIN_SECURITY_PEERS);
+
+    const subVotes = securitySubVotesFromFindings(findings);
+    expect(subVotes["Auth middleware"]).toBeUndefined();
   });
 });
 

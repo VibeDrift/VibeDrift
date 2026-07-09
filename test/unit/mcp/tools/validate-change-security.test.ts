@@ -13,9 +13,11 @@ vi.mock("../../../../src/mcp/deep-client.js", async (importOriginal) => {
 vi.mock("../../../../src/mcp/deep-index.js", () => ({ deepDuplicatesViaIndex: vi.fn() }));
 
 import { checkRouteAuthDrift, run } from "../../../../src/mcp/tools/validate-change.js";
-import { buildBaseline, writeBaseline, type RepoDriftBaseline } from "../../../../src/core/baseline.js";
+import { buildBaseline, writeBaseline, securitySubVotesFromFindings, type RepoDriftBaseline } from "../../../../src/core/baseline.js";
 import { __clearBaselineCache } from "../../../../src/mcp/baseline-provider.js";
 import { deepDuplicatesViaIndex } from "../../../../src/mcp/deep-index.js";
+import { MIN_SECURITY_PEERS } from "../../../../src/scoring/engine.js";
+import type { DriftFinding } from "../../../../src/drift/types.js";
 
 // ── Shared classifier ───────────────────────────────────────────────────────
 // classifyRouteAuth reuses the SAME AST route extractor the batch security
@@ -145,6 +147,32 @@ describe("checkRouteAuthDrift", () => {
 
   it("does not flag a Python body (JS/TS-only gate)", async () => {
     const c = await checkRouteAuthDrift(baseWith(AUTH_APPLIED_VOTE), PY_ROUTE, "new.py");
+    expect(c).toBeNull();
+  });
+
+  // ── Issue #34 blocker 4: a below-floor auth vote must not drive the in-loop
+  // check. securitySubVotesFromFindings drops sub-votes whose sample is under
+  // MIN_SECURITY_PEERS, so the baseline carries no auth vote at all and the
+  // check goes honest-silent (nothing authoritative to compare against).
+  it("goes honest-silent when the repo's only auth vote is below the min-peer floor", async () => {
+    const thinFinding: DriftFinding = {
+      detector: "security_posture",
+      subCategory: "Auth middleware",
+      driftCategory: "security_posture",
+      severity: "warning",
+      confidence: 0.75,
+      finding: "Auth middleware missing on 1 of 3 routes",
+      dominantPattern: "Auth middleware applied",
+      dominantCount: MIN_SECURITY_PEERS - 2,
+      totalRelevantFiles: MIN_SECURITY_PEERS - 1,
+      consistencyScore: 67,
+      deviatingFiles: [{ path: "routes/c.ts", detectedPattern: "POST /c — no Auth middleware", evidence: [] }],
+      dominantFiles: ["routes/a.ts"],
+      recommendation: "add auth",
+    };
+    const subVotes = securitySubVotesFromFindings([thinFinding]);
+    expect(subVotes["Auth middleware"]).toBeUndefined(); // floored out at build time
+    const c = await checkRouteAuthDrift(baseWith(subVotes), UNAUTHED_POST, "new.ts");
     expect(c).toBeNull();
   });
 

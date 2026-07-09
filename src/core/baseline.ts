@@ -23,13 +23,18 @@ import { parseFiles } from "../utils/ast.js";
 import { extractAllFunctions } from "../codedna/function-extractor.js";
 import { buildSignature } from "../codedna/minhash.js";
 import { SECURITY_SUPPRESSION_SUBCATEGORY } from "../drift/security-suppression.js";
+import { MIN_SECURITY_PEERS } from "../scoring/engine.js";
 import type { AnalysisContext } from "./types.js";
 import type { DriftFinding, DriftCategory } from "../drift/types.js";
 import type { IntentHint } from "../intent/types.js";
 
 const CACHE_DIR = join(homedir(), ".vibedrift", "baseline-cache");
-/** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 2;
+/** Bump when vote logic / detector set / signature format changes (invalidates
+ *  all caches). v3: method-ANY/ALL routes joined the auth peer group and
+ *  securitySubVotes gained the MIN_SECURITY_PEERS floor, so v2 baselines carry
+ *  votes the current logic would not produce. getBaseline rebuilds any
+ *  persisted baseline whose version differs. */
+export const BASELINE_VERSION = 3;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;
@@ -148,6 +153,12 @@ export function toCategoryVote(f: DriftFinding): CategoryVote {
  * subCategory is excluded for the same reason as in votesFromFindings above:
  * it is an audit trail, not a sub-convention vote, so it must not leave a
  * bogus "Suppression audit" entry in the persisted securitySubVotes.
+ *
+ * Findings whose route sample is below MIN_SECURITY_PEERS are also dropped:
+ * the scoring engine demotes those same findings to advisory (too thin a
+ * sample to trust, see applySecurityMinPeerFloor), so persisting them here
+ * would let the MCP serve a 2-of-3-routes vote as the authoritative
+ * convention while the scan refuses to score it. One floor, one boundary.
  */
 export function securitySubVotesFromFindings(
   findings: DriftFinding[],
@@ -156,6 +167,7 @@ export function securitySubVotesFromFindings(
   for (const f of findings) {
     if (f.driftCategory !== "security_posture" || !f.subCategory) continue;
     if (f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY) continue;
+    if (f.totalRelevantFiles < MIN_SECURITY_PEERS) continue;
     const key = f.subCategory;
     const existing = out[key];
     if (existing && existing.totalRelevantFiles >= f.totalRelevantFiles) continue;
