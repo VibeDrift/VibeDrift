@@ -7,6 +7,7 @@ import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
   SECURITY_SUPPRESSION_ANALYZER_ID,
 } from "../../../src/drift/security-suppression.js";
+import { MIN_SECURITY_PEERS, isBelowSecurityPeerFloor } from "../../../src/scoring/engine.js";
 
 function mkCtx(files: DriftFile[]): DriftContext {
   return {
@@ -331,6 +332,113 @@ describe("security-consistency detector", () => {
       // still all authed, so no auth drift finding fires either.
       expect(findings.find((fnd) => fnd.subCategory === "Auth middleware")).toBeUndefined();
     });
+  });
+});
+
+// ── Issue #34 blocker 1: method-ANY/ALL routes must stay in the auth peer group ──
+//
+// Route extractors default an unparseable method to "ANY" (Flask
+// `@app.route(...)` never matches the .get/.post method regex) and Express
+// `.all()` maps to "ALL". Filtering the auth peer group to MUTATION_METHODS
+// silently dropped both, so whole frameworks lost auth-consistency detection:
+// a Flask repo with 9 authed + 1 unauthed routes produced NO finding.
+describe("method-ANY/ALL routes stay in the auth peer group", () => {
+  function pyFile(path: string, content: string): DriftFile {
+    return { relativePath: path, language: "python", content, lineCount: content.split("\n").length };
+  }
+
+  // Flask-style: `@app.route(...)` extracts as method "ANY".
+  // Auth evidence lives in a separate file from the unauthed route because the
+  // file-level middleware regex treats ANY `login_required` in a file as
+  // file-scope auth, which would mark the unauthed route authed too.
+  it("flags the one unauthed Flask ANY route when 9 peers in the same directory are authed", () => {
+    const authedRoutes = Array.from({ length: 9 }, (_, i) =>
+      `@app.route("/r${i}")\n@login_required\ndef handler_${i}():\n    return respond()\n`,
+    ).join("\n");
+    const files = [
+      pyFile("src/routes/app_a.py", authedRoutes),
+      pyFile("src/routes/app_b.py", `@app.route("/exports")\ndef run_exports():\n    return respond()\n`),
+    ];
+    const findings = securityConsistency.detect(mkCtx(files));
+    const authFinding = findings.find((f) => f.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    expect(authFinding!.totalRelevantFiles).toBe(10); // all 10 ANY routes are in the denominator
+    expect(authFinding!.deviatingFiles).toHaveLength(1);
+    expect(authFinding!.deviatingFiles[0].path).toBe("src/routes/app_b.py");
+  });
+
+  // Express `.all()` extracts as method "ALL" (AST path).
+  it("flags an unauthed router.all() route against authed mutating peers", async () => {
+    const f = await fileWithTree(
+      "src/routes/api.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+        `router.put("/items/:id", requireAuth, updateItem);\n` +
+        `router.patch("/items/:id", requireAuth, patchItem);\n` +
+        `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+        `router.all("/hooks", handleHook);\n`,
+    );
+    const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+    const findings = securityConsistency.detect(ctx as any);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    expect(authFinding!.totalRelevantFiles).toBe(5); // the ALL route counts as an auth peer
+    expect(authFinding!.deviatingFiles.some((d) => d.evidence[0].line === 5)).toBe(true);
+  });
+
+  // GET is a KNOWN method and read-only: it must stay OUT of the auth peer
+  // group. A GET-only repo (some authed, some not) produces no auth finding.
+  it("still produces no auth finding for a GET-only Express repo", async () => {
+    const f = await fileWithTree(
+      "src/routes/reads.ts",
+      `router.get("/a", requireAuth, getA);\n` +
+        `router.get("/b", requireAuth, getB);\n` +
+        `router.get("/c", requireAuth, getC);\n` +
+        `router.get("/d", requireAuth, getD);\n` +
+        `router.get("/catalog", listCatalog);\n`,
+    );
+    const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+    const findings = securityConsistency.detect(ctx as any);
+    expect(findings.find((fnd) => fnd.subCategory === "Auth middleware")).toBeUndefined();
+  });
+
+  // The inclusion must land AFTER the suppression chokepoint: an annotated
+  // ALL route stays out of the vote (compare the un-annotated fixture above,
+  // where the same route IS flagged).
+  it("a @vibedrift-public annotation still suppresses an ALL route from the auth vote", async () => {
+    const f = await fileWithTree(
+      "src/routes/api.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+        `router.put("/items/:id", requireAuth, updateItem);\n` +
+        `router.patch("/items/:id", requireAuth, patchItem);\n` +
+        `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+        `// @vibedrift-public\n` +
+        `router.all("/hooks", handleHook);\n`,
+    );
+    const ctx = { files: [f], totalLines: f.lineCount, dominantLanguage: "typescript" };
+    const findings = securityConsistency.detect(ctx as any);
+    expect(findings.find((fnd) => fnd.subCategory === "Auth middleware")).toBeUndefined();
+    const auditFinding = findings.find((fnd) => fnd.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+    expect(auditFinding).toBeDefined();
+    expect(auditFinding!.deviatingFiles[0].evidence[0].line).toBe(6);
+  });
+
+  // A thin ANY-route sample still hits the scoring min-peer floor: the
+  // uniform-auth-gap finding fires (recall), but its 3-route sample stays
+  // below MIN_SECURITY_PEERS so the composite never moves from it.
+  it("a thin (3-route) ANY sample produces a finding that the min-peer floor still demotes", () => {
+    const files = [
+      pyFile("src/routes/app_a.py", `@app.route("/a")\n@login_required\ndef a():\n    return respond()\n\n@app.route("/b")\n@login_required\ndef b():\n    return respond()\n`),
+      pyFile("src/routes/app_b.py", `@app.route("/exports")\ndef run_exports():\n    return respond()\n`),
+    ];
+    const findings = securityConsistency.detect(mkCtx(files));
+    const authFinding = findings.find((f) => f.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    expect(authFinding!.totalRelevantFiles).toBe(3);
+    expect(authFinding!.totalRelevantFiles).toBeLessThan(MIN_SECURITY_PEERS);
+    expect(isBelowSecurityPeerFloor(authFinding!)).toBe(true);
+    // Copy stays honest: an ANY route's method is unresolved, so the message
+    // must not assert that every counted route mutates.
+    expect(authFinding!.finding).toContain("unresolved-method");
   });
 });
 

@@ -39,6 +39,23 @@ import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security
 
 const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
 
+// The auth vote's peer group: every state-changing method, PLUS "ANY" (a route
+// whose method the extractor could not pin down, e.g. Flask `@app.route(...)`)
+// and "ALL" (Express `.all()`, which handles every verb including the mutating
+// ones). Filtering the peer group to MUTATION_METHODS alone dropped both
+// silently, losing auth-consistency detection for whole frameworks: a Flask
+// repo with 9 authed + 1 unauthed routes produced no finding at all. The
+// validation vote deliberately keeps the narrower POST/PUT/PATCH set
+// (body-carrying methods only), so it must NOT use this constant.
+const AUTH_VOTE_METHODS = [...MUTATION_METHODS, "ANY", "ALL"];
+
+/** Copy helper: "ANY" means the method is unresolved, so a message counting
+ *  such routes must not assert they all mutate. "ALL" routes genuinely handle
+ *  the mutating verbs, so they keep the plain "mutating" label. */
+function authRoutesNoun(routes: RouteInfo[]): string {
+  return routes.some((r) => r.method === "ANY") ? "mutating or unresolved-method route(s)" : "mutating route(s)";
+}
+
 // Does the codebase use auth machinery anywhere? If it does, a mutating route
 // with no auth is drift ("you know how to auth — this route forgot"), not an
 // intentionally-public API. Specific symbols only, to keep false positives low.
@@ -51,8 +68,9 @@ function repoHasAuthMachinery(files: DriftFile[]): boolean {
  * Absolute baseline for the uniform-wrongness blind spot: the dominance vote
  * (analyzeSecurityProperty) goes SILENT when 0% of routes have auth (ratio=0
  * fails the ratio>0.75 gate), so an AI that wrote every mutating endpoint
- * without auth produced a clean grade. This fires on uniformly-unauthed
- * MUTATING routes — but only with a baseline reason: either the repo uses auth
+ * without auth produced a clean grade. This fires on uniformly-unauthed routes
+ * in the auth peer group (AUTH_VOTE_METHODS: mutating, method-ANY, and .all()
+ * routes) — but only with a baseline reason: either the repo uses auth
  * elsewhere, or a CLAUDE.md/AGENTS.md hint declares auth required. With neither,
  * we stay silent (could be an intentionally-public API).
  */
@@ -60,8 +78,10 @@ function analyzeUniformAuthGap(
   routes: RouteInfo[],
   opts: { hasMachinery: boolean; hint: ReturnType<typeof pickIntentHint>; healthPaths: RegExp },
 ): DriftFinding | null {
-  const mutating = routes.filter((r) => MUTATION_METHODS.includes(r.method) && !opts.healthPaths.test(r.path));
-  const unauthed = mutating.filter((r) => !r.hasAuth);
+  // Same peer group as the primary dominance vote (AUTH_VOTE_METHODS), so the
+  // vote and its fallback can never disagree about which routes are judged.
+  const authPeers = routes.filter((r) => AUTH_VOTE_METHODS.includes(r.method) && !opts.healthPaths.test(r.path));
+  const unauthed = authPeers.filter((r) => !r.hasAuth);
   if (unauthed.length === 0) return null;
   if (!opts.hasMachinery && !opts.hint) return null; // no baseline → maybe intentionally public
 
@@ -69,7 +89,8 @@ function analyzeUniformAuthGap(
   // Evidence-driven confidence: a declared rule is strong; "uses auth elsewhere"
   // is a softer signal.
   const confidence = declared ? 0.9 : 0.6;
-  const have = mutating.length - unauthed.length;
+  const have = authPeers.length - unauthed.length;
+  const noun = authRoutesNoun(unauthed);
 
   return {
     detector: "security_posture",
@@ -78,12 +99,12 @@ function analyzeUniformAuthGap(
     severity: unauthed.length > 2 ? "error" : "warning",
     confidence,
     finding: declared
-      ? `${unauthed.length} mutating route(s) lack auth, but ${opts.hint!.source} declares authentication is required`
-      : `${unauthed.length} mutating route(s) lack auth while the codebase uses auth elsewhere`,
+      ? `${unauthed.length} ${noun} lack auth, but ${opts.hint!.source} declares authentication is required`
+      : `${unauthed.length} ${noun} lack auth while the codebase uses auth elsewhere`,
     dominantPattern: declared ? `${opts.hint!.label}` : "auth on mutating routes",
     dominantCount: have,
-    totalRelevantFiles: mutating.length,
-    consistencyScore: mutating.length ? Math.round((have / mutating.length) * 100) : 0,
+    totalRelevantFiles: authPeers.length,
+    consistencyScore: authPeers.length ? Math.round((have / authPeers.length) * 100) : 0,
     deviatingFiles: unauthed.map((r) => ({
       path: r.file,
       detectedPattern: `${r.method} ${r.path} — no auth`,
@@ -91,8 +112,8 @@ function analyzeUniformAuthGap(
     })),
     dominantFiles: [],
     recommendation: declared
-      ? `${opts.hint!.source}:${opts.hint!.line} declares auth is required. Add auth middleware to these ${unauthed.length} mutating route(s), or mark them explicitly public.`
-      : `These ${unauthed.length} mutating route(s) have no auth while the codebase authenticates elsewhere. Add auth middleware, or confirm they are intentionally public.`,
+      ? `${opts.hint!.source}:${opts.hint!.line} declares auth is required. Add auth middleware to these ${unauthed.length} ${noun}, or mark them explicitly public.`
+      : `These ${unauthed.length} ${noun} have no auth while the codebase authenticates elsewhere. Add auth middleware, or confirm they are intentionally public.`,
   };
 }
 
@@ -375,11 +396,15 @@ export const securityConsistency: DriftDetector = {
     const groups = groupRoutes(routes);
 
     for (const group of groups) {
-      // Auth applies to every state-changing route (POST/PUT/PATCH/DELETE).
-      // Rescoped from `group`: counting read-only GETs put intentionally-public
-      // reads in the denominator and made the "X of Y mutating routes" line false.
-      // Same set as analyzeUniformAuthGap so the primary vote and its fallback agree.
-      const groupAuthRoutes = group.filter((r) => MUTATION_METHODS.includes(r.method));
+      // Auth applies to every state-changing route (POST/PUT/PATCH/DELETE)
+      // plus method-ANY/ALL routes (see AUTH_VOTE_METHODS). Rescoped from
+      // `group`: counting read-only GETs put intentionally-public reads in the
+      // denominator and made the "X of Y routes" line false. Same set as
+      // analyzeUniformAuthGap so the primary vote and its fallback agree.
+      // Runs on post-suppression routes only: `group` descends from the
+      // applyRouteSuppressions `kept` set above, so a suppressed ANY/ALL route
+      // never re-enters the vote through this filter.
+      const groupAuthRoutes = group.filter((r) => AUTH_VOTE_METHODS.includes(r.method));
       const authFinding = analyzeSecurityProperty(groupAuthRoutes, SECURITY_SUBCATEGORIES.auth, (r) => r.hasAuth, healthPaths);
       if (authFinding) {
         findings.push(authFinding);
