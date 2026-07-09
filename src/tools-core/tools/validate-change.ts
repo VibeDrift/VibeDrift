@@ -12,9 +12,11 @@
 import { z } from "zod";
 import { relative, resolve } from "node:path";
 import type { DriftCategory } from "../../drift/types.js";
+import { SECURITY_SUBCATEGORIES } from "../../drift/types.js";
 import type { RepoDriftBaseline } from "../../core/baseline.js";
 import type { IntentHint } from "../../intent/types.js";
 import { getBaseline } from "../../mcp/baseline-provider.js";
+import { classifyRouteAuth } from "../../drift/route-auth-classify.js";
 import { classifyAsyncStyle, ASYNC_STYLE_NAMES, type AsyncStyle } from "../../drift/async-style.js";
 import { classifyReturnShapeLabel, SHAPE_NAMES } from "../../drift/return-shape-consistency.js";
 import { classifyDataAccessLabel, DATA_ACCESS_NAMES } from "../../drift/architectural-contradiction.js";
@@ -206,6 +208,73 @@ export function validateChange(
   };
 }
 
+// The auth sub-vote's key + the exact dominantPattern the security detector
+// emits for the peer-majority "routes apply auth" signal (security-consistency
+// emits `${propertyName} applied`). Derived from the shared constant so this can
+// never drift out of sync with the detector.
+const AUTH_SUBKEY = SECURITY_SUBCATEGORIES.auth; // "Auth middleware"
+const AUTH_APPLIED = `${SECURITY_SUBCATEGORIES.auth} applied`; // "Auth middleware applied"
+const AUTH_REQUIRED_HINT = "auth_required"; // intent-hint pattern (src/intent/parser.ts)
+const ROUTER_CAVEAT =
+  "Note: router-level middleware is not visible to this in-loop check, so this is a hint, not a verdict.";
+
+/**
+ * In-loop auth-drift check for a SINGLE proposed body. Emits a Conflict only
+ * when the body registers a mutating route with NO visible per-route guard AND
+ * the repo's own convention says auth is applied/required — either a peer
+ * "Auth middleware applied" majority vote, or a declared `auth_required` intent
+ * hint. Returns null (honest silence) otherwise, including the healthy case
+ * where there is neither a vote nor a hint to compare against.
+ *
+ * Async because it parses the body (via the shared classifier, which reuses the
+ * batch AST route extractor so it can never disagree with the batch detector).
+ * Not folded into the pure `validateChange` for that reason. The caller forces
+ * `confidence: "low"` when this fires — router-scope auth is invisible here.
+ */
+export async function checkRouteAuthDrift(
+  baseline: RepoDriftBaseline,
+  relTarget: string,
+  body: string,
+): Promise<Conflict | null> {
+  const cls = await classifyRouteAuth(body, relTarget);
+  if (!cls || !cls.isMutatingRoute || cls.hasVisibleAuth) return null;
+
+  // Prefer the peer-majority vote: its dominantCount/total is a truthful count
+  // to cite. Reuses the exact get-dominant-pattern.ts read path (securitySubVotes
+  // keyed by the Auth sub-category).
+  const vote = baseline.securitySubVotes?.[AUTH_SUBKEY];
+  if (vote && vote.dominantPattern === AUTH_APPLIED) {
+    return {
+      dimension: "security_posture",
+      dominantPattern: AUTH_APPLIED,
+      yourPattern: "no auth guard visible in this change",
+      fixHint:
+        `Repo applies auth on ${vote.dominantCount} of ${vote.totalRelevantFiles} mutating routes. ` +
+        `Add the guard, or annotate the route // @vibedrift-public if it is intentionally public. ` +
+        ROUTER_CAVEAT,
+    };
+  }
+
+  // No applied-majority vote: fall back to a DECLARED auth-required rule. This
+  // also covers the uniformly-unauthed-but-declared repo, whose stored vote (if
+  // any) is the aspirational rule, not the applied majority — so we cite the
+  // declaration rather than a misleading "0 of N" count.
+  const hint = topHintFor(baseline.intentHints ?? [], "security_posture");
+  if (hint && hint.pattern === AUTH_REQUIRED_HINT) {
+    return {
+      dimension: "security_posture",
+      dominantPattern: AUTH_APPLIED,
+      yourPattern: "no auth guard visible in this change",
+      fixHint:
+        `Repo declares auth is required (${hint.source}:${hint.line}). ` +
+        `Add the guard, or annotate the route // @vibedrift-public if it is intentionally public. ` +
+        ROUTER_CAVEAT,
+    };
+  }
+
+  return null; // no vote and no auth hint → nothing to compare against.
+}
+
 export interface ValidateChangeOut extends ValidateChangeResult {
   status: Status;
   message?: string;
@@ -237,6 +306,19 @@ export async function run({
   }
   const relTarget = relative(rootDir, resolve(rootDir, targetPath)).replace(/\\/g, "/");
   const out: ValidateChangeOut = { status, ...validateChange(baseline, relTarget, body) };
+
+  // In-loop security check (async, so it lives here rather than in the pure
+  // validateChange): a proposed mutating route with no visible guard against a
+  // repo that applies/declares auth. Appended to conflicts and forced to low
+  // confidence — the check cannot see router-scope middleware, so it never
+  // claims high confidence. ok recomputes false via the same rule, which is the
+  // intended signal (informative, not a hard block).
+  const authConflict = await checkRouteAuthDrift(baseline, relTarget, body);
+  if (authConflict) {
+    out.conflicts = [...out.conflicts, authConflict];
+    out.confidence = "low";
+    out.ok = out.conflicts.length === 0 && out.duplicateOf.length === 0;
+  }
 
   if (!deep) return out;
 
