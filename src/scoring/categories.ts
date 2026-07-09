@@ -127,6 +127,11 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
       // (see applySecurityMinPeerFloor). Advisory: renders on the hygiene
       // track, never touches the drift composite.
       { id: "security_posture-advisory", applicableLanguages: "all", kind: "hygiene" },
+      // Suppression audit trail: cites every route excluded from the vote via
+      // `// @vibedrift-public` (see security-suppression.ts). Hygiene-kind so
+      // an exclusion is always visible but never moves the composite — the
+      // anti-abuse property is "counted and cited," not "silently ignored."
+      { id: "security-suppression", applicableLanguages: "all", kind: "hygiene" },
       // Code DNA taint analysis
       { id: "codedna-taint", applicableLanguages: "all", kind: "drift" },
     ],

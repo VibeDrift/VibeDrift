@@ -17,6 +17,7 @@ import { stateManagementConsistency } from "./state-management-consistency.js";
 import { testStructureConsistency } from "./test-structure-consistency.js";
 import { commitArchaeology } from "./commit-archaeology.js";
 import { detectPivotsAcrossFindings } from "./pivot-detector.js";
+import { SECURITY_SUPPRESSION_SUBCATEGORY, SECURITY_SUPPRESSION_ANALYZER_ID } from "./security-suppression.js";
 
 export function createDriftDetectors(): DriftDetector[] {
   return [
@@ -209,6 +210,15 @@ function enrichWithIntentDivergence(
   }
 
   return findings.map((f) => {
+    // The suppression-audit finding (security-suppression.ts) is a count of
+    // excluded routes, not a dominance vote — its `dominantPattern` ("no
+    // suppression") is never meant to be compared against a declared
+    // convention label. Without this guard, any repo with a security_posture
+    // intent hint (e.g. CLAUDE.md declaring "auth required on all routes")
+    // would stamp every suppression-audit finding with a spurious
+    // "code contradicts declared intent" divergence, which is false — the
+    // finding is a hygiene audit log entry, not a vote outcome.
+    if (f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY) return f;
     const hint = byCategory.get(f.driftCategory);
     if (!hint) return f;
     // If the finding's voted dominant matches the declared label, no
@@ -249,13 +259,25 @@ export function attachEngineComposite(
 }
 
 export function driftFindingToFinding(d: DriftFinding): Finding {
+  // Suppression-audit findings (src/drift/security-suppression.ts) are the
+  // one deliberate exception to "analyzerId is keyed off driftCategory
+  // alone": they must land on the HYGIENE track under a distinct analyzerId
+  // (registered in scoring/categories.ts as kind "hygiene") so citing an
+  // @vibedrift-public exclusion can never move the Vibe Drift composite, no
+  // matter how many routes are suppressed. Matched on subCategory, which is
+  // not one of SECURITY_SUBCATEGORIES (types.ts) and only ever set by
+  // buildSuppressionAuditFinding.
+  const analyzerId =
+    d.driftCategory === "security_posture" && d.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY
+      ? SECURITY_SUPPRESSION_ANALYZER_ID
+      : `drift-${d.driftCategory}`;
   return {
     // analyzerId is keyed off the typed `driftCategory` enum — NOT the
     // freeform `detector` string — so it always matches a registered id in
     // scoring/categories.ts. Using `detector` (which detectors set
     // inconsistently: some to the category, some to the detector id) was the
     // root of the wiring bug that excluded 11 of 14 detectors from the score.
-    analyzerId: `drift-${d.driftCategory}`,
+    analyzerId,
     severity: d.severity,
     confidence: d.confidence,
     message: `DRIFT: ${d.finding}`,

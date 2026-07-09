@@ -35,6 +35,7 @@ import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./typ
 import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
 import { extractJsRoutesAst, extractFileMiddlewareAst } from "./security-ast.js";
+import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
 
 const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
 
@@ -343,7 +344,16 @@ export const securityConsistency: DriftDetector = {
   detect(ctx: DriftContext): DriftFinding[] {
     const findings: DriftFinding[] = [];
     const fileMw = buildFileMiddlewareIndex(ctx.files);
-    const routes = extractRoutes(ctx.files, fileMw);
+    // Denominator-removing suppression: a route carrying an inline
+    // `// @vibedrift-public` annotation is dropped BEFORE it reaches any
+    // vote below, so it never inflates the "unauthed" numerator or the
+    // total-routes denominator. Every suppression is cited via the audit
+    // finding pushed immediately below, independent of whatever the votes
+    // decide — a suppressed route always leaves a trail.
+    const { kept: routes, suppressed } = applyRouteSuppressions(extractRoutes(ctx.files, fileMw), ctx.files);
+    if (suppressed.length > 0) {
+      findings.push(buildSuppressionAuditFinding(suppressed));
+    }
     if (routes.length < 2) return findings;
 
     const healthPaths = /^\/(?:health|healthz|ready|metrics|ping)$/;
