@@ -253,6 +253,31 @@ function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddlewa
   }
 }
 
+/** Text inside a Python route decorator's parentheses: from the first "(" on
+ *  line `start` to its matching ")", spanning continuation lines. Bounded by
+ *  paren depth so `methods=` is read from THIS decorator only and can never
+ *  bleed into an adjacent route's decorator. */
+function balancedDecoratorArgs(lines: string[], start: number): string {
+  let depth = 0;
+  let started = false;
+  let out = "";
+  for (let j = start; j < lines.length; j++) {
+    for (const ch of lines[j]) {
+      if (ch === "(") {
+        depth++;
+        started = true;
+      } else if (ch === ")") {
+        depth--;
+      }
+      if (started) out += ch;
+      if (started && depth === 0) return out;
+    }
+    out += " ";
+    if (j - start > 6) return out; // defensive cap for a malformed decorator
+  }
+  return out;
+}
+
 function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
   const lines = file.content.split("\n");
   const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
@@ -265,12 +290,13 @@ function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<s
     // Flask's @app.route defaults to GET when no methods= kwarg is present, NOT an
     // unknown "ANY". Decorator-verb style (@app.post) resolves directly; the
     // methods=[...] kwarg (Flask/others) is parsed so a mutating verb classifies
-    // the route as mutating. Scan the decorator + up to 2 continuation lines,
-    // since the kwarg can wrap.
+    // the route as mutating. The kwarg is read from the route's own decorator
+    // via balanced paren scanning, so it can never bleed into an adjacent
+    // route's decorator even when routes sit right next to each other.
     const decoratorVerb = lines[i].match(/\.(get|post|put|patch|delete)\s*\(/)?.[1]?.toUpperCase();
     let method = decoratorVerb ?? "GET";
-    const decoratorWindow = lines.slice(i, Math.min(lines.length, i + 3)).join(" ");
-    const methodsKw = decoratorWindow.match(/methods\s*=\s*\[([^\]]*)\]/i);
+    const decoratorArgs = balancedDecoratorArgs(lines, i);
+    const methodsKw = decoratorArgs.match(/methods\s*=\s*\[([^\]]*)\]/i);
     if (methodsKw) {
       const verbs = (methodsKw[1].match(/["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']/gi) ?? [])
         .map((v) => v.replace(/["']/g, "").toUpperCase());

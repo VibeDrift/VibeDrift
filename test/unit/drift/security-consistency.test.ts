@@ -613,4 +613,97 @@ describe("canonical mutating methods (Task B1)", () => {
       authFinding!.deviatingFiles.some((d) => d.evidence[0].line === 25),
     ).toBe(false);
   });
+
+  // ── Adjacent-decorator regression: the methods= lookahead must never bleed
+  // into a neighboring route's decorator when routes sit immediately next to
+  // each other with one-line bodies (no blank line in between). ──
+  it("does not bleed an adjacent route's methods=[...] into an unauthed POST route's own classification", () => {
+    const pyRoutes = file(
+      "src/routes/orders.py",
+      [
+        `@app.post("/orders")`,
+        `@requires_auth`,
+        `def create_order(): return {}`,
+        `@app.post("/orders/<id>")`,
+        `@requires_auth`,
+        `def update_order(): return {}`,
+        `@app.post("/orders/<id>/cancel")`,
+        `@requires_auth`,
+        `def cancel_order(): return {}`,
+        `@app.post("/orders/<id>/ship")`,
+        `@requires_auth`,
+        `def ship_order(): return {}`,
+        `@app.post("/orders/danger")`,
+        `def danger(): return {}`,
+        `@app.route("/read", methods=["GET"])`,
+        `def read_only(): return {}`,
+      ].join("\n"),
+      "python",
+    );
+    const ctx = mkCtx([pyRoutes]);
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    // The unauthed POST route at line 13 must still be classified as
+    // mutating (POST from its own decorator), not as GET bled in from the
+    // immediately-adjacent /read route's methods=["GET"] on line 15.
+    expect(authFinding).toBeDefined();
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 13),
+    ).toBe(true);
+  });
+
+  it("does not bleed an adjacent route's methods=[...] into a bare GET route's own classification", () => {
+    // 7 authed POST routes keep the auth-vote ratio above the 75% dominance
+    // threshold even while both trailing routes (the misclassified /read
+    // under the old bug, and the genuinely-unauthed /danger) count against
+    // it — so the vote actually fires and the bug's false-positive on /read
+    // is observable, rather than the vote going silent.
+    const pyRoutes = file(
+      "src/routes/orders.py",
+      [
+        `@app.post("/orders/1")`,
+        `@requires_auth`,
+        `def r1(): return {}`,
+        `@app.post("/orders/2")`,
+        `@requires_auth`,
+        `def r2(): return {}`,
+        `@app.post("/orders/3")`,
+        `@requires_auth`,
+        `def r3(): return {}`,
+        `@app.post("/orders/4")`,
+        `@requires_auth`,
+        `def r4(): return {}`,
+        `@app.post("/orders/5")`,
+        `@requires_auth`,
+        `def r5(): return {}`,
+        `@app.post("/orders/6")`,
+        `@requires_auth`,
+        `def r6(): return {}`,
+        `@app.post("/orders/7")`,
+        `@requires_auth`,
+        `def r7(): return {}`,
+        `@app.route("/read")`,
+        `def read_only(): return {}`,
+        `@app.route("/danger", methods=["POST"])`,
+        `def danger(): return {}`,
+      ].join("\n"),
+      "python",
+    );
+    const ctx = mkCtx([pyRoutes]);
+    const findings = securityConsistency.detect(ctx);
+    const authFinding = findings.find((fnd) => fnd.subCategory === "Auth middleware");
+    expect(authFinding).toBeDefined();
+    // The bare @app.route("/read") on line 22 defaults to GET and must never
+    // be reported as a missing-auth mutating route, even though the
+    // immediately-adjacent /danger route's methods=["POST"] on line 24 sits
+    // within the old 3-line lookahead window.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 22),
+    ).toBe(false);
+    // /danger (line 24) is a genuine unauthed mutating route and should
+    // still be correctly flagged.
+    expect(
+      authFinding!.deviatingFiles.some((d) => d.path === pyRoutes.relativePath && d.evidence[0].line === 24),
+    ).toBe(true);
+  });
 });
