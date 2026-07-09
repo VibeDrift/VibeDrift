@@ -162,6 +162,22 @@ describe("fileDriftFromBaseline (security sub-votes)", () => {
     // legacy path keeps the file-unit wording
     expect(r.deviations[0].consistency).toMatch(/files/);
   });
+
+  it("falls back to the collapsed slot when securitySubVotes is present but EMPTY (never silently drops a real security deviator)", () => {
+    // Defensive: an empty {} securitySubVotes must not suppress a real collapsed
+    // security_posture deviator. Mere presence is not enough to skip the slot;
+    // there must be actual sub-votes to read instead, or never-false-bless breaks.
+    const b = securityBaseline();
+    b.securitySubVotes = {};
+    b.perCategoryVote.security_posture!.deviators = [
+      { path: "orders.ts", detectedPattern: "no_rate_limit" },
+    ];
+    const r = fileDriftFromBaseline(b, "orders.ts");
+    expect(r.fits).toBe(false);
+    expect(r.deviations).toHaveLength(1);
+    expect(r.deviations[0].dimension).toBe("security_posture");
+    expect(r.deviations[0].consistency).toMatch(/files/);
+  });
 });
 
 describe("check_file_drift (integration on the messy-project fixture)", () => {

@@ -37,18 +37,26 @@ export function fileDriftFromBaseline(
 ): { fits: boolean; deviations: Deviation[] } {
   const deviations: Deviation[] = [];
   const subVotes = baseline.securitySubVotes;
+  // Non-empty is the load-bearing test, not mere presence: only skip the
+  // collapsed security_posture slot when there are actual sub-votes to read
+  // instead. An EMPTY securitySubVotes ({}) must NOT suppress a real collapsed
+  // deviator, or we would silently bless a security drift the collapsed slot
+  // caught. This keeps never-false-bless enforced HERE, not dependent on a
+  // cross-file guarantee that every security finding always carries a subCategory.
+  const hasSecuritySubVotes = !!subVotes && Object.keys(subVotes).length > 0;
   for (const cat of Object.keys(baseline.perCategoryVote) as DriftCategory[]) {
     // Security is read from the granular sub-votes below, not the collapsed
     // widest-denominator security_posture slot (which hides auth deviators
     // behind whichever sub-convention had the most routes). Fall through to the
-    // collapsed slot only for older baselines that predate securitySubVotes.
-    if (cat === "security_posture" && subVotes) continue;
+    // collapsed slot for older baselines that predate securitySubVotes (or the
+    // defensive empty-map case above).
+    if (cat === "security_posture" && hasSecuritySubVotes) continue;
     const vote = baseline.perCategoryVote[cat]!;
     const dev = vote.deviators.find((d) => d.path === relativePath);
     if (!dev) continue;
     deviations.push(deviationFrom(cat, vote, dev, "files"));
   }
-  if (subVotes) {
+  if (hasSecuritySubVotes && subVotes) {
     for (const vote of Object.values(subVotes)) {
       if (!vote) continue;
       const dev = vote.deviators.find((d) => d.path === relativePath);
