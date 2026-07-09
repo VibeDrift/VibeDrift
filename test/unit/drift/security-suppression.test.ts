@@ -271,6 +271,90 @@ describe("applyRouteSuppressions", () => {
     expect(kept).toHaveLength(0);
   });
 
+  // ── Task 5: config glob allowlist (`security.allowlist`) ──
+  describe("config glob allowlist", () => {
+    it("drops a route whose file matches an allowlist glob, recording reason: allowlist and the matching glob as source", () => {
+      const files = [file("src/public/status.ts", `router.post("/status", handler);\n`)];
+      const routes = [route({ file: "src/public/status.ts", line: 1 })];
+      const config = { version: 1, security: { allowlist: ["src/public/**"] } };
+
+      const { kept, suppressed } = applyRouteSuppressions(routes, files, config);
+
+      expect(kept).toHaveLength(0);
+      expect(suppressed).toEqual([
+        { path: "src/public/status.ts", line: 1, reason: "allowlist", source: "src/public/**" },
+      ]);
+    });
+
+    it("keeps a route whose file does NOT match any allowlist glob (no over-suppression)", () => {
+      const files = [file("src/routes/danger.ts", `router.post("/danger", handler);\n`)];
+      const routes = [route({ file: "src/routes/danger.ts", line: 1 })];
+      const config = { version: 1, security: { allowlist: ["src/public/**"] } };
+
+      const { kept, suppressed } = applyRouteSuppressions(routes, files, config);
+
+      expect(kept).toEqual(routes);
+      expect(suppressed).toHaveLength(0);
+    });
+
+    it("cites the SPECIFIC glob that matched when multiple globs are configured", () => {
+      const files = [file("src/routes/webhooks/stripe.ts", `router.post("/stripe", handler);\n`)];
+      const routes = [route({ file: "src/routes/webhooks/stripe.ts", line: 1 })];
+      const config = {
+        version: 1,
+        security: { allowlist: ["src/public/**", "src/routes/webhooks/**"] },
+      };
+
+      const { suppressed } = applyRouteSuppressions(routes, files, config);
+
+      expect(suppressed).toEqual([
+        { path: "src/routes/webhooks/stripe.ts", line: 1, reason: "allowlist", source: "src/routes/webhooks/**" },
+      ]);
+    });
+
+    it("still applies the annotation arm first, then the allowlist arm, without double-suppressing an already-annotated route", () => {
+      const files = [
+        file(
+          "src/routes/mixed.ts",
+          `router.post("/a", h1); // @vibedrift-public\n` +
+            `router.post("/b", h2);\n`,
+        ),
+      ];
+      const routes = [
+        route({ file: "src/routes/mixed.ts", line: 1, path: "/a" }),
+        route({ file: "src/routes/mixed.ts", line: 2, path: "/b" }),
+      ];
+      const config = { version: 1, security: { allowlist: ["src/routes/mixed.ts"] } };
+
+      const { kept, suppressed } = applyRouteSuppressions(routes, files, config);
+
+      expect(kept).toHaveLength(0);
+      expect(suppressed).toHaveLength(2);
+      expect(suppressed.find((s) => s.line === 1)).toEqual({
+        path: "src/routes/mixed.ts",
+        line: 1,
+        reason: "annotation",
+        source: "@vibedrift-public",
+      });
+      expect(suppressed.find((s) => s.line === 2)).toEqual({
+        path: "src/routes/mixed.ts",
+        line: 2,
+        reason: "allowlist",
+        source: "src/routes/mixed.ts",
+      });
+    });
+
+    it("is a no-op when config is undefined, null, or carries no security.allowlist (MCP/baseline path)", () => {
+      const files = [file("src/public/status.ts", `router.post("/status", handler);\n`)];
+      const routes = [route({ file: "src/public/status.ts", line: 1 })];
+
+      expect(applyRouteSuppressions(routes, files).kept).toHaveLength(1);
+      expect(applyRouteSuppressions(routes, files, null).kept).toHaveLength(1);
+      expect(applyRouteSuppressions(routes, files, { version: 1 }).kept).toHaveLength(1);
+      expect(applyRouteSuppressions(routes, files, { version: 1, security: {} }).kept).toHaveLength(1);
+    });
+  });
+
   it("AST path honors Finding 1: trailing annotation on route N does not leak onto consecutive route N+1", async () => {
     const f = await fileWithTree(
       "src/routes/api.ts",

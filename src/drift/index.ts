@@ -52,6 +52,7 @@ export function buildDriftContext(ctx: AnalysisContext): DriftContext {
     dominantLanguage: ctx.dominantLanguage,
     hasGitMetadata: ctx.hasGitMetadata ?? false,
     intentHints: ctx.intentHints ?? [],
+    projectConfig: ctx.projectConfig,
   };
 }
 

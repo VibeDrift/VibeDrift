@@ -143,6 +143,13 @@ async function discoverAndFilterFiles(
   const t0 = Date.now();
   const { ctx, warnings } = await buildAnalysisContext(rootDir);
 
+  // Carry the already-loaded project config (cli/index.ts loads it once to
+  // resolve --format/--fail-on-score defaults) onto the context so the
+  // Security Consistency detector's config glob allowlist can read it via
+  // DriftContext.projectConfig. Undefined when the caller didn't load one
+  // (e.g. watch mode) — the allowlist arm simply no-ops in that case.
+  ctx.projectConfig = options.projectConfig;
+
   // Apply --include / --exclude glob filters in-place on the context's files.
   const includes = options.include ?? [];
   const excludes = options.exclude ?? [];

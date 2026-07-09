@@ -179,6 +179,7 @@ program
       format: resolvedFormat,
       output: options.output,
       failOnScore: resolvedFailOnScore,
+      projectConfig: projectConfig ?? undefined,
       codedna: options.codedna,
       cache: options.cache,
       deep: options.localOnly ? false : options.deep,

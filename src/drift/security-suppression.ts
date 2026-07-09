@@ -20,9 +20,11 @@
  * audit trail instead of just shrinking the sample silently.
  */
 
+import ignore from "ignore";
 import type { DeviatingFile, DriftCategory, DriftFile, DriftFinding } from "./types.js";
 import type { RouteInfo } from "./security-consistency.js";
 import type { Tree } from "../core/types.js";
+import type { ProjectConfig } from "../core/project-config.js";
 
 export interface SuppressionRecord {
   path: string;
@@ -116,14 +118,21 @@ function annotationCommentRows(tree: Tree): Set<number> {
  * reject the preceding-line match whenever the preceding line is some route's
  * own registration line — that annotation belongs to that route, not this one.
  *
- * Only the annotation arm is implemented here (Task 4). Task 5 extends this
- * signature with a trailing config param carrying the glob allowlist arm
- * (`reason: "allowlist"`); this function's `reason` is always `"annotation"`
- * today.
+ * A SECOND, independent suppression arm runs after the annotation arm: any
+ * route still `kept` whose file path matches a glob in `config.security.
+ * allowlist` (`.vibedrift/config.json`) is also dropped, with `reason:
+ * "allowlist"`. This lets a team declare a whole public router (e.g.
+ * `src/routes/public/**`) once in a committed file instead of annotating
+ * every route in it. Matched with the same `ignore` package
+ * `.vibedriftignore` uses, so glob semantics stay consistent across the
+ * tool. `config` is optional and commonly absent (e.g. the MCP/baseline
+ * path, which builds its own context without loading a project config) — in
+ * that case the allowlist arm is a no-op and only annotations suppress.
  */
 export function applyRouteSuppressions(
   routes: RouteInfo[],
   files: DriftFile[],
+  config?: ProjectConfig | null,
 ): { kept: RouteInfo[]; suppressed: SuppressionRecord[] } {
   const filesByPath = new Map<string, DriftFile>();
   for (const f of files) filesByPath.set(f.relativePath, f);
@@ -192,7 +201,29 @@ export function applyRouteSuppressions(
     kept.push(route);
   }
 
-  return { kept, suppressed };
+  // Allowlist arm: config-declared globs, tested against each STILL-KEPT
+  // route's file path. Each glob is compiled into its own `ignore()`
+  // instance (rather than one combined matcher) so a match can be traced
+  // back to the EXACT glob that caused it — required for the "every
+  // exclusion cited" rule (a suppression citing only "allowlist" with no
+  // glob would be a silent, unauditable exclusion).
+  const allowlist = config?.security?.allowlist ?? [];
+  if (allowlist.length === 0) {
+    return { kept, suppressed };
+  }
+
+  const matchers = allowlist.map((glob) => ({ glob, ig: ignore().add(glob) }));
+  const finalKept: RouteInfo[] = [];
+  for (const route of kept) {
+    const match = matchers.find(({ ig }) => ig.ignores(route.file));
+    if (match) {
+      suppressed.push({ path: route.file, line: route.line, reason: "allowlist", source: match.glob });
+      continue;
+    }
+    finalKept.push(route);
+  }
+
+  return { kept: finalKept, suppressed };
 }
 
 /** Marks the audit finding below so `driftFindingToFinding` (src/drift/index.ts)
@@ -249,18 +280,22 @@ export function buildSuppressionAuditFinding(suppressed: SuppressionRecord[]): D
     severity: "info",
     confidence: 1,
     countBased: true,
-    finding: `${suppressed.length} route(s) excluded from the security consistency check via @vibedrift-public: ${formatSuppressionList(suppressed)}`,
+    // Reason-agnostic: a suppression can come from an inline @vibedrift-public
+    // annotation OR a config allowlist glob, and formatCitation already spells
+    // out which one for each entry, so the header stays accurate either way
+    // (or when both reasons are mixed in the same list).
+    finding: `${suppressed.length} route(s) excluded from the security consistency check: ${formatSuppressionList(suppressed)}`,
     // Not a real dominance vote (see countBased above): dominantPattern
     // names what's being counted (mirrors phantom-scaffolding's
     // "wired-up exports"), so consistencyScore 100 reads coherently as
     // "100% of the counted items are exclusions" rather than the
     // self-contradictory "no suppression, 100% consistent."
-    dominantPattern: "route excluded via @vibedrift-public",
+    dominantPattern: "route excluded from the security consistency check",
     dominantCount: suppressed.length,
     totalRelevantFiles: suppressed.length,
     consistencyScore: 100,
     deviatingFiles,
     dominantFiles: [],
-    recommendation: "Periodically review @vibedrift-public annotations to confirm each excluded route is still intentionally public.",
+    recommendation: "Periodically review excluded routes (annotations and allowlist entries) to confirm each is still intentionally public.",
   };
 }

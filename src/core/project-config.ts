@@ -30,6 +30,19 @@ export interface ProjectConfig {
   format?: ReportFormat;
   /** CI score floor: `vibedrift` exits non-zero below this when `--fail-on-score` is not passed. */
   failOnScore?: number;
+  /** Security Consistency check settings. */
+  security?: {
+    /**
+     * Gitignore-style globs matched against a route's file path. A matching
+     * route is excluded from the auth/validation/rate-limit dominance vote
+     * entirely, the same denominator-removing suppression the inline
+     * `@vibedrift-public` annotation gives a single route, declared once
+     * for a whole directory instead of per-route. Matched with the same
+     * `ignore` package `.vibedriftignore` uses, so semantics stay consistent
+     * across the tool.
+     */
+    allowlist?: string[];
+  };
 }
 
 export function projectConfigPath(rootDir: string): string {
@@ -53,6 +66,15 @@ export function normalizeProjectConfig(input: unknown): ProjectConfig | null {
   }
   if (typeof o.failOnScore === "number" && o.failOnScore >= 0 && o.failOnScore <= 100) {
     config.failOnScore = o.failOnScore;
+  }
+  if (o.security && typeof o.security === "object" && !Array.isArray(o.security)) {
+    const sec = o.security as Record<string, unknown>;
+    if (Array.isArray(sec.allowlist)) {
+      const allowlist = sec.allowlist.filter(
+        (g): g is string => typeof g === "string" && g.trim().length > 0,
+      );
+      if (allowlist.length > 0) config.security = { allowlist };
+    }
   }
   return config;
 }

@@ -1,4 +1,5 @@
 import type { Finding, FileGitMetadata } from "../core/types.js";
+import type { ProjectConfig } from "../core/project-config.js";
 import type { Tree } from "web-tree-sitter";
 
 export interface DriftDetector {
@@ -52,6 +53,14 @@ export interface DriftContext {
    * intent-divergence findings when code ignores a declaration.
    */
   intentHints?: import("../intent/types.js").IntentHint[];
+  /**
+   * Carried over from `AnalysisContext.projectConfig` by `buildDriftContext`.
+   * Consumed today by the Security Consistency detector's config glob
+   * allowlist (`security.allowlist`); undefined whenever the caller built
+   * its `AnalysisContext` without loading a project config (e.g. the
+   * MCP/baseline path), in which case that arm no-ops.
+   */
+  projectConfig?: ProjectConfig;
 }
 
 export interface DriftFile {

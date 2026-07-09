@@ -30,4 +30,29 @@ describe("normalizeProjectConfig", () => {
   it("defaults version when missing", () => {
     expect(normalizeProjectConfig({})).toEqual({ version: PROJECT_CONFIG_VERSION });
   });
+
+  it("keeps a security.allowlist of globs", () => {
+    const cfg = normalizeProjectConfig({
+      version: 1,
+      security: { allowlist: ["src/public/**", "src/routes/webhooks/*.ts"] },
+    });
+    expect(cfg).toEqual({
+      version: 1,
+      security: { allowlist: ["src/public/**", "src/routes/webhooks/*.ts"] },
+    });
+  });
+
+  it("drops non-string entries from security.allowlist but keeps the valid ones", () => {
+    const cfg = normalizeProjectConfig({
+      security: { allowlist: ["src/public/**", 123, null, {}, "  ", "src/health/*"] },
+    });
+    expect(cfg?.security?.allowlist).toEqual(["src/public/**", "src/health/*"]);
+  });
+
+  it("omits security when allowlist is absent, not an array, or empty after filtering", () => {
+    expect(normalizeProjectConfig({})).toEqual({ version: PROJECT_CONFIG_VERSION });
+    expect(normalizeProjectConfig({ security: {} })?.security).toBeUndefined();
+    expect(normalizeProjectConfig({ security: { allowlist: "not-an-array" } })?.security).toBeUndefined();
+    expect(normalizeProjectConfig({ security: { allowlist: [1, null, "  "] } })?.security).toBeUndefined();
+  });
 });
