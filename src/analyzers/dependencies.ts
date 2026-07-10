@@ -1,5 +1,5 @@
 import type { Analyzer } from "./base.js";
-import type { AnalysisContext, Finding } from "../core/types.js";
+import type { AnalysisContext, Finding, SyntaxNode } from "../core/types.js";
 
 const NODE_BUILTINS = new Set([
   "assert", "buffer", "child_process", "cluster", "console", "constants",
@@ -11,10 +11,14 @@ const NODE_BUILTINS = new Set([
 ]);
 
 const JS_IMPORT_PATTERNS = [
-  /(?:import|from)\s+['"]([^./][^'"]*)['"]/g,
-  /require\(\s*['"]([^./][^'"]*)['"]\s*\)/g,
-  // Dynamic imports: await import("pkg") or import("pkg")
-  /import\(\s*['"]([^./][^'"]*)['"]\s*\)/g,
+  // ESM imports/exports, including bare side-effect imports after any line.
+  /^\s*(?:import|export)\s+(?:[^;\n]*?\s+from\s+)?['"]([^./][^'"]*)['"]/gm,
+  // CommonJS require in expression/statement positions. This intentionally
+  // avoids matching regex sources or prose strings that merely mention require().
+  /(?:^|[=(:,{[]\s*|\breturn\s+)require\(\s*['"]([^./][^'"]*)['"]\s*\)/gm,
+  // Dynamic imports: await import("pkg") or import(`pkg`). Template literals
+  // count only when the specifier is a literal package name with no ${...}.
+  /(?:^|[=(:,{[]\s*|\bawait\s+|\breturn\s+)import\(\s*['"`]([^./][^'"`$]*)['"`]\s*\)/gm,
 ];
 
 // Test fixture directories — their imports are intentionally broken/nonexistent
@@ -64,81 +68,90 @@ function extractJsPackageName(specifier: string): string {
   return specifier.split("/")[0];
 }
 
-function isImportSpecifierString(prefix: string): boolean {
-  return /(?:\bimport\s*\(|\brequire\s*\(|\bfrom|^\s*import)\s*$/.test(prefix);
+function unquoteSpecifier(text: string): string | null {
+  const quote = text[0];
+  if ((quote !== "'" && quote !== '"' && quote !== "`") || text.at(-1) !== quote) return null;
+  if (quote === "`" && text.includes("${")) return null;
+  return text.slice(1, -1);
 }
 
-function maskJsNonCodeImportText(content: string): string {
-  let masked = "";
-  let i = 0;
+function firstStringLikeChild(node: SyntaxNode): SyntaxNode | null {
+  if (node.type === "string" || node.type === "string_fragment" || node.type === "template_string") {
+    return node;
+  }
+  for (let i = 0; i < node.childCount; i++) {
+    const found = firstStringLikeChild(node.child(i)!);
+    if (found) return found;
+  }
+  return null;
+}
 
-  while (i < content.length) {
-    const ch = content[i];
-    const next = content[i + 1];
+function callCalleeText(node: SyntaxNode): string | null {
+  const callee = node.childForFieldName("function") ?? node.firstChild;
+  return callee?.text ?? null;
+}
 
-    if (ch === "/" && next === "/") {
-      masked += "  ";
-      i += 2;
-      while (i < content.length && content[i] !== "\n") {
-        masked += " ";
-        i++;
+function recordImportedSpecifier(
+  specifier: string,
+  file: { relativePath: string },
+  line: number,
+  imported: Set<string>,
+  importLocations: Map<string, { file: string; line: number }[]>,
+): void {
+  const pkg = extractJsPackageName(specifier);
+  if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) return;
+  imported.add(pkg);
+  if (!importLocations.has(pkg)) importLocations.set(pkg, []);
+  importLocations.get(pkg)!.push({ file: file.relativePath, line });
+}
+
+function collectImportedPackagesFromAst(
+  root: SyntaxNode,
+  file: { relativePath: string },
+  imported: Set<string>,
+  importLocations: Map<string, { file: string; line: number }[]>,
+): void {
+  function visit(node: SyntaxNode): void {
+    if (node.type === "import_statement" || node.type === "export_statement") {
+      const stringNode = firstStringLikeChild(node);
+      const specifier = stringNode ? unquoteSpecifier(stringNode.text) : null;
+      if (specifier && !specifier.startsWith(".")) {
+        recordImportedSpecifier(specifier, file, node.startPosition.row + 1, imported, importLocations);
       }
-      continue;
+      return;
     }
 
-    if (ch === "/" && next === "*") {
-      masked += "  ";
-      i += 2;
-      while (i < content.length) {
-        if (content[i] === "*" && content[i + 1] === "/") {
-          masked += "  ";
-          i += 2;
-          break;
+    if (node.type === "call_expression") {
+      const callee = callCalleeText(node);
+      if (callee === "require" || callee === "import") {
+        const args = node.childForFieldName("arguments") ?? node;
+        const stringNode = firstStringLikeChild(args);
+        const specifier = stringNode ? unquoteSpecifier(stringNode.text) : null;
+        if (specifier && !specifier.startsWith(".")) {
+          recordImportedSpecifier(specifier, file, node.startPosition.row + 1, imported, importLocations);
         }
-        masked += content[i] === "\n" ? "\n" : " ";
-        i++;
       }
-      continue;
+      return;
     }
 
-    if (ch === "'" || ch === '"' || ch === "`") {
-      const quote = ch;
-      const keep = quote !== "`" && isImportSpecifierString(masked);
-      masked += keep ? ch : " ";
-      i++;
-
-      while (i < content.length) {
-        const current = content[i];
-
-        if (current === "\\") {
-          if (keep) {
-            masked += current;
-            if (i + 1 < content.length) masked += content[i + 1];
-          } else {
-            masked += " ";
-            if (i + 1 < content.length) masked += content[i + 1] === "\n" ? "\n" : " ";
-          }
-          i += 2;
-          continue;
-        }
-
-        if (current === quote) {
-          masked += keep ? current : " ";
-          i++;
-          break;
-        }
-
-        masked += keep || current === "\n" ? current : " ";
-        i++;
-      }
-      continue;
+    for (let i = 0; i < node.childCount; i++) {
+      visit(node.child(i)!);
     }
-
-    masked += ch;
-    i++;
   }
 
-  return masked;
+  visit(root);
+}
+
+function stripJsCommentsAndNonImportTemplates(content: string): string {
+  const withoutComments = content
+    .replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "))
+    .replace(/\/\/.*$/gm, (match) => " ".repeat(match.length));
+
+  return withoutComments.replace(/`(?:\\[\s\S]|[^`\\])*`/g, (match, offset) => {
+    const prefix = withoutComments.slice(Math.max(0, offset - 16), offset);
+    if (/\bimport\(\s*$/.test(prefix)) return match;
+    return match.replace(/[^\n]/g, " ");
+  });
 }
 
 const DEV_TOOL_PATTERNS = [
@@ -185,25 +198,29 @@ export const dependenciesAnalyzer: Analyzer = {
 };
 
 function collectImportedPackages(
-  files: { content: string; relativePath: string }[],
+  files: { content: string; relativePath: string; tree?: { rootNode: SyntaxNode } }[],
 ): { imported: Set<string>; importLocations: Map<string, { file: string; line: number }[]> } {
   const imported = new Set<string>();
   const importLocations = new Map<string, { file: string; line: number }[]>();
 
   for (const file of files) {
-    const codeContent = maskJsNonCodeImportText(file.content);
+    if (file.tree) {
+      collectImportedPackagesFromAst(file.tree.rootNode, file, imported, importLocations);
+      continue;
+    }
+
+    const codeContent = stripJsCommentsAndNonImportTemplates(file.content);
     for (const pattern of JS_IMPORT_PATTERNS) {
       const regex = new RegExp(pattern.source, pattern.flags);
       let match;
       while ((match = regex.exec(codeContent)) !== null) {
-        const pkg = extractJsPackageName(match[1]);
-        if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) continue;
-        imported.add(pkg);
-        if (!importLocations.has(pkg)) importLocations.set(pkg, []);
-        importLocations.get(pkg)!.push({
-          file: file.relativePath,
-          line: file.content.slice(0, match.index).split("\n").length,
-        });
+        recordImportedSpecifier(
+          match[1],
+          file,
+          file.content.slice(0, match.index).split("\n").length,
+          imported,
+          importLocations,
+        );
       }
     }
   }
@@ -253,7 +270,7 @@ function detectPhantomDeps(declared: Set<string>, imported: Set<string>, devTool
       severity: realPhantom.length > 5 ? "error" : "warning",
       confidence: 0.75,
       message: `${realPhantom.length} phantom dependencies (declared but unused): ${realPhantom.slice(0, 5).join(", ")}${realPhantom.length > 5 ? "..." : ""}`,
-      locations: realPhantom.map((p) => ({ file: "package.json" })),
+      locations: realPhantom.map((_p) => ({ file: "package.json" })),
       tags: ["deps", "phantom", "js"],
     }];
   }

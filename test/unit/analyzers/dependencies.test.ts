@@ -165,4 +165,67 @@ describe("dependencies analyzer", () => {
     expect(missing?.message).toContain("chalk");
     expect(missing?.message).toContain("zod");
   });
+
+  it("keeps bare side-effect imports after other imports", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [{
+        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
+        content: [
+          'import express from "express";',
+          'import "reflect-metadata";',
+        ].join("\n"),
+        lineCount: 2,
+      }],
+      packageJson: {
+        dependencies: { express: "^4.0.0", "reflect-metadata": "^0.2.2" },
+      },
+      totalLines: 2,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const phantom = findings.find((f) => f.tags.includes("phantom"));
+    expect(phantom).toBeUndefined();
+  });
+
+  it("does not let regex quotes or JSX apostrophes hide later imports", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [{
+        path: "/test/index.tsx", relativePath: "index.tsx", language: "typescript",
+        content: [
+          "const re = /['\"]/;",
+          'import fsExtra from "fs-extra";',
+          "const Note = () => <p>don't forget</p>;",
+          'const chalk = require("chalk");',
+        ].join("\n"),
+        lineCount: 4,
+      }],
+      packageJson: { dependencies: {} },
+      totalLines: 4,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+    expect(missing?.message).toContain("fs-extra");
+    expect(missing?.message).toContain("chalk");
+  });
+
+  it("detects literal template dynamic imports without counting docs in templates", async () => {
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [{
+        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
+        content: [
+          'const docs = `await import("not-a-real-dep")`;',
+          "const zod = await import(`zod`);",
+        ].join("\n"),
+        lineCount: 2,
+      }],
+      packageJson: { dependencies: {} },
+      totalLines: 2,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+    expect(missing?.message).toContain("zod");
+    expect(missing?.message).not.toContain("not-a-real-dep");
+  });
 });
