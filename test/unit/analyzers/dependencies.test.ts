@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dependenciesAnalyzer } from "../../../src/analyzers/dependencies.js";
-import type { AnalysisContext } from "../../../src/core/types.js";
+import type { AnalysisContext, SourceFile } from "../../../src/core/types.js";
 
 const BASE: Omit<AnalysisContext, "files" | "packageJson" | "totalLines"> = {
   rootDir: "/test",
@@ -106,5 +106,73 @@ describe("dependencies analyzer", () => {
     };
     const findings = await dependenciesAnalyzer.analyze(ctx);
     expect(findings.find((f) => f.tags.includes("missing"))).toBeDefined();
+  });
+
+  it("does NOT flag import-like text inside comments or JSDoc as missing deps (AST path)", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    // This file has "import" patterns in comments and strings that the regex
+    // would match, but the AST path should ignore them.
+    const fileContent = `/**
+ * Usage:
+ *   import { renderReport } from "@vibedrift/cli/render";
+ */
+import { readFile } from "fs";
+
+// require('lodash') is mentioned here as documentation
+const msg = 'the shift from "interesting" to "I should fix this"';
+export function run() { return readFile("./x"); }
+`;
+    const file: SourceFile = {
+      path: "/test/src/example.ts",
+      relativePath: "src/example.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: fileContent.split("\n").length,
+    };
+    // Parse to get a real tree so the AST path is exercised
+    file.tree = (await parseFile(file)) ?? undefined;
+
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [file],
+      packageJson: { name: "@vibedrift/cli", dependencies: {} },
+      totalLines: file.lineCount,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+
+    // Should NOT report @vibedrift/cli (self-reference), lodash (in comment),
+    // or "interesting" (prose in a string) as missing
+    expect(missing).toBeUndefined();
+  });
+
+  it("still detects genuinely missing packages via AST", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    const fileContent = `import chalk from "chalk";\nimport { z } from "zod";\n`;
+    const file: SourceFile = {
+      path: "/test/src/real.ts",
+      relativePath: "src/real.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 2,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [file],
+      packageJson: { dependencies: { chalk: "^5.0.0" } }, // zod is NOT declared
+      totalLines: 2,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    const missing = findings.find((f) => f.tags.includes("missing"));
+
+    // Should detect zod as missing (it's a real import, not in package.json)
+    expect(missing).toBeDefined();
+    expect(missing!.message).toContain("zod");
+    // chalk should NOT be flagged (it's declared)
+    expect(missing!.message).not.toContain("chalk");
   });
 });

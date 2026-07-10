@@ -1,5 +1,6 @@
 import type { Analyzer } from "./base.js";
-import type { AnalysisContext, Finding } from "../core/types.js";
+import type { AnalysisContext, Finding, SourceFile } from "../core/types.js";
+import { parseImportsAst } from "../core/import-graph-ast.js";
 
 const NODE_BUILTINS = new Set([
   "assert", "buffer", "child_process", "cluster", "console", "constants",
@@ -108,24 +109,39 @@ export const dependenciesAnalyzer: Analyzer = {
 };
 
 function collectImportedPackages(
-  files: { content: string; relativePath: string }[],
+  files: SourceFile[],
 ): { imported: Set<string>; importLocations: Map<string, { file: string; line: number }[]> } {
   const imported = new Set<string>();
   const importLocations = new Map<string, { file: string; line: number }[]>();
 
   for (const file of files) {
-    for (const pattern of JS_IMPORT_PATTERNS) {
-      const regex = new RegExp(pattern.source, pattern.flags);
-      let match;
-      while ((match = regex.exec(file.content)) !== null) {
-        const pkg = extractJsPackageName(match[1]);
+    // Use AST when available — immune to matching inside comments/strings
+    if (file.tree) {
+      const { sources } = parseImportsAst(file.tree);
+      for (const source of sources) {
+        // Only care about bare package imports (not relative ./.. paths)
+        if (source.startsWith(".") || source.startsWith("/")) continue;
+        const pkg = extractJsPackageName(source);
         if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) continue;
         imported.add(pkg);
+        // AST doesn't give us line numbers for sources cheaply, so omit location
         if (!importLocations.has(pkg)) importLocations.set(pkg, []);
-        importLocations.get(pkg)!.push({
-          file: file.relativePath,
-          line: file.content.slice(0, match.index).split("\n").length,
-        });
+      }
+    } else {
+      // Fallback to regex for files without a parsed tree
+      for (const pattern of JS_IMPORT_PATTERNS) {
+        const regex = new RegExp(pattern.source, pattern.flags);
+        let match;
+        while ((match = regex.exec(file.content)) !== null) {
+          const pkg = extractJsPackageName(match[1]);
+          if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) continue;
+          imported.add(pkg);
+          if (!importLocations.has(pkg)) importLocations.set(pkg, []);
+          importLocations.get(pkg)!.push({
+            file: file.relativePath,
+            line: file.content.slice(0, match.index).split("\n").length,
+          });
+        }
       }
     }
   }
@@ -230,6 +246,9 @@ function analyzeJsDeps(ctx: AnalysisContext): Finding[] {
     ...Object.keys(pkg.peerDependencies ?? {}),
     ...Object.keys((pkg as any).optionalDependencies ?? {}),
   ]);
+
+  // Self-references (importing your own package name) are not missing deps
+  if (pkg.name) declared.add(pkg.name);
 
   // Detect monorepo workspace packages (workspace:* protocol, or packages
   // whose versions are "workspace:*", "workspace:^", "workspace:~", "*")
