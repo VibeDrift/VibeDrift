@@ -49,12 +49,18 @@ import {
  *        analyzer in computeScores. Sparse reimplementation stays informational.
  *        Deep-scan scores move for repos with concentrated reimplementation;
  *        local / free scores are unchanged.
+ *   v10: security route classification. Express `.all()` and Flask
+ *        `@app.route(methods=[...])` mutating routes now enter the security
+ *        auth/validation votes, so a repo with previously-uncounted unauthed
+ *        mutating routes reflects the security_posture drift it always had.
+ *        Only repos with those route shapes move; every other repo is byte
+ *        identical, and the bundled calibration corpus is unchanged.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v7";
+export const SCORING_VERSION = "v10";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
@@ -100,6 +106,57 @@ export function applyReimplementationConcentrationGate(
   return findings.map((f) =>
     f.analyzerId === REIMPL_HYGIENE_ID ? { ...f, analyzerId: REIMPL_DRIFT_ID } : f,
   );
+}
+
+/**
+ * Route-consistency security findings need a minimum peer sample before they
+ * move the composite. Below MIN_SECURITY_PEERS relevant routes a single
+ * deviator is too large a fraction of too small a sample to trust — the
+ * uniform-auth-gap baseline can fire on as few as 2 mutating routes. Such thin
+ * findings are re-tagged to a hygiene id so they still RENDER (informational)
+ * but never dent the Vibe Drift Score. Findings at or above the floor keep the
+ * drift id and score, ramped by groupSampleConfidence up to
+ * SAMPLE_FULL_CONFIDENCE (8). Route-independent taint findings (codedna-taint)
+ * are unaffected. Pure; returns the same array reference when nothing re-tags.
+ */
+export const MIN_SECURITY_PEERS = 4;
+const SECURITY_DRIFT_ID = "drift-security_posture";
+const SECURITY_ADVISORY_ID = "security_posture-advisory";
+
+export function applySecurityMinPeerFloor(findings: Finding[]): Finding[] {
+  let changed = false;
+  const out = findings.map((f) => {
+    if (f.analyzerId !== SECURITY_DRIFT_ID) return f;
+    const n = f.driftSignal?.totalRelevantFiles ?? 0;
+    if (n >= MIN_SECURITY_PEERS) return f;
+    changed = true;
+    return { ...f, analyzerId: SECURITY_ADVISORY_ID };
+  });
+  return changed ? out : findings;
+}
+
+// The route-consistency drift finding's `driftCategory`: SECURITY_DRIFT_ID
+// (the `Finding.analyzerId`) without the "drift-" prefix. The raw
+// `DriftFindingReport` array keeps this category tag but has no `analyzerId`,
+// so renderers that read `driftFindings` directly test the floor on this
+// instead of on the demoted analyzer id.
+const SECURITY_DRIFT_CATEGORY = "security_posture";
+
+/**
+ * DriftFinding-report view of the same min-peer floor `applySecurityMinPeerFloor`
+ * applies to `Finding`s. Output renderers (HTML, CSV, DOCX) read the raw
+ * `result.driftFindings` (`DriftFindingReport[]`), which has no `analyzerId`,
+ * so the Finding-level floor never touches it. They use this predicate to
+ * exclude below-floor route-consistency security findings from every surface
+ * that lists a drift finding, keeping those exports from contradicting the
+ * category's N/A. Single source of truth for the below-floor test so the three
+ * renderers cannot drift apart from each other or from applySecurityMinPeerFloor.
+ */
+export function isBelowSecurityPeerFloor(d: {
+  driftCategory: string;
+  totalRelevantFiles: number;
+}): boolean {
+  return d.driftCategory === SECURITY_DRIFT_CATEGORY && d.totalRelevantFiles < MIN_SECURITY_PEERS;
 }
 
 /**
@@ -679,6 +736,12 @@ export function computeScores(
   // its hygiene id and stays informational. Applied here so the gate sees the
   // full finding set together with totalLines.
   findings = applyReimplementationConcentrationGate(findings, totalLines);
+
+  // Route-consistency findings with too few peer routes to trust are demoted to
+  // an advisory hygiene id here (see applySecurityMinPeerFloor) so they render
+  // but do not move the composite. Applied after the reimplementation gate so
+  // both re-tags see the full finding set.
+  findings = applySecurityMinPeerFloor(findings);
 
   const mutateImpact = options.mutateImpact ?? true;
   const previousScoringVersion = options.previousScoringVersion;

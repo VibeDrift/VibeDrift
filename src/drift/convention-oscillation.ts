@@ -101,7 +101,7 @@ function extractSymbols(file: DriftFile): SymbolInfo[] {
         const conv = classifyName(name);
         if (!conv) continue;
         if (isIdiomatic(name, conv, type, file.language)) continue;
-        symbols.push({ name, convention: conv, symbolType: type, file: file.path, line: i + 1 });
+        symbols.push({ name, convention: conv, symbolType: type, file: file.relativePath, line: i + 1 });
       }
     }
   }
@@ -215,13 +215,13 @@ function analyzeFileNaming(ctx: DriftContext): DriftFinding[] {
     patterns: { pattern: NamingConvention; evidence: Evidence[] }[];
   }[] = [];
   for (const file of ctx.files) {
-    const classified = classifyBaseName(file.path);
+    const classified = classifyBaseName(file.relativePath);
     if (!classified) continue;
     // Empty evidence: filename drift is a file-level property, not a
     // line-level one. A synthetic "line 1" here renders as a misleading
     // code snippet in the report.
     profiles.push({
-      file: file.path,
+      file: file.relativePath,
       patterns: [{ pattern: classified.convention, evidence: [] }],
     });
   }

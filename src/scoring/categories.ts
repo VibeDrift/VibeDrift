@@ -109,14 +109,29 @@ export const CATEGORY_CONFIG: Record<ScoringCategory, CategoryConfig> = {
     ],
   },
   securityPosture: {
-    name: "Security Posture",
+    name: "Security Consistency",
     maxScore: 20,
     analyzers: [
       // Generic OWASP regex checks
       { id: "security", applicableLanguages: "all", kind: "hygiene" },
+      // Absolute-floor subset of the OWASP regex checks (private-key,
+      // aws-key, hardcoded-api-key, hardcoded-token, go-tls-skip-verify),
+      // emitted under a distinct id (see security.ts) so a high-precision
+      // badge can be rendered separately. Hygiene-kind: never dents the
+      // Vibe Drift composite, same as its parent "security" analyzer.
+      { id: "security-floor", applicableLanguages: "all", kind: "hygiene" },
       // Cross-file auth/validation/rate-limiting consistency — real drift
       // (analyzerId `drift-security_posture`, from driftCategory).
       { id: "drift-security_posture", applicableLanguages: "all", kind: "drift" },
+      // Route-consistency findings with too few peer routes to score
+      // (see applySecurityMinPeerFloor). Advisory: renders on the hygiene
+      // track, never touches the drift composite.
+      { id: "security_posture-advisory", applicableLanguages: "all", kind: "hygiene" },
+      // Suppression audit trail: cites every route excluded from the vote via
+      // `// @vibedrift-public` (see security-suppression.ts). Hygiene-kind so
+      // an exclusion is always visible but never moves the composite — the
+      // anti-abuse property is "counted and cited," not "silently ignored."
+      { id: "security-suppression", applicableLanguages: "all", kind: "hygiene" },
       // Code DNA taint analysis
       { id: "codedna-taint", applicableLanguages: "all", kind: "drift" },
     ],

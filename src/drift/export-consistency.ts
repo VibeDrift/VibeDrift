@@ -35,7 +35,7 @@ function isSourceFile(path: string): boolean {
 
 function analyzeExports(file: DriftFile): FileExportProfile | null {
   if (!file.language || !["javascript", "typescript"].includes(file.language)) return null;
-  if (!isSourceFile(file.path)) return null;
+  if (!isSourceFile(file.relativePath)) return null;
 
   const lines = file.content.split("\n");
   let hasDefaultExport = false;
@@ -59,7 +59,7 @@ function analyzeExports(file: DriftFile): FileExportProfile | null {
 
   if (!hasDefaultExport && !hasNamedExport) return null;
   const style: ExportStyle = hasDefaultExport ? "default_export" : "named_only";
-  return { file: file.path, style, evidence };
+  return { file: file.relativePath, style, evidence };
 }
 
 const STYLE_NAMES: Record<ExportStyle, string> = {

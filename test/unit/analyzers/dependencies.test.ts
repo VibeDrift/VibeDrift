@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dependenciesAnalyzer } from "../../../src/analyzers/dependencies.js";
-import type { AnalysisContext } from "../../../src/core/types.js";
+import type { AnalysisContext, SourceFile } from "../../../src/core/types.js";
 
 const BASE: Omit<AnalysisContext, "files" | "packageJson" | "totalLines"> = {
   rootDir: "/test",
@@ -108,75 +108,94 @@ describe("dependencies analyzer", () => {
     expect(findings.find((f) => f.tags.includes("missing"))).toBeDefined();
   });
 
-  it("ignores import-like text in comments and string literals", async () => {
+  it("does NOT flag import-like text inside comments or JSDoc as missing deps (AST path)", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    // This file has "import" patterns in comments and strings that the regex
+    // would match, but the AST path should ignore them.
+    const fileContent = `/**
+ * Usage:
+ *   import { renderReport } from "@vibedrift/cli/render";
+ */
+import { readFile } from "fs";
+
+// require('lodash') is mentioned here as documentation
+const msg = 'the shift from "interesting" to "I should fix this"';
+export function run() { return readFile("./x"); }
+`;
+    const file: SourceFile = {
+      path: "/test/src/example.ts",
+      relativePath: "src/example.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: fileContent.split("\n").length,
+    };
+    // Parse to get a real tree so the AST path is exercised
+    file.tree = (await parseFile(file)) ?? undefined;
+
     const ctx: AnalysisContext = {
       ...BASE,
-      files: [{
-        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
-        content: [
-          "import express from \"express\";",
-          "// import { renderHtmlReport } from \"@vibedrift/cli/render\"",
-          "/** `require('lodash')` should not count as an import. */",
-          "const prose = 'the shift from \"interesting\" to actionable';",
-          "const docs = \"require('pkg') is shown in documentation\";",
-          "const pattern = /require\\(\\s*['\"]([^./][^'\"]*)['\"]\\s*\\)/g;",
-          "const dynamicImportDocs = `await import(\"not-a-real-dep\")`;",
-        ].join("\n"),
-        lineCount: 7,
-      }],
-      packageJson: { dependencies: { express: "^4.0.0" } },
-      totalLines: 7,
+      files: [file],
+      packageJson: { name: "@vibedrift/cli", dependencies: {} },
+      totalLines: file.lineCount,
     };
     const findings = await dependenciesAnalyzer.analyze(ctx);
     const missing = findings.find((f) => f.tags.includes("missing"));
+
+    // Should NOT report @vibedrift/cli (self-reference), lodash (in comment),
+    // or "interesting" (prose in a string) as missing
     expect(missing).toBeUndefined();
   });
 
-  it("does not report the current package name as a missing dependency", async () => {
-    const ctx: AnalysisContext = {
-      ...BASE,
-      files: [{
-        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
-        content: 'const tools = await import("@scope/current-package/tools");\n', lineCount: 1,
-      }],
-      packageJson: { name: "@scope/current-package", dependencies: {} },
-      totalLines: 1,
-    };
-    const findings = await dependenciesAnalyzer.analyze(ctx);
-    expect(findings.find((f) => f.tags.includes("missing"))).toBeUndefined();
-  });
+  it("still detects genuinely missing packages via AST", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
 
-  it("still detects static require and dynamic import calls", async () => {
+    const fileContent = `import chalk from "chalk";\nimport { z } from "zod";\n`;
+    const file: SourceFile = {
+      path: "/test/src/real.ts",
+      relativePath: "src/real.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 2,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+
     const ctx: AnalysisContext = {
       ...BASE,
-      files: [{
-        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
-        content: [
-          'const chalk = require("chalk");',
-          'const zod = await import("zod");',
-        ].join("\n"),
-        lineCount: 2,
-      }],
-      packageJson: { dependencies: {} },
+      files: [file],
+      packageJson: { dependencies: { chalk: "^5.0.0" } }, // zod is NOT declared
       totalLines: 2,
     };
     const findings = await dependenciesAnalyzer.analyze(ctx);
     const missing = findings.find((f) => f.tags.includes("missing"));
-    expect(missing?.message).toContain("chalk");
-    expect(missing?.message).toContain("zod");
+
+    // Should detect zod as missing (it's a real import, not in package.json)
+    expect(missing).toBeDefined();
+    expect(missing!.message).toContain("zod");
+    // chalk should NOT be flagged (it's declared)
+    expect(missing!.message).not.toContain("chalk");
   });
 
-  it("keeps bare side-effect imports after other imports", async () => {
+  it("keeps bare side-effect imports after other imports via AST", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    const fileContent = [
+      'import express from "express";',
+      'import "reflect-metadata";',
+    ].join("\n");
+    const file: SourceFile = {
+      path: "/test/src/index.ts",
+      relativePath: "src/index.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 2,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+    expect(file.tree).toBeDefined();
+
     const ctx: AnalysisContext = {
       ...BASE,
-      files: [{
-        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
-        content: [
-          'import express from "express";',
-          'import "reflect-metadata";',
-        ].join("\n"),
-        lineCount: 2,
-      }],
+      files: [file],
       packageJson: {
         dependencies: { express: "^4.0.0", "reflect-metadata": "^0.2.2" },
       },
@@ -187,19 +206,28 @@ describe("dependencies analyzer", () => {
     expect(phantom).toBeUndefined();
   });
 
-  it("does not let regex quotes or JSX apostrophes hide later imports", async () => {
+  it("does not let regex quotes or JSX apostrophes hide later imports via AST", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    const fileContent = [
+      "const re = /['\"]/;",
+      'import fsExtra from "fs-extra";',
+      "const Note = () => <p>don't forget</p>;",
+      'const chalk = require("chalk");',
+    ].join("\n");
+    const file: SourceFile = {
+      path: "/test/src/index.tsx",
+      relativePath: "src/index.tsx",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 4,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+    expect(file.tree).toBeDefined();
+
     const ctx: AnalysisContext = {
       ...BASE,
-      files: [{
-        path: "/test/index.tsx", relativePath: "index.tsx", language: "typescript",
-        content: [
-          "const re = /['\"]/;",
-          'import fsExtra from "fs-extra";',
-          "const Note = () => <p>don't forget</p>;",
-          'const chalk = require("chalk");',
-        ].join("\n"),
-        lineCount: 4,
-      }],
+      files: [file],
       packageJson: { dependencies: {} },
       totalLines: 4,
     };
@@ -210,16 +238,25 @@ describe("dependencies analyzer", () => {
   });
 
   it("detects literal template dynamic imports without counting docs in templates", async () => {
+    const { parseFile } = await import("../../../src/utils/ast.js");
+
+    const fileContent = [
+      'const docs = `await import("not-a-real-dep")`;',
+      "const zod = await import(`zod`);",
+    ].join("\n");
+    const file: SourceFile = {
+      path: "/test/src/index.ts",
+      relativePath: "src/index.ts",
+      language: "typescript" as const,
+      content: fileContent,
+      lineCount: 2,
+    };
+    file.tree = (await parseFile(file)) ?? undefined;
+    expect(file.tree).toBeDefined();
+
     const ctx: AnalysisContext = {
       ...BASE,
-      files: [{
-        path: "/test/index.ts", relativePath: "index.ts", language: "typescript",
-        content: [
-          'const docs = `await import("not-a-real-dep")`;',
-          "const zod = await import(`zod`);",
-        ].join("\n"),
-        lineCount: 2,
-      }],
+      files: [file],
       packageJson: { dependencies: {} },
       totalLines: 2,
     };

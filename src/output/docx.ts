@@ -2,6 +2,7 @@ import { deflateRawSync } from "zlib";
 import type { ScanResult } from "../core/types.js";
 import { getVersion } from "../core/version.js";
 import { formatCount } from "./format.js";
+import { getAnalyzerKind } from "../scoring/categories.js";
 
 // ──── Minimal ZIP generator (OOXML requires ZIP container) ────
 
@@ -201,12 +202,18 @@ function buildDocxScoreTable(result: ScanResult): string {
   parts.push(para(""));
 
   const ds = result.driftScores ?? {};
-  const catRows = [
-    ["Architectural Consistency", ds.architectural_consistency],
-    ["Security Posture", ds.security_posture],
-    ["Semantic Duplication", ds.semantic_duplication],
-    ["Convention Drift", ds.naming_conventions],
-    ["Phantom Scaffolding", ds.phantom_scaffolding],
+  // securityPosture N/A on the floored composite (result.scores) means every
+  // security drift finding was below the peer floor and demoted to advisory.
+  // The driftScores breakdown credits an empty category full health
+  // (security_posture -> 14/14, 0 findings), so render that row as N/A to match
+  // the composite instead of a scored-looking value.
+  const securityIsNa = result.scores.securityPosture?.applicable === false;
+  const catRows: { name: string; cs: any; na: boolean }[] = [
+    { name: "Architectural Consistency", cs: ds.architectural_consistency, na: false },
+    { name: "Security Consistency", cs: ds.security_posture, na: securityIsNa },
+    { name: "Semantic Duplication", cs: ds.semantic_duplication, na: false },
+    { name: "Convention Drift", cs: ds.naming_conventions, na: false },
+    { name: "Phantom Scaffolding", cs: ds.phantom_scaffolding, na: false },
   ];
 
   const headerRow = tableRow([
@@ -215,13 +222,12 @@ function buildDocxScoreTable(result: ScanResult): string {
     tableCellSimple("Max", "D9E2F3", true),
     tableCellSimple("Findings", "D9E2F3", true),
   ]);
-  const dataRows = catRows.map(([catName, catScore]) => {
-    const cs = catScore as any;
+  const dataRows = catRows.map(({ name, cs, na }) => {
     return tableRow([
-      tableCellSimple(catName as string),
-      tableCellSimple(String(cs?.score ?? 0)),
-      tableCellSimple(String(cs?.maxScore ?? 0)),
-      tableCellSimple(String(cs?.findings ?? 0)),
+      tableCellSimple(name),
+      tableCellSimple(na ? "N/A" : String(cs?.score ?? 0)),
+      tableCellSimple(na ? "N/A" : String(cs?.maxScore ?? 0)),
+      tableCellSimple(na ? "N/A" : String(cs?.findings ?? 0)),
     ]);
   }).join("");
 
@@ -236,8 +242,12 @@ function buildDocxIntentSection(result: ScanResult): string {
   parts.push(para("The following patterns represent the dominant approach established by the majority of files in this codebase."));
   parts.push(para(""));
 
+  // result.driftFindings already excludes below-floor security findings
+  // (scoredDriftView at the scan source), so a thin finding's pattern is never
+  // presented as established codebase intent while its category scores N/A.
+  const driftFindings = result.driftFindings ?? [];
   const intentSeen = new Set<string>();
-  for (const d of (result.driftFindings ?? [])) {
+  for (const d of driftFindings) {
     const key = d.driftCategory + "::" + d.dominantPattern;
     if (intentSeen.has(key)) continue;
     intentSeen.add(key);
@@ -252,10 +262,14 @@ function buildDocxIntentSection(result: ScanResult): string {
 function buildDocxDriftSection(result: ScanResult): string {
   const parts: string[] = [];
   parts.push(para("3. DRIFT FINDINGS", "Heading1"));
-  parts.push(para(`${(result.driftFindings ?? []).length} cross-file contradictions detected.`));
+  // result.driftFindings already excludes below-floor security findings
+  // (scoredDriftView at the scan source), so a thin finding is never listed as
+  // a scored drift finding here and the count matches what is listed.
+  const driftFindings = result.driftFindings ?? [];
+  parts.push(para(`${driftFindings.length} cross-file contradictions detected.`));
   parts.push(para(""));
 
-  for (const d of (result.driftFindings ?? [])) {
+  for (const d of driftFindings) {
     const sevStr = d.severity === "error" ? "CRITICAL" : d.severity === "warning" ? "WARNING" : "INFO";
     parts.push(para(`[${sevStr}] ${d.finding}`, "Heading2"));
     parts.push(para(`Category: ${d.driftCategory.replace(/_/g, " ")} | Consistency: ${d.consistencyScore}% | Confidence: ${Math.round(d.confidence * 100)}%`));
@@ -399,7 +413,18 @@ function buildDocxPerFileTable(result: ScanResult): string {
 function buildDocxFindingsTable(result: ScanResult): string {
   const parts: string[] = [];
   parts.push(para("6. STATIC ANALYSIS FINDINGS", "Heading1"));
-  const statics = result.findings.filter((f) => !f.tags?.includes("drift") && !f.tags?.includes("codedna"));
+  // This is DOCX's only general (non-drift) findings section. Include every
+  // hygiene-kind finding here, even one that carries a legacy "drift" tag: a
+  // route-consistency security finding demoted below the peer floor is now
+  // hygiene-kind (analyzerId security_posture-advisory) but still tagged
+  // "drift" from its origin, and it is (correctly) excluded from the drift
+  // sections above. Without this kind-aware clause it would be filtered out
+  // here too and vanish from the DOCX entirely, going silent on exactly the
+  // small insecure repos this floor exists to keep visible.
+  const statics = result.findings.filter((f) =>
+    getAnalyzerKind(f.analyzerId) === "hygiene" ||
+    (!f.tags?.includes("drift") && !f.tags?.includes("codedna")),
+  );
   parts.push(para(`${statics.length} findings from ${13} static analyzers.`));
   parts.push(para(""));
 

@@ -21,14 +21,11 @@ import { homedir } from "os";
 import { createHash } from "crypto";
 import { join } from "path";
 import type { Finding, SourceFile, SupportedLanguage } from "./types.js";
+import { projectHash } from "./baseline.js";
 
 const ROOT_DIR = join(homedir(), ".vibedrift", "findings-cache");
 const TTL_MS = 30 * 24 * 3600 * 1000;
 const MAX_CACHE_BYTES = 500 * 1024 * 1024;
-
-function projectHash(rootDir: string): string {
-  return createHash("sha256").update(rootDir).digest("hex").slice(0, 16);
-}
 
 function projectDir(rootDir: string): string {
   return join(ROOT_DIR, projectHash(rootDir));

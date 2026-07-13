@@ -51,7 +51,7 @@ function detectDataAccess(file: DriftFile): { pattern: DataAccessPattern; eviden
 
   // Raw SQL
   const sqlEvidence = extractEvidence(c, /(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:FROM|INTO|SET|\*)\b/gi);
-  if (sqlEvidence.length > 0 && !isRepoFile(file.path)) {
+  if (sqlEvidence.length > 0 && !isRepoFile(file.relativePath)) {
     results.push({ pattern: "raw_sql", evidence: sqlEvidence });
   }
 
@@ -62,7 +62,7 @@ function detectDataAccess(file: DriftFile): { pattern: DataAccessPattern; eviden
 
   // Direct DB
   const dbEvidence = extractEvidence(c, /\b(?:db|pool|client)\.\s*(?:Query|Exec|QueryRow|query|execute|raw)\s*\(/g);
-  if (dbEvidence.length > 0 && !isRepoFile(file.path)) {
+  if (dbEvidence.length > 0 && !isRepoFile(file.relativePath)) {
     results.push({ pattern: "direct_db", evidence: dbEvidence });
   }
 
@@ -157,7 +157,7 @@ function detectDIPattern(file: DriftFile): { pattern: DIPattern; evidence: Evide
 
 function buildProfile(file: DriftFile): FileArchProfile | null {
   if (!file.language) return null;
-  if (!isAnalyzableSource(file.path)) return null;
+  if (!isAnalyzableSource(file.relativePath)) return null;
 
   const dataAccess = detectDataAccess(file);
   const errorHandling = detectErrorHandling(file);
@@ -167,7 +167,7 @@ function buildProfile(file: DriftFile): FileArchProfile | null {
   // Only include files that have meaningful patterns
   if (dataAccess.length === 0 && errorHandling.length === 0 && config.length === 0) return null;
 
-  return { file: file.path, language: file.language, dataAccess, errorHandling, config, di };
+  return { file: file.relativePath, language: file.language, dataAccess, errorHandling, config, di };
 }
 
 /**
@@ -225,7 +225,7 @@ const DATA_ACCESS_PRIORITY: DataAccessPattern[] = ["raw_sql", "direct_db", "http
  * stays in lockstep with this detector's vocabulary.
  */
 export function classifyDataAccessLabel(content: string, path: string): string | null {
-  const hits = detectDataAccess({ content, path, language: "typescript" } as DriftFile);
+  const hits = detectDataAccess({ content, relativePath: path, language: "typescript" } as DriftFile);
   if (hits.length === 0) return null;
   const primary = hits
     .slice()

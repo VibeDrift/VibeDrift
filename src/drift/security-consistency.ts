@@ -32,9 +32,18 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
+import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
+import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
+import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
 
-const MUTATION_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+// Canonical mutating set (upper-cased), shared with the in-loop classifier via
+// SECURITY_AST.MUTATING so batch and in-loop can never disagree. Includes ALL
+// (Express .all() handles every verb) so an unauthed .all() route is not
+// silently excluded from the auth vote.
+const MUTATION_METHODS = [...SECURITY_AST.MUTATING].map((m) => m.toUpperCase());
+// Body-bearing methods for the validation vote (DELETE usually has no body).
+const BODY_METHODS = ["POST", "PUT", "PATCH", "ALL"];
 
 // Does the codebase use auth machinery anywhere? If it does, a mutating route
 // with no auth is drift ("you know how to auth — this route forgot"), not an
@@ -70,7 +79,7 @@ function analyzeUniformAuthGap(
 
   return {
     detector: "security_posture",
-    subCategory: "Auth middleware",
+    subCategory: SECURITY_SUBCATEGORIES.auth,
     driftCategory: "security_posture",
     severity: unauthed.length > 2 ? "error" : "warning",
     confidence,
@@ -93,13 +102,13 @@ function analyzeUniformAuthGap(
   };
 }
 
-interface FileMiddleware {
+export interface FileMiddleware {
   hasAuth: boolean;
   hasValidation: boolean;
   hasRateLimit: boolean;
 }
 
-interface RouteInfo {
+export interface RouteInfo {
   method: string;
   path: string;
   file: string;
@@ -118,11 +127,21 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
     if (!file.language) continue;
     const c = file.content;
 
-    // JS/TS — Express / Hono / Fastify / Koa
-    // router.use(requireAuth) | app.use(passport.authenticate(...)) | router.use(authMiddleware)
-    const jsAuth = /(?:router|app|router\w*|api\w*)\s*\.\s*use\s*\(\s*[^,)]*?(?:auth|requireAuth|isAuthenticated|passport|verifyToken|jwt)/i.test(c);
-    const jsRateLimit = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:rateLimit|throttle|limiter)/i.test(c);
-    const jsValidation = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:validate|validator|joi|zod|celebrate)/i.test(c);
+    // JS/TS — Express / Hono / Fastify / Koa. AST when a parsed tree is
+    // available (structural: gated on a router/app receiver, not just
+    // proximity of the keyword); regex fallback otherwise.
+    let jsAuth: boolean, jsRateLimit: boolean, jsValidation: boolean;
+    if (file.tree && (file.language === "javascript" || file.language === "typescript")) {
+      const mw = extractFileMiddlewareAst(file.tree);
+      jsAuth = mw.hasAuth;
+      jsRateLimit = mw.hasRateLimit;
+      jsValidation = mw.hasValidation;
+    } else {
+      // router.use(requireAuth) | app.use(passport.authenticate(...)) | router.use(authMiddleware)
+      jsAuth = /(?:router|app|router\w*|api\w*)\s*\.\s*use\s*\(\s*[^,)]*?(?:auth|requireAuth|isAuthenticated|passport|verifyToken|jwt)/i.test(c);
+      jsRateLimit = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:rateLimit|throttle|limiter)/i.test(c);
+      jsValidation = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:validate|validator|joi|zod|celebrate)/i.test(c);
+    }
 
     // Go — Echo / Gin / Chi
     // e.Use(AuthMiddleware) | r.Use(authMiddleware) | g := e.Group(...); g.Use(...)
@@ -136,7 +155,7 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
     const pyRateLimit = /(?:@\w+\.\w+\s*\([^)]*[Ll]imit|RateLimiter|Limiter\(|add_middleware\s*\([^,)]*[Ll]imit)/.test(c);
     const pyValidation = /add_middleware\s*\([^,)]*[Vv]alid/.test(c);
 
-    index.set(file.path, {
+    index.set(file.relativePath, {
       hasAuth: jsAuth || goAuth || pyAuth,
       hasValidation: jsValidation || goValidation || pyValidation,
       hasRateLimit: jsRateLimit || goRateLimit || pyRateLimit,
@@ -172,7 +191,7 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
   const lines = file.content.split("\n");
   const echoPattern = /\.\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(\s*"([^"]+)"/;
   const gorillaPattern = /HandleFunc\s*\(\s*"([^"]+)".*\.Methods\s*\(\s*"(\w+)"/;
-  const fileMiddleware = fileMw.get(file.path);
+  const fileMiddleware = fileMw.get(file.relativePath);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -191,7 +210,7 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
     const perRate = /[Rr]ate[Ll]imit|[Tt]hrottle/.test(context + handlerContent);
 
     routes.push({
-      method, path, file: file.path, line: i + 1,
+      method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
@@ -201,9 +220,17 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
 }
 
 function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
+  const fileMiddleware = fileMw.get(file.relativePath);
+  if (file.tree) {
+    routes.push(...extractJsRoutesAst(file.tree, file.relativePath, fileMiddleware));
+    return;
+  }
+  extractJsRoutesRegex(file, routes, fileMiddleware);
+}
+
+function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddleware: FileMiddleware | undefined) {
   const lines = file.content.split("\n");
   const expressPattern = /\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]/;
-  const fileMiddleware = fileMw.get(file.path);
 
   for (let i = 0; i < lines.length; i++) {
     const match = lines[i].match(expressPattern);
@@ -217,7 +244,7 @@ function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
     const perRate = /rateLimit|throttle|limiter/.test(context);
 
     routes.push({
-      method, path, file: file.path, line: i + 1,
+      method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
@@ -226,16 +253,78 @@ function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
   }
 }
 
+/** Text inside a Python route decorator's parentheses: from the first "(" on
+ *  line `start` to its matching ")", spanning continuation lines. Bounded by
+ *  paren depth so `methods=` is read from THIS decorator only and can never
+ *  bleed into an adjacent route's decorator. Parens inside string literals
+ *  (e.g. a route path like "/weird(path") are skipped, so an unbalanced literal
+ *  paren cannot throw off the depth count and leak into the next route. */
+function balancedDecoratorArgs(lines: string[], start: number): string {
+  let depth = 0;
+  let started = false;
+  let out = "";
+  let quote: string | null = null; // active string-literal quote char, or null
+  for (let j = start; j < lines.length; j++) {
+    const line = lines[j];
+    for (let k = 0; k < line.length; k++) {
+      const ch = line[k];
+      if (quote) {
+        // Inside a string literal: only a matching unescaped quote ends it;
+        // parens here are path/text, not structure.
+        if (ch === "\\") {
+          if (started) out += ch + (line[k + 1] ?? "");
+          k++; // skip the escaped char
+          continue;
+        }
+        if (ch === quote) quote = null;
+        if (started) out += ch;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        if (started) out += ch;
+        continue;
+      }
+      if (ch === "(") {
+        depth++;
+        started = true;
+      } else if (ch === ")") {
+        depth--;
+      }
+      if (started) out += ch;
+      if (started && depth === 0) return out;
+    }
+    out += " ";
+    if (j - start > 6) return out; // defensive cap for a malformed decorator
+  }
+  return out;
+}
+
 function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
   const lines = file.content.split("\n");
   const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
-  const fileMiddleware = fileMw.get(file.path);
+  const fileMiddleware = fileMw.get(file.relativePath);
 
   for (let i = 0; i < lines.length; i++) {
     const match = lines[i].match(routePattern);
     if (!match) continue;
     const path = match[1];
-    const method = lines[i].match(/\.(get|post|put|patch|delete)/)?.[1]?.toUpperCase() ?? "ANY";
+    // Flask's @app.route defaults to GET when no methods= kwarg is present, NOT an
+    // unknown "ANY". Decorator-verb style (@app.post) resolves directly; the
+    // methods=[...] kwarg (Flask/others) is parsed so a mutating verb classifies
+    // the route as mutating. The kwarg is read from the route's own decorator
+    // via balanced paren scanning, so it can never bleed into an adjacent
+    // route's decorator even when routes sit right next to each other.
+    const decoratorVerb = lines[i].match(/\.(get|post|put|patch|delete)\s*\(/)?.[1]?.toUpperCase();
+    let method = decoratorVerb ?? "GET";
+    const decoratorArgs = balancedDecoratorArgs(lines, i);
+    const methodsKw = decoratorArgs.match(/methods\s*=\s*\[([^\]]*)\]/i);
+    if (methodsKw) {
+      const verbs = (methodsKw[1].match(/["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']/gi) ?? [])
+        .map((v) => v.replace(/["']/g, "").toUpperCase());
+      const mutating = verbs.find((v) => MUTATION_METHODS.includes(v));
+      method = mutating ?? verbs[0] ?? method;
+    }
     const context = lines.slice(i, Math.min(lines.length, i + 30)).join("\n");
 
     const perAuth = /login_required|jwt_required|@requires|permission|token/.test(context);
@@ -243,7 +332,7 @@ function extractPythonRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<s
     const perRate = /rate_limit|throttle|limiter/.test(context);
 
     routes.push({
-      method, path, file: file.path, line: i + 1,
+      method, path, file: file.relativePath, line: i + 1,
       hasAuth: inheritedAuth(perAuth, fileMiddleware),
       hasValidation: inheritedValidation(perVal, fileMiddleware),
       hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
@@ -258,7 +347,26 @@ function findHandlerContent(fullContent: string, routePath: string): string {
   return fullContent.slice(Math.max(0, idx - 500), Math.min(fullContent.length, idx + 2000));
 }
 
-// ─── Phase 3: dominance vote per security property ───────────────────
+// ─── Phase 3: dominance vote per security property, scoped per directory ──
+
+/** Top-level directory a route's file lives in, e.g. "src/routes/admin/users.ts"
+ *  -> "src/routes/admin". Routes under the same router directory vote together,
+ *  so an intentionally-public router isn't judged against an admin router's
+ *  auth baseline (or vice versa). */
+function routeGroupKey(filePath: string): string {
+  const parts = filePath.split("/");
+  return parts.slice(0, Math.max(1, parts.length - 1)).join("/");
+}
+
+function groupRoutes(routes: RouteInfo[]): RouteInfo[][] {
+  const byDir = new Map<string, RouteInfo[]>();
+  for (const r of routes) {
+    const k = routeGroupKey(r.file);
+    const g = byDir.get(k);
+    if (g) g.push(r); else byDir.set(k, [r]);
+  }
+  return [...byDir.values()];
+}
 
 function analyzeSecurityProperty(
   routes: RouteInfo[],
@@ -304,19 +412,58 @@ export const securityConsistency: DriftDetector = {
   detect(ctx: DriftContext): DriftFinding[] {
     const findings: DriftFinding[] = [];
     const fileMw = buildFileMiddlewareIndex(ctx.files);
-    const routes = extractRoutes(ctx.files, fileMw);
+    // Denominator-removing suppression: a route carrying an inline
+    // `// @vibedrift-public` annotation, OR whose file matches a config
+    // `security.allowlist` glob (ctx.projectConfig), is dropped BEFORE it
+    // reaches any vote below, so it never inflates the "unauthed" numerator
+    // or the total-routes denominator. Every suppression is cited via the
+    // audit finding pushed immediately below, independent of whatever the
+    // votes decide — a suppressed route always leaves a trail. ctx.projectConfig
+    // is undefined on paths that build their own AnalysisContext without
+    // loading one (e.g. the MCP/baseline path), in which case the allowlist
+    // arm simply no-ops and only annotations suppress.
+    const { kept: routes, suppressed } = applyRouteSuppressions(
+      extractRoutes(ctx.files, fileMw),
+      ctx.files,
+      ctx.projectConfig ?? null,
+    );
+    if (suppressed.length > 0) {
+      findings.push(buildSuppressionAuditFinding(suppressed));
+    }
     if (routes.length < 2) return findings;
 
     const healthPaths = /^\/(?:health|healthz|ready|metrics|ping)$/;
     const authHint = pickIntentHint(ctx, "security_posture");
 
-    const authFinding = analyzeSecurityProperty(routes, "Auth middleware", (r) => r.hasAuth, healthPaths);
-    if (authFinding) {
-      findings.push(authFinding);
-    } else {
+    // Vote per top-level route directory rather than globally, so an
+    // intentionally-public router (e.g. src/routes/public) isn't judged
+    // against a different router's baseline (e.g. src/routes/admin) and vice
+    // versa. analyzeSecurityProperty already returns null under 2 applicable
+    // routes, so small groups are naturally silent — no separate min-size gate.
+    const groups = groupRoutes(routes);
+
+    for (const group of groups) {
+      // Auth applies to every state-changing route (POST/PUT/PATCH/DELETE).
+      // Rescoped from `group`: counting read-only GETs put intentionally-public
+      // reads in the denominator and made the "X of Y mutating routes" line false.
+      // Same set as analyzeUniformAuthGap so the primary vote and its fallback agree.
+      const groupAuthRoutes = group.filter((r) => MUTATION_METHODS.includes(r.method));
+      const authFinding = analyzeSecurityProperty(groupAuthRoutes, SECURITY_SUBCATEGORIES.auth, (r) => r.hasAuth, healthPaths);
+      if (authFinding) {
+        findings.push(authFinding);
+        continue;
+      }
       // Dominance vote stayed silent (e.g. uniformly unauthed → ratio 0). Fall
       // back to the absolute baseline so uniform wrongness isn't invisible.
-      const gap = analyzeUniformAuthGap(routes, {
+      // hasMachinery stays repo-GLOBAL, not scoped to this group: "the
+      // codebase knows how to auth" is evidence wherever it lives, including
+      // inline requireAuth in a sibling directory's route file. Scoping this
+      // to the group silently disables the uniform-auth-gap safety net for
+      // any directory whose only "repo authenticates elsewhere" evidence is
+      // another group's inline auth calls (as opposed to a standalone
+      // middleware/auth.ts file) — exactly the multi-directory layout this
+      // task makes more common.
+      const gap = analyzeUniformAuthGap(group, {
         hasMachinery: repoHasAuthMachinery(ctx.files),
         hint: authHint,
         healthPaths,
@@ -324,14 +471,16 @@ export const securityConsistency: DriftDetector = {
       if (gap) findings.push(gap);
     }
 
-    const mutationRoutes = routes.filter((r) => ["POST", "PUT", "PATCH"].includes(r.method));
-    if (mutationRoutes.length >= 2) {
-      const valFinding = analyzeSecurityProperty(mutationRoutes, "Input validation", (r) => r.hasValidation, healthPaths);
+    for (const group of groups) {
+      const groupMutationRoutes = group.filter((r) => BODY_METHODS.includes(r.method));
+      const valFinding = analyzeSecurityProperty(groupMutationRoutes, SECURITY_SUBCATEGORIES.validation, (r) => r.hasValidation, healthPaths);
       if (valFinding) findings.push(valFinding);
     }
 
-    const rateLimitFinding = analyzeSecurityProperty(routes, "Rate limiting", (r) => r.hasRateLimit, healthPaths);
-    if (rateLimitFinding) findings.push(rateLimitFinding);
+    for (const group of groups) {
+      const rateLimitFinding = analyzeSecurityProperty(group, SECURITY_SUBCATEGORIES.rateLimit, (r) => r.hasRateLimit, healthPaths);
+      if (rateLimitFinding) findings.push(rateLimitFinding);
+    }
 
     return findings;
   },

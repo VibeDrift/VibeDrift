@@ -1,5 +1,6 @@
 import type { Analyzer } from "./base.js";
-import type { AnalysisContext, Finding, SyntaxNode } from "../core/types.js";
+import type { AnalysisContext, Finding, SourceFile } from "../core/types.js";
+import { parseImportsAst } from "../core/import-graph-ast.js";
 
 const NODE_BUILTINS = new Set([
   "assert", "buffer", "child_process", "cluster", "console", "constants",
@@ -11,14 +12,10 @@ const NODE_BUILTINS = new Set([
 ]);
 
 const JS_IMPORT_PATTERNS = [
-  // ESM imports/exports, including bare side-effect imports after any line.
-  /^\s*(?:import|export)\s+(?:[^;\n]*?\s+from\s+)?['"]([^./][^'"]*)['"]/gm,
-  // CommonJS require in expression/statement positions. This intentionally
-  // avoids matching regex sources or prose strings that merely mention require().
-  /(?:^|[=(:,{[]\s*|\breturn\s+)require\(\s*['"]([^./][^'"]*)['"]\s*\)/gm,
-  // Dynamic imports: await import("pkg") or import(`pkg`). Template literals
-  // count only when the specifier is a literal package name with no ${...}.
-  /(?:^|[=(:,{[]\s*|\bawait\s+|\breturn\s+)import\(\s*['"`]([^./][^'"`$]*)['"`]\s*\)/gm,
+  /(?:import|from)\s+['"]([^./][^'"]*)['"]/g,
+  /require\(\s*['"]([^./][^'"]*)['"]\s*\)/g,
+  // Dynamic imports: await import("pkg") or import("pkg")
+  /import\(\s*['"]([^./][^'"]*)['"]\s*\)/g,
 ];
 
 // Test fixture directories — their imports are intentionally broken/nonexistent
@@ -68,92 +65,6 @@ function extractJsPackageName(specifier: string): string {
   return specifier.split("/")[0];
 }
 
-function unquoteSpecifier(text: string): string | null {
-  const quote = text[0];
-  if ((quote !== "'" && quote !== '"' && quote !== "`") || text.at(-1) !== quote) return null;
-  if (quote === "`" && text.includes("${")) return null;
-  return text.slice(1, -1);
-}
-
-function firstStringLikeChild(node: SyntaxNode): SyntaxNode | null {
-  if (node.type === "string" || node.type === "string_fragment" || node.type === "template_string") {
-    return node;
-  }
-  for (let i = 0; i < node.childCount; i++) {
-    const found = firstStringLikeChild(node.child(i)!);
-    if (found) return found;
-  }
-  return null;
-}
-
-function callCalleeText(node: SyntaxNode): string | null {
-  const callee = node.childForFieldName("function") ?? node.firstChild;
-  return callee?.text ?? null;
-}
-
-function recordImportedSpecifier(
-  specifier: string,
-  file: { relativePath: string },
-  line: number,
-  imported: Set<string>,
-  importLocations: Map<string, { file: string; line: number }[]>,
-): void {
-  const pkg = extractJsPackageName(specifier);
-  if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) return;
-  imported.add(pkg);
-  if (!importLocations.has(pkg)) importLocations.set(pkg, []);
-  importLocations.get(pkg)!.push({ file: file.relativePath, line });
-}
-
-function collectImportedPackagesFromAst(
-  root: SyntaxNode,
-  file: { relativePath: string },
-  imported: Set<string>,
-  importLocations: Map<string, { file: string; line: number }[]>,
-): void {
-  function visit(node: SyntaxNode): void {
-    if (node.type === "import_statement" || node.type === "export_statement") {
-      const stringNode = firstStringLikeChild(node);
-      const specifier = stringNode ? unquoteSpecifier(stringNode.text) : null;
-      if (specifier && !specifier.startsWith(".")) {
-        recordImportedSpecifier(specifier, file, node.startPosition.row + 1, imported, importLocations);
-      }
-      return;
-    }
-
-    if (node.type === "call_expression") {
-      const callee = callCalleeText(node);
-      if (callee === "require" || callee === "import") {
-        const args = node.childForFieldName("arguments") ?? node;
-        const stringNode = firstStringLikeChild(args);
-        const specifier = stringNode ? unquoteSpecifier(stringNode.text) : null;
-        if (specifier && !specifier.startsWith(".")) {
-          recordImportedSpecifier(specifier, file, node.startPosition.row + 1, imported, importLocations);
-        }
-      }
-      return;
-    }
-
-    for (let i = 0; i < node.childCount; i++) {
-      visit(node.child(i)!);
-    }
-  }
-
-  visit(root);
-}
-
-function stripJsCommentsAndNonImportTemplates(content: string): string {
-  const withoutComments = content
-    .replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "))
-    .replace(/\/\/.*$/gm, (match) => " ".repeat(match.length));
-
-  return withoutComments.replace(/`(?:\\[\s\S]|[^`\\])*`/g, (match, offset) => {
-    const prefix = withoutComments.slice(Math.max(0, offset - 16), offset);
-    if (/\bimport\(\s*$/.test(prefix)) return match;
-    return match.replace(/[^\n]/g, " ");
-  });
-}
-
 const DEV_TOOL_PATTERNS = [
   "@types/", "eslint", "prettier", "tsup", "vitest", "typescript",
   "jest", "mocha", "webpack", "rollup", "vite", "babel", "postcss",
@@ -198,29 +109,39 @@ export const dependenciesAnalyzer: Analyzer = {
 };
 
 function collectImportedPackages(
-  files: { content: string; relativePath: string; tree?: { rootNode: SyntaxNode } }[],
+  files: SourceFile[],
 ): { imported: Set<string>; importLocations: Map<string, { file: string; line: number }[]> } {
   const imported = new Set<string>();
   const importLocations = new Map<string, { file: string; line: number }[]>();
 
   for (const file of files) {
+    // Use AST when available — immune to matching inside comments/strings
     if (file.tree) {
-      collectImportedPackagesFromAst(file.tree.rootNode, file, imported, importLocations);
-      continue;
-    }
-
-    const codeContent = stripJsCommentsAndNonImportTemplates(file.content);
-    for (const pattern of JS_IMPORT_PATTERNS) {
-      const regex = new RegExp(pattern.source, pattern.flags);
-      let match;
-      while ((match = regex.exec(codeContent)) !== null) {
-        recordImportedSpecifier(
-          match[1],
-          file,
-          file.content.slice(0, match.index).split("\n").length,
-          imported,
-          importLocations,
-        );
+      const { sources } = parseImportsAst(file.tree);
+      for (const source of sources) {
+        // Only care about bare package imports (not relative ./.. paths)
+        if (source.startsWith(".") || source.startsWith("/")) continue;
+        const pkg = extractJsPackageName(source);
+        if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) continue;
+        imported.add(pkg);
+        // AST doesn't give us line numbers for sources cheaply, so omit location
+        if (!importLocations.has(pkg)) importLocations.set(pkg, []);
+      }
+    } else {
+      // Fallback to regex for files without a parsed tree
+      for (const pattern of JS_IMPORT_PATTERNS) {
+        const regex = new RegExp(pattern.source, pattern.flags);
+        let match;
+        while ((match = regex.exec(file.content)) !== null) {
+          const pkg = extractJsPackageName(match[1]);
+          if (NODE_BUILTINS.has(pkg) || pkg.startsWith("node:") || pkg.startsWith("@/") || pkg.startsWith("~")) continue;
+          imported.add(pkg);
+          if (!importLocations.has(pkg)) importLocations.set(pkg, []);
+          importLocations.get(pkg)!.push({
+            file: file.relativePath,
+            line: file.content.slice(0, match.index).split("\n").length,
+          });
+        }
       }
     }
   }
@@ -270,7 +191,7 @@ function detectPhantomDeps(declared: Set<string>, imported: Set<string>, devTool
       severity: realPhantom.length > 5 ? "error" : "warning",
       confidence: 0.75,
       message: `${realPhantom.length} phantom dependencies (declared but unused): ${realPhantom.slice(0, 5).join(", ")}${realPhantom.length > 5 ? "..." : ""}`,
-      locations: realPhantom.map((_p) => ({ file: "package.json" })),
+      locations: realPhantom.map((p) => ({ file: "package.json" })),
       tags: ["deps", "phantom", "js"],
     }];
   }
@@ -320,12 +241,14 @@ function analyzeJsDeps(ctx: AnalysisContext): Finding[] {
 
   // Include optionalDependencies and detect workspace packages
   const declared = new Set<string>([
-    pkg.name,
     ...Object.keys(pkg.dependencies ?? {}),
     ...Object.keys(pkg.devDependencies ?? {}),
     ...Object.keys(pkg.peerDependencies ?? {}),
     ...Object.keys((pkg as any).optionalDependencies ?? {}),
-  ].filter((name): name is string => typeof name === "string" && name.length > 0));
+  ]);
+
+  // Self-references (importing your own package name) are not missing deps
+  if (pkg.name) declared.add(pkg.name);
 
   // Detect monorepo workspace packages (workspace:* protocol, or packages
   // whose versions are "workspace:*", "workspace:^", "workspace:~", "*")

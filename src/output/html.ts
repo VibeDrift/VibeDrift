@@ -6,12 +6,13 @@ import { hasMeaningfulImpact } from "./fix-plan-select.js";
 import { getAnalyzerKind, DRIFT_DISPLAY_CATEGORIES } from "../scoring/categories.js";
 import { applicableCategoryCount, compositeScopeNote } from "./terminal.js";
 import { formatCount } from "./format.js";
+import { hasFloorTrip } from "./floor-badge.js";
 
 const SCORING_CATEGORY_LABELS: Record<string, string> = {
   architecturalConsistency: "Architectural",
   redundancy: "Redundancy",
   dependencyHealth: "Dependencies",
-  securityPosture: "Security",
+  securityPosture: "Security Consistency",
   intentClarity: "Intent Clarity",
 };
 
@@ -407,11 +408,21 @@ function buildSummaryHero(result: ScanResult, detailedUrl: string): string {
     ? `<a class="btn btn-primary" href="#fix-first">Fix the top drifts</a>`
     : "";
 
+  // Floor-gate badge (render-only): reuses the existing .badge.warn chip
+  // (yellow accent, no new color) already used in the findings library.
+  // Never changes compositeScore or g.letter above — see the grade-invariance
+  // test in test/unit/output/floor-badge.test.ts.
+  const floorTrip = hasFloorTrip(result.findings);
+  const floorBadge = floorTrip.tripped
+    ? `<span class="badge warn" title="${esc(floorTrip.reasons.join(", "))}">Security floor tripped</span>`
+    : "";
+
   return `<section class="va-hero">
     <div class="va-hero-top">
       <div class="va-scorewrap">
         <span class="va-score num" style="color:${g.color}">${compositeScore.toFixed(1)}<span class="s"> /${maxCompositeScore}</span></span>
         <span class="va-grade" style="background:${g.tint};color:${g.color}">${g.letter}</span>
+        ${floorBadge}
       </div>
       ${trend}
     </div>
@@ -430,15 +441,26 @@ function buildSummaryHero(result: ScanResult, detailedUrl: string): string {
 
 function buildCategoryBreakdown(result: ScanResult): string {
   const scores = result.scores as unknown as Record<string, { score: number; maxScore: number; applicable: boolean }>;
+  // Floor-gate badge (render-only): folded into the Security Consistency
+  // card's gloss note below. Never affects the card's score/color — see the
+  // grade-invariance test in test/unit/output/floor-badge.test.ts.
+  const floorTrip = hasFloorTrip(result.findings);
   // Dependency Health is not shown on the drift score display — it has no drift
   // detector and lives on the Hygiene track. Exclude it from the drift cards.
   const cards = SCORING_CATEGORY_ORDER.filter((cat) => cat !== "dependencyHealth").map((cat) => {
     const s = scores[cat];
     const label = esc(SCORING_CATEGORY_LABELS[cat]);
+    const floorNote = cat === "securityPosture" && floorTrip.tripped
+      ? `<div class="note"><span class="badge warn">Security floor</span> ${esc(floorTrip.reasons.join(", "))}. Fix before shipping (does not change the score).</div>`
+      : "";
+    const gloss =
+      cat === "securityPosture"
+        ? `<div class="note">Consistency of this repo's own auth and validation patterns, not the absence of vulnerabilities.</div>${floorNote}`
+        : "";
     if (!s || !s.applicable) {
       // These drift detectors ran but found no applicable code in this repo.
       const naNote = "No findings in this repo";
-      return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div></div>`;
+      return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div>${gloss}</div>`;
     }
     const catPct = s.maxScore > 0 ? (s.score / s.maxScore) * 100 : 0;
     const col = pctToken(catPct);
@@ -446,6 +468,7 @@ function buildCategoryBreakdown(result: ScanResult): string {
       <div class="top"><span class="name">${label}</span><span class="gdot" style="background:${col}"></span></div>
       <div class="val num">${s.score.toFixed(1)}<span class="s"> /${s.maxScore}</span></div>
       <div class="t"><i style="width:${catPct.toFixed(0)}%;background:${col}"></i></div>
+      ${gloss}
     </div>`;
   }).join("");
 
@@ -653,7 +676,7 @@ function buildIntentCoherenceHeatmap(result: ScanResult): string {
 
 const DRIFT_CAT_LABEL: Record<string, string> = {
   architectural_consistency: "Architectural consistency",
-  security_posture: "Security posture",
+  security_posture: "Security consistency",
   semantic_duplication: "Semantic duplication",
   naming_conventions: "Convention drift",
   phantom_scaffolding: "Phantom scaffolding",
@@ -686,6 +709,9 @@ function buildDriftFindingsLibrary(result: ScanResult): string {
   const groups = order.map((cat) => ({
     cat,
     label: DRIFT_CAT_LABEL[cat] ?? cat,
+    // result.driftFindings already excludes below-floor route-consistency
+    // security findings (scoredDriftView at the scan source), so no per-widget
+    // gate is needed here.
     findings: (result.driftFindings ?? []).filter((f) => f.driftCategory === cat),
   })).filter((g) => g.findings.length > 0);
   if (groups.length === 0) return "";
@@ -951,6 +977,9 @@ function buildEmbeddedData(result: ScanResult): string {
     fileCount: result.context.files.length,
     totalLines: result.context.totalLines,
     scanTimeMs: result.scanTimeMs,
+    // result.driftFindings already excludes below-floor security findings
+    // (scoredDriftView at the scan source), so the client-side "Export CSV"
+    // data cannot list one under "DRIFT FINDINGS" either.
     driftFindings: (result.driftFindings ?? []).map((d) => ({
       severity: d.severity,
       category: d.driftCategory,
@@ -1137,7 +1166,7 @@ a:hover{text-decoration-color:var(--brand)}
 .va-cat .t{height:5px;border-radius:3px;background:var(--bg-code);margin-top:10px;overflow:hidden}
 .va-cat .t i{display:block;height:100%;border-radius:3px}
 .va-cat.na .val{color:var(--text-tertiary);font-size:18px}
-.va-cat.na .note{font-size:11px;color:var(--text-tertiary);margin-top:8px}
+.va-cat .note{font-size:11px;color:var(--text-tertiary);margin-top:8px}
 
 /* fix first */
 .va-fix{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}

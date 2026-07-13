@@ -44,10 +44,17 @@ function csvScoreCategories(result: ScanResult): string[] {
 
   const ds = result.driftScores ?? {};
   if (Object.keys(ds).length > 0) {
+    // securityPosture N/A on the floored composite (result.scores) means every
+    // security drift finding was below the peer floor and demoted to advisory.
+    // The driftScores breakdown credits an empty category full health
+    // (security_posture -> 14/14, 0 findings), which would still read as a
+    // scored bar next to the composite's N/A. Suppress that one row to match.
+    const securityIsNa = result.scores.securityPosture?.applicable === false;
     lines.push("DRIFT SCORES");
     lines.push(row("Category", "Score", "Max Score", "Findings", "Grade"));
     for (const [key, val] of Object.entries(ds)) {
       if (key === "composite" || key === "grade") continue;
+      if (key === "security_posture" && securityIsNa) continue;
       const v = val as any;
       if (v?.score !== undefined) {
         lines.push(row(key, v.score, v.maxScore, v.findings ?? 0));
@@ -59,11 +66,15 @@ function csvScoreCategories(result: ScanResult): string[] {
 }
 
 function csvDriftFindings(result: ScanResult): string[] {
-  if ((result.driftFindings ?? []).length === 0) return [];
+  // result.driftFindings already excludes below-floor route-consistency
+  // security findings (scoredDriftView at the scan source), so a thin finding
+  // is never listed as a scored drift finding here.
+  const driftFindings = result.driftFindings ?? [];
+  if (driftFindings.length === 0) return [];
   const lines: string[] = [];
   lines.push("DRIFT FINDINGS");
   lines.push(row("Severity", "Category", "Finding", "Dominant Pattern", "Dominant Count", "Total Files", "Consistency %", "Deviating Files", "Recommendation"));
-  for (const d of result.driftFindings) {
+  for (const d of driftFindings) {
     const devFiles = d.deviatingFiles.map((f) => f.path).join("; ");
     lines.push(row(
       d.severity, d.driftCategory, d.finding,

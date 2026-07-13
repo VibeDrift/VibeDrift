@@ -6,12 +6,17 @@ import { dominantPatternFor, run, DIMENSIONS } from "../../../../src/mcp/tools/g
 import { buildBaseline, writeBaseline, type RepoDriftBaseline } from "../../../../src/core/baseline.js";
 import { __clearBaselineCache } from "../../../../src/mcp/baseline-provider.js";
 
-function baselineWith(vote: Partial<RepoDriftBaseline["perCategoryVote"]>, fileCount = 5): RepoDriftBaseline {
+function baselineWith(
+  vote: Partial<RepoDriftBaseline["perCategoryVote"]>,
+  fileCount = 5,
+  securitySubVotes?: RepoDriftBaseline["securitySubVotes"],
+): RepoDriftBaseline {
   return {
     key: "k",
     rootDir: "/x",
     ctxFiles: Array.from({ length: fileCount }, (_, i) => ({ path: `f${i}.ts`, hash: "h" })),
     perCategoryVote: vote,
+    securitySubVotes,
     intentHints: [],
     minhashIndex: [],
     builtAt: 0,
@@ -51,6 +56,55 @@ describe("dominantPatternFor (pure projection)", () => {
     for (const dim of DIMENSIONS) {
       expect(() => dominantPatternFor(baselineWith({}), dim)).not.toThrow();
     }
+  });
+
+  // A security_posture sub-vote below MIN_SECURITY_PEERS relevant routes is too
+  // thin to move the composite score, yet is served here as an ordinary vote.
+  // belowPeerFloor must make the consistency string read as advisory, not a
+  // confident verdict, and must denominate in "routes" (auth is route-scoped).
+  it("caveats a below-peer-floor auth vote as a thin sample, denominated in routes", () => {
+    const b = baselineWith(
+      {},
+      5,
+      {
+        "Auth middleware": {
+          driftCategory: "security_posture",
+          dominantPattern: "Auth middleware applied",
+          dominantCount: 2,
+          totalRelevantFiles: 3,
+          consistencyScore: 67,
+          dominantFiles: ["routes/a.ts"],
+          deviators: [],
+          belowPeerFloor: true,
+        },
+      },
+    );
+    const r = dominantPatternFor(b, "auth");
+    expect(r.consistency).toMatch(/thin sample/i);
+    expect(r.consistency).toContain("routes");
+    expect(r.consistency).not.toContain("files");
+  });
+
+  it("does not caveat an at-or-above-floor auth vote", () => {
+    const b = baselineWith(
+      {},
+      5,
+      {
+        "Auth middleware": {
+          driftCategory: "security_posture",
+          dominantPattern: "Auth middleware applied",
+          dominantCount: 4,
+          totalRelevantFiles: 5,
+          consistencyScore: 80,
+          dominantFiles: ["routes/a.ts"],
+          deviators: [],
+          belowPeerFloor: false,
+        },
+      },
+    );
+    const r = dominantPatternFor(b, "auth");
+    expect(r.consistency).not.toMatch(/thin sample/i);
+    expect(r.consistency).toContain("routes");
   });
 });
 

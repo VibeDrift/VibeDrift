@@ -41,7 +41,7 @@ interface CoherencePayload {
   intent_lies: { name: string; explanation: string }[];
 }
 
-function grade(score: number, max: number): string {
+export function grade(score: number, max: number): string {
   const pct = max > 0 ? (score / max) * 100 : 0;
   if (pct >= 90) return "A";
   if (pct >= 75) return "B";

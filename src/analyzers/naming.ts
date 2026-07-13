@@ -16,6 +16,7 @@
 
 import type { Analyzer } from "./base.js";
 import type { AnalysisContext, Finding, SyntaxNode } from "../core/types.js";
+import { shannonEntropy } from "../utils/math.js";
 
 type Convention = "camelCase" | "snake_case" | "PascalCase" | "SCREAMING_SNAKE";
 
@@ -65,19 +66,6 @@ function extractIdentifiersRegex(content: string): string[] {
     }
   }
   return ids;
-}
-
-/** Shannon entropy of a distribution given raw counts. Range: [0, log₂(k)]. */
-function shannonEntropy(counts: number[]): number {
-  const total = counts.reduce((a, b) => a + b, 0);
-  if (total === 0) return 0;
-  let H = 0;
-  for (const c of counts) {
-    if (c === 0) continue;
-    const p = c / total;
-    H -= p * Math.log2(p);
-  }
-  return H;
 }
 
 export const namingAnalyzer: Analyzer = {

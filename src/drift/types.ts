@@ -1,4 +1,6 @@
 import type { Finding, FileGitMetadata } from "../core/types.js";
+import type { ProjectConfig } from "../core/project-config.js";
+import type { Tree } from "web-tree-sitter";
 
 export interface DriftDetector {
   id: string;
@@ -51,13 +53,25 @@ export interface DriftContext {
    * intent-divergence findings when code ignores a declaration.
    */
   intentHints?: import("../intent/types.js").IntentHint[];
+  /**
+   * Carried over from `AnalysisContext.projectConfig` by `buildDriftContext`.
+   * Consumed today by the Security Consistency detector's config glob
+   * allowlist (`security.allowlist`); undefined whenever the caller built
+   * its `AnalysisContext` without loading a project config (e.g. the
+   * MCP/baseline path), in which case that arm no-ops.
+   */
+  projectConfig?: ProjectConfig;
 }
 
 export interface DriftFile {
-  path: string;
+  relativePath: string;
   language: string | null;
   content: string;
   lineCount: number;
+  /** Pre-parsed tree-sitter tree (populated by parseFiles before detection).
+   *  Absent when the language is unsupported or parsing failed — detectors
+   *  must fall back to regex on `content`. */
+  tree?: Tree;
   /** Populated when hasGitMetadata is true; null for files not in history. */
   git?: FileGitMetadata | null;
 }
@@ -155,3 +169,15 @@ export interface DriftFinding {
   };
   recommendation: string;
 }
+
+/**
+ * Canonical labels for the three security sub-conventions the route-consistency
+ * detector votes on. Single source of truth so the detector's emitted
+ * `subCategory` and the baseline sub-vote lookup (get_dominant_pattern) can
+ * never drift apart.
+ */
+export const SECURITY_SUBCATEGORIES = {
+  auth: "Auth middleware",
+  validation: "Input validation",
+  rateLimit: "Rate limiting",
+} as const;

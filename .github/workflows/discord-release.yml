@@ -1,0 +1,89 @@
+name: Announce release to Discord
+
+# Posts to the #announcements webhook whenever a GitHub Release is published
+# (right after `scripts/release.sh` runs `gh release create`). Can also be run
+# manually from the Actions tab to re-announce the latest release. The message
+# is the release's own notes (lifted from CHANGELOG.md), the install line, and a
+# credit to the contributors whose commits are in the release, so it stays in
+# sync with the changelog automatically.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Post release to #announcements
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          EVENT_BODY: ${{ github.event.release.body }}
+        run: |
+          # Skip quietly if the secret isn't configured, so a missing webhook
+          # never hard-fails a release.
+          if [ -z "$WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not set — skipping announcement."
+            exit 0
+          fi
+
+          # On a release event the tag/body arrive in the payload; on a
+          # manual run they don't, so fall back to the latest published release.
+          if [ -n "$EVENT_TAG" ]; then
+            TAG="$EVENT_TAG"; BODY="$EVENT_BODY"
+          else
+            TAG=$(gh release view --repo "$REPO" --json tagName -q .tagName)
+            BODY=$(gh release view "$TAG" --repo "$REPO" --json body -q .body)
+          fi
+          VERSION="${TAG#v}"
+
+          # Build "Thanks to contributors" from EVERY commit author since the
+          # previous release (bots excluded). The maintainer who cut the release
+          # is credited too whenever they authored commits in it — the release is
+          # their work, not just the other contributors'. Discord pings need
+          # Discord IDs, so map GitHub login -> Discord ID via
+          # .github/discord-contributors.json when present; otherwise link the
+          # contributor's GitHub profile (still credit, just not a ping).
+          MENTIONS=""
+          PREV=$(gh api "repos/$REPO/releases?per_page=30" --jq "[.[].tag_name] | map(select(. != \"$TAG\")) | .[0]" 2>/dev/null || true)
+          if [ -n "$PREV" ] && [ "$PREV" != "null" ]; then
+            LOGINS=$(gh api "repos/$REPO/compare/$PREV...$TAG" \
+              --jq '[.commits[].author.login] | map(select(. != null)) | unique | .[]' 2>/dev/null \
+              | grep -viE '\[bot\]$' || true)
+            while IFS= read -r login; do
+              [ -z "$login" ] && continue
+              did=$(jq -r --arg l "$login" '.[$l] // empty' .github/discord-contributors.json 2>/dev/null || true)
+              if [ -n "$did" ]; then m="<@$did>"; else m="[$login](https://github.com/$login)"; fi
+              MENTIONS="${MENTIONS:+$MENTIONS, }$m"
+            done <<< "$LOGINS"
+          fi
+
+          # jq builds and escapes the whole payload. Notes/mentions are passed via
+          # --arg (safe from shell injection); newlines come from jq's \n so there
+          # are no raw line breaks in this YAML block. allowed_mentions: users lets
+          # mapped contributor pings fire while still blocking @everyone/@here.
+          PAYLOAD=$(jq -n \
+            --arg v "$VERSION" \
+            --arg body "$BODY" \
+            --arg mentions "$MENTIONS" \
+            '{
+              username: "Release Bot",
+              content: (
+                "🚀 **@vibedrift/cli " + $v + " is out.**\n\n"
+                + ($body | sub("^\\s+"; "") | sub("\\s+$"; ""))
+                + "\n\n`npm i -g @vibedrift/cli@latest`"
+                + (if $mentions != "" then "\n\nThanks to contributors: " + $mentions else "" end)
+              ),
+              allowed_mentions: { parse: ["users"] }
+            }')
+          curl -fsS -X POST "$WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
+          echo "Announced $TAG to Discord (contributors: ${MENTIONS:-none})."

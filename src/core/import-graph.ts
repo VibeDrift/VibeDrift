@@ -6,22 +6,24 @@
  *   importsByFile  — Map<file, {names, sources}>  (what each file imports + from where)
  *
  * Plus a derived `incomingCount` map: how many other files import from
- * each file (basename-resolved, since we don't run real module resolution).
+ * each file.
  *
  * Used by:
  *   - src/analyzers/dead-code.ts   — orphan-file + unused-export detection
  *   - src/drift/phantom-scaffolding.ts — unrouted-handler detection
  *
- * Limitations:
- *   - Path resolution is basename-only (no tsconfig paths, no actual fs).
- *     "./utils" matches any file whose basename-without-ext is "utils".
- *     "@/lib/foo" matches any file whose basename-without-ext is "foo".
- *     This over-matches in rare cases (two unrelated files named the same)
- *     but is correct for typical real-world projects.
- *   - "index.ts" files are referenced by their parent directory name.
+ * Resolution:
+ *   - Primary: AST-based extraction (tree-sitter) + real relative-path resolution
+ *     with extension mapping (.js→.ts) and configurable path aliases (defaults to @/* → src/*).
+ *   - Fallback: regex-based extraction + basename matching for files without a
+ *     parsed tree or specifiers that cannot be resolved. The basename fallback
+ *     may over-match in rare cases (two unrelated files named the same).
+ *   - "index.ts" files are referenced by their parent directory name (in fallback).
  */
 
 import type { SourceFile } from "./types.js";
+import { parseImportsAst, parseExportsAst } from "./import-graph-ast.js";
+import { resolveImportSource, buildFileIndex, type ResolverConfig } from "./import-resolver.js";
 
 export interface FileExport {
   name: string;
@@ -59,6 +61,10 @@ const IMPORT_PATTERNS = [
   /import\s*\*\s*as\s+(\w+)\s+from\s*['"]([^'"]+)['"]/g,
   /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g,
   /(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g,
+  // Dynamic imports: const { X } = await import("./module.js")
+  // and namespace form: const ns = await import("./module.js")
+  /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*['"]([^'"]+)['"]\s*\)/g,
+  /(?:const|let|var)\s+(\w+)\s*=\s*await\s+import\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
 // Re-export edges: a barrel file's `export { X } from './y'` / `export * from
@@ -163,10 +169,10 @@ export function sourceLookupKey(source: string): string {
 
 /** Lookup key derived from a file's path, used to match against import sources. */
 export function fileBasename(filePath: string): string {
-  const file = filePath.split("/").pop() ?? filePath;
+  const file = filePath.split(/[/\\]/).pop() ?? filePath;
   const noExt = file.replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, "");
   if (noExt === "index") {
-    const parts = filePath.split("/");
+    const parts = filePath.split(/[/\\]/);
     return parts.length >= 2 ? parts[parts.length - 2] : noExt;
   }
   return noExt;
@@ -175,17 +181,35 @@ export function fileBasename(filePath: string): string {
 /**
  * Build the full bipartite import graph for a project's JS/TS files.
  * Pass already-filtered files (typically ctx.files filtered to JS/TS).
+ *
+ * Uses AST-based parsing when file.tree is available (tree-sitter), falling
+ * back to regex for files without a parsed tree. Resolution uses real relative
+ * path resolution with extension mapping, falling back to basename matching
+ * for unresolvable specifiers.
  */
-export function buildImportGraph(files: SourceFile[]): ImportGraph {
+export function buildImportGraph(files: SourceFile[], config?: ResolverConfig): ImportGraph {
   const exportsByFile = new Map<string, FileExport[]>();
   const importsByFile = new Map<string, FileImports>();
 
   for (const file of files) {
-    exportsByFile.set(file.relativePath, parseExports(file));
-    importsByFile.set(file.relativePath, parseImports(file));
+    if (file.tree) {
+      exportsByFile.set(file.relativePath, parseExportsAst(file.tree, file.relativePath));
+      importsByFile.set(file.relativePath, parseImportsAst(file.tree));
+    } else {
+      exportsByFile.set(file.relativePath, parseExports(file));
+      importsByFile.set(file.relativePath, parseImports(file));
+    }
   }
 
-  // Index files by their basename lookup-key for source resolution
+  // Build file index for real path resolution
+  const fileIndex = buildFileIndex(files.map((f) => f.relativePath));
+
+  // Resolver config: path aliases (caller-supplied or default @/* → src/*)
+  const resolverConfig: ResolverConfig = config ?? {
+    pathAliases: { "@/*": "src/*" },
+  };
+
+  // Fallback: index files by their basename lookup-key (used when resolution fails)
   const fileByBase = new Map<string, string[]>();
   for (const file of files) {
     const base = fileBasename(file.relativePath);
@@ -201,6 +225,17 @@ export function buildImportGraph(files: SourceFile[]): ImportGraph {
   for (const [importer, { sources }] of importsByFile) {
     const seenTargets = new Set<string>();
     for (const source of sources) {
+      // Try real resolution first
+      const resolved = resolveImportSource(source, importer, fileIndex, resolverConfig);
+      if (resolved) {
+        if (resolved === importer) continue;
+        if (seenTargets.has(resolved)) continue;
+        seenTargets.add(resolved);
+        incomingCount.set(resolved, (incomingCount.get(resolved) ?? 0) + 1);
+        continue;
+      }
+
+      // Fallback to basename matching for unresolvable specifiers
       const key = sourceLookupKey(source);
       const candidates = fileByBase.get(key);
       if (!candidates) continue;

@@ -20,6 +20,7 @@ import {
   writeBaseline,
   computeBaselineKey,
   loadBaselineUnchecked,
+  BASELINE_VERSION,
   type RepoDriftBaseline,
 } from "../core/baseline.js";
 
@@ -27,6 +28,12 @@ const memCache = new Map<string, RepoDriftBaseline>();
 // In-flight lazy builds, keyed by rootDir, so simultaneous first-call tools
 // share ONE build instead of each kicking off a 3-8s scan.
 const building = new Map<string, Promise<RepoDriftBaseline | null>>();
+// rootDirs whose version-triggered rebuild failed. Guards against re-paying the
+// full scan on every call for a repo whose rebuild keeps failing (a version bump
+// plus a build error): the rebuild is attempted once, then the old baseline is
+// served. Cleared on invalidateBaselineMem/init and in tests, so recovery needs
+// no process restart.
+const failedVersionRebuild = new Set<string>();
 
 /**
  * Build a baseline for a repo that has never been scanned, persist it, and
@@ -62,6 +69,7 @@ async function buildAndCacheBaseline(rootDir: string): Promise<RepoDriftBaseline
 /** Test-only: drop the in-process cache so disk-load paths are exercised. */
 export function __clearBaselineCache(): void {
   memCache.clear();
+  failedVersionRebuild.clear();
 }
 
 /**
@@ -72,6 +80,7 @@ export function __clearBaselineCache(): void {
  */
 export function invalidateBaselineMem(rootDir: string): void {
   memCache.delete(rootDir);
+  failedVersionRebuild.delete(rootDir);
 }
 
 /**
@@ -108,6 +117,25 @@ export async function getBaseline(
     baseline = await buildAndCacheBaseline(rootDir);
     if (!baseline) return { baseline: null, status: "no_baseline" };
     return { baseline, status: "ok" };
+  }
+
+  // A baseline built under an older BASELINE_VERSION is missing current vote
+  // shape (e.g. securitySubVotes) and would serve wrong answers forever; the
+  // stale tag alone never rebuilds. A version mismatch forces a one-time rebuild
+  // (same lazy path as a never-scanned repo). Content-only drift stays "stale"
+  // (cheap re-hash, no rebuild) as before. A rebuild that fails is remembered so
+  // we do not pay the full scan on every later call: the old baseline is served
+  // until an init or a successful scan writes a current-version one.
+  if (baseline.version !== BASELINE_VERSION && !failedVersionRebuild.has(rootDir)) {
+    const rebuilt = await buildAndCacheBaseline(rootDir);
+    if (rebuilt) {
+      failedVersionRebuild.delete(rootDir);
+      return { baseline: rebuilt, status: "ok" };
+    }
+    // Rebuild failed: remember it so later calls short-circuit the retry, keep
+    // the old baseline mem-cached, and serve it below (the tool still answers).
+    failedVersionRebuild.add(rootDir);
+    memCache.set(rootDir, baseline);
   }
 
   const fresh = (await liveKey(rootDir, baseline)) === baseline.key;

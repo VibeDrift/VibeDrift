@@ -6,6 +6,48 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.15.0 — 2026-07-09
+
+### Fixed
+
+- **Security Consistency now sees catch-all and Flask routes.** Express
+  `.all()` routes and Flask `@app.route(..., methods=[...])` routes were
+  excluded from the auth-consistency check, so a repo could carry an unauthed
+  state-changing route that produced no finding at all. Routes are now
+  classified by their real method: a mutating route with no guard is flagged,
+  while read-only routes (a bare Flask `@app.route`, which defaults to GET) are
+  left alone, so plain GETs never raise a false alarm. The in-loop
+  `validate_change` check shares the same route classification as the batch
+  scan, so the two can never disagree.
+- **`check_file_drift` no longer reports a file as clean when it has an unauthed
+  route.** It now reads the per-convention security votes (auth, validation,
+  rate limit) instead of a single collapsed slot, so an auth deviation can't
+  hide behind a wider convention.
+- **The MCP baseline rebuilds itself after an upgrade** instead of serving votes
+  computed under an older version. A security convention drawn from too few
+  routes to be reliable is now surfaced as advisory rather than stated as
+  established.
+
+### Changed
+
+- **Scoring refined (recalibration).** Because the auth check now counts routes
+  it previously missed, repos that use Express `.all()` or Flask `methods=[...]`
+  routes may see their Vibe Drift Score move to reflect security drift that was
+  always present. Saved scores are kept as-is and the new method applies to new
+  scans; the CLI shows a one-time notice linking to the release notes. CI users
+  gating on `--fail-on-score` for such a repo should re-check their threshold.
+  Every other repo is unchanged.
+
+## 0.14.9 — 2026-07-06
+
+### Fixed
+
+- **Fewer false-positive unused exports.** An export used only through a
+  destructured dynamic import (`const { thing } = await import("./module.js")`)
+  is now recognized as used. Lazy-loaded modules — common in CLIs and
+  code-split apps — are no longer flagged as unused, and the files they load are
+  no longer counted as orphaned.
+
 ## 0.14.8 — 2026-07-01
 
 ### Changed

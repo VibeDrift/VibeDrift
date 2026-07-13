@@ -1,7 +1,7 @@
 import type { AnalysisContext, Finding } from "../core/types.js";
 import type { DriftContext, DriftFinding, DriftDetector, DriftCategory } from "./types.js";
 import { DRIFT_WEIGHTS } from "./types.js";
-import { categoryHealth } from "../scoring/engine.js";
+import { categoryHealth, isBelowSecurityPeerFloor } from "../scoring/engine.js";
 import { architecturalContradiction } from "./architectural-contradiction.js";
 import { conventionOscillation } from "./convention-oscillation.js";
 import { securityConsistency } from "./security-consistency.js";
@@ -17,6 +17,7 @@ import { stateManagementConsistency } from "./state-management-consistency.js";
 import { testStructureConsistency } from "./test-structure-consistency.js";
 import { commitArchaeology } from "./commit-archaeology.js";
 import { detectPivotsAcrossFindings } from "./pivot-detector.js";
+import { SECURITY_SUPPRESSION_SUBCATEGORY, SECURITY_SUPPRESSION_ANALYZER_ID } from "./security-suppression.js";
 
 export function createDriftDetectors(): DriftDetector[] {
   return [
@@ -40,16 +41,18 @@ export function createDriftDetectors(): DriftDetector[] {
 export function buildDriftContext(ctx: AnalysisContext): DriftContext {
   return {
     files: ctx.files.map((f) => ({
-      path: f.relativePath,
+      relativePath: f.relativePath,
       language: f.language,
       content: f.content,
       lineCount: f.lineCount,
+      tree: f.tree,
       git: f.git ?? null,
     })),
     totalLines: ctx.totalLines,
     dominantLanguage: ctx.dominantLanguage,
     hasGitMetadata: ctx.hasGitMetadata ?? false,
     intentHints: ctx.intentHints ?? [],
+    projectConfig: ctx.projectConfig,
   };
 }
 
@@ -151,6 +154,51 @@ function computeDriftScores(findings: Finding[], totalLines: number): DriftScore
 }
 
 /**
+ * The DRIFT representation that RENDERING should read: the raw drift findings
+ * minus the below-floor route-consistency security findings, plus the
+ * per-category `driftScores` breakdown recomputed from that same scored set.
+ *
+ * A route-consistency security finding whose peer sample is below
+ * MIN_SECURITY_PEERS is demoted to an advisory hygiene finding on the `Finding`
+ * track (see `applySecurityMinPeerFloor`), so the category scores N/A. Every
+ * consumer that reads the raw `driftFindings` (the findings library, codebase
+ * intent, the coherence heatmap, pattern consensus, CSV/DOCX drift sections,
+ * context.md, the deep-scan coherence input) must therefore NOT see it, or it
+ * would contradict that N/A. Excluding it here, at ONE source point, keeps them
+ * all consistent without a gate in each widget. Recomputing `driftScores` from
+ * the scored set (rather than filtering the raw breakdown) is what makes
+ * `driftScores.security_posture` match the listed drift findings even in the
+ * multi-sub-check case (e.g. auth voted over 5 mutating routes stays scored
+ * while validation voted over 2 is below floor).
+ *
+ * The finding still surfaces as advisory via `result.findings` (hygiene-kind),
+ * so a small insecure repo is never silent. The RAW `driftFindings` produced by
+ * `runDriftDetection` are intentionally left untouched for the baseline
+ * (`assembleBaseline`) and the scan-over-scan diff, which track the raw drift
+ * representation for continuity.
+ *
+ * The suppression-audit finding (security-suppression.ts, subCategory
+ * SECURITY_SUPPRESSION_SUBCATEGORY) is excluded here too, independent of the
+ * below-floor check: it is a hygiene audit trail ("N routes excluded"), not a
+ * dominance vote, and `driftFindingToFinding` already routes it to the
+ * hygiene-kind analyzerId. Its `totalRelevantFiles` is just the count of
+ * suppressed routes, so at >= MIN_SECURITY_PEERS suppressions the below-floor
+ * check alone does not catch it and it would otherwise leak into the scored
+ * DRIFT representation (and every renderer that reads it) mislabeled as
+ * "DRIFT: N route(s) excluded from the security consistency check".
+ */
+export function scoredDriftView(
+  driftFindings: DriftFinding[],
+  totalLines: number,
+): { driftFindings: DriftFinding[]; driftScores: DriftScores } {
+  const scored = driftFindings.filter(
+    (d) => !isBelowSecurityPeerFloor(d) && d.subCategory !== SECURITY_SUPPRESSION_SUBCATEGORY,
+  );
+  const driftScores = computeDriftScores(scored.map(driftFindingToFinding), totalLines);
+  return { driftFindings: scored, driftScores };
+}
+
+/**
  * Layer intent-divergence provenance onto findings. For each category
  * that has a hint, compare the hint's declared pattern label against
  * the finding's voted dominantPattern label. When they disagree, attach
@@ -175,6 +223,15 @@ function enrichWithIntentDivergence(
   }
 
   return findings.map((f) => {
+    // The suppression-audit finding (security-suppression.ts) is a count of
+    // excluded routes, not a dominance vote — its `dominantPattern` ("no
+    // suppression") is never meant to be compared against a declared
+    // convention label. Without this guard, any repo with a security_posture
+    // intent hint (e.g. CLAUDE.md declaring "auth required on all routes")
+    // would stamp every suppression-audit finding with a spurious
+    // "code contradicts declared intent" divergence, which is false — the
+    // finding is a hygiene audit log entry, not a vote outcome.
+    if (f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY) return f;
     const hint = byCategory.get(f.driftCategory);
     if (!hint) return f;
     // If the finding's voted dominant matches the declared label, no
@@ -215,13 +272,25 @@ export function attachEngineComposite(
 }
 
 export function driftFindingToFinding(d: DriftFinding): Finding {
+  // Suppression-audit findings (src/drift/security-suppression.ts) are the
+  // one deliberate exception to "analyzerId is keyed off driftCategory
+  // alone": they must land on the HYGIENE track under a distinct analyzerId
+  // (registered in scoring/categories.ts as kind "hygiene") so citing an
+  // @vibedrift-public exclusion can never move the Vibe Drift composite, no
+  // matter how many routes are suppressed. Matched on subCategory, which is
+  // not one of SECURITY_SUBCATEGORIES (types.ts) and only ever set by
+  // buildSuppressionAuditFinding.
+  const analyzerId =
+    d.driftCategory === "security_posture" && d.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY
+      ? SECURITY_SUPPRESSION_ANALYZER_ID
+      : `drift-${d.driftCategory}`;
   return {
     // analyzerId is keyed off the typed `driftCategory` enum — NOT the
     // freeform `detector` string — so it always matches a registered id in
     // scoring/categories.ts. Using `detector` (which detectors set
     // inconsistently: some to the category, some to the detector id) was the
     // root of the wiring bug that excluded 11 of 14 detectors from the score.
-    analyzerId: `drift-${d.driftCategory}`,
+    analyzerId,
     severity: d.severity,
     confidence: d.confidence,
     message: `DRIFT: ${d.finding}`,

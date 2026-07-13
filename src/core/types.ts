@@ -1,4 +1,5 @@
 import type { Tree, Node as SyntaxNode } from "web-tree-sitter";
+import type { ProjectConfig } from "./project-config.js";
 
 export type { Tree, SyntaxNode };
 
@@ -94,6 +95,15 @@ export interface AnalysisContext {
    * found — hint-seeded voting silently no-ops.
    */
   intentHints?: import("../intent/types.js").IntentHint[];
+  /**
+   * Loaded `.vibedrift/config.json`, when the scan pipeline found and
+   * parsed one. Currently consumed by the Security Consistency detector's
+   * config glob allowlist (`security.allowlist`); optional because several
+   * entry points build an AnalysisContext without loading a project config
+   * (notably the MCP/baseline path in `core/baseline.ts`), and the
+   * allowlist arm simply no-ops when it's absent.
+   */
+  projectConfig?: ProjectConfig;
 }
 
 export interface PackageJson {
@@ -459,4 +469,13 @@ export interface ScanOptions {
    * with --deep: deep-scan only what you changed (a paid, fast PR-gate flow).
    */
   diff?: string | boolean;
+  /**
+   * Already-loaded `.vibedrift/config.json` (the CLI entry point loads it
+   * once to resolve `format`/`failOnScore` defaults before calling
+   * `runScan`; this carries the same object through rather than reloading
+   * it). Set onto `AnalysisContext.projectConfig` so detectors like the
+   * Security Consistency config allowlist can read it. Omitted callers
+   * (e.g. watch mode) simply run without a project config.
+   */
+  projectConfig?: ProjectConfig;
 }

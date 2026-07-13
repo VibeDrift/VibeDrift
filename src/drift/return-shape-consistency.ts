@@ -35,6 +35,7 @@ import type {
 import {
   buildPatternDistribution,
   collectDeviatingFiles,
+  directoryOf,
   isAnalyzableSource,
   pickDominantFiles,
   pickIntentHint,
@@ -113,7 +114,7 @@ function extractFunctionBodies(file: DriftFile): FunctionExtraction[] {
     const start = starts[i];
     const end = i + 1 < starts.length ? starts[i + 1].index : content.length;
     out.push({
-      file: file.path,
+      file: file.relativePath,
       name: start.name,
       line: start.line,
       bodySlice: content.slice(start.index, end),
@@ -196,12 +197,6 @@ export function classifyReturnShapeLabel(body: string): string | null {
   return shape ? SHAPE_NAMES[shape] : null;
 }
 
-/** Directory of a relative path — "src/handlers/user.ts" → "src/handlers". */
-function directoryOf(filePath: string): string {
-  const idx = filePath.lastIndexOf("/");
-  return idx === -1 ? "." : filePath.slice(0, idx);
-}
-
 /**
  * Group per-function signals into per-file profiles (one primary shape
  * per file, evidence = all its functions that match that shape), then
@@ -259,7 +254,7 @@ export const returnShapeConsistency: DriftDetector = {
 
     for (const file of ctx.files) {
       if (!file.language) continue;
-      if (!isAnalyzableSource(file.path)) continue;
+      if (!isAnalyzableSource(file.relativePath)) continue;
       // Only languages whose error-handling idioms we understand well.
       if (!["javascript", "typescript", "python", "go", "rust"].includes(file.language)) continue;
 
@@ -274,8 +269,8 @@ export const returnShapeConsistency: DriftDetector = {
       // Only keep functions that actually matched a shape, aligned with shapes[]
       const matched = fns.filter((fn) => classifyShape(fn.bodySlice) !== null);
       if (matched.length > 0) {
-        extractionsByFile.set(file.path, matched);
-        shapesByFile.set(file.path, shapes);
+        extractionsByFile.set(file.relativePath, matched);
+        shapesByFile.set(file.relativePath, shapes);
       }
     }
 

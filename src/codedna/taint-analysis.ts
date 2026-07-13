@@ -125,6 +125,20 @@ const TAINT_SINKS: SinkPattern[] = [
   { regex: /axios\.\w+\s*\(/, label: "outbound HTTP request", severity: "warning", category: "ssrf" },
 ];
 
+/**
+ * Sink labels whose category is `code_injection` or `command_injection`
+ * (unsanitized input reaching eval/exec). `Finding.message` (built in
+ * `taintFindings` below) embeds the sink's human label, not its category, so
+ * this is the real field a downstream consumer can match on to recognize an
+ * eval/exec-class taint flow without duplicating TAINT_SINKS. Exported for
+ * src/output/floor-badge.ts (the render-only "Security floor" badge, D1).
+ */
+export const INJECTION_SINK_LABELS: ReadonlySet<string> = new Set(
+  TAINT_SINKS.filter((s) => s.category === "code_injection" || s.category === "command_injection").map(
+    (s) => s.label,
+  ),
+);
+
 // ──── Sanitizers that remove taint ────
 
 interface SanitizerPattern {

@@ -16,6 +16,14 @@ interface SecurityPattern {
   // If provided, the pattern is only flagged when the surrounding ±5 lines
   // contain at least one match for this regex (security context proximity check)
   contextRequired?: RegExp;
+  // Absolute-floor rule: high-precision, low-noise. Emitted under the
+  // `security-floor` analyzer id so a later task can render it with a
+  // distinct badge. Does not change scoring (still hygiene-kind).
+  floor?: boolean;
+  // Noisy, low-confidence rule (0.4-0.7). Kept for signal but de-emphasized:
+  // the emitted finding is forced to severity "info" and tagged "demoted"
+  // so the renderer can keep it out of the primary hygiene list.
+  demoted?: boolean;
 }
 
 const SECURITY_PATTERNS: SecurityPattern[] = [
@@ -30,6 +38,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     languages: "all",
     tags: ["security", "secrets"],
     negativeFilter: /(?:example|placeholder|your[_-]|xxx|test|dummy|fake|sample)/i,
+    floor: true,
   },
   // NOTE: `hardcoded-password` removed in Phase 4 — `password = "<4+ chars>"`
   // matched any short string assigned to a password-named var (test fixtures,
@@ -45,6 +54,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     languages: "all",
     tags: ["security", "secrets"],
     negativeFilter: /(?:example|placeholder|your[_-]|xxx|test|dummy|fake|sample)/i,
+    floor: true,
   },
   {
     id: "private-key",
@@ -55,6 +65,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     message: "Private key embedded in source code",
     languages: "all",
     tags: ["security", "secrets", "critical"],
+    floor: true,
   },
   {
     id: "aws-key",
@@ -65,6 +76,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     message: "AWS access key ID detected",
     languages: "all",
     tags: ["security", "secrets", "aws"],
+    floor: true,
   },
 
   // === Injection Vulnerabilities ===
@@ -136,6 +148,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     message: "Direct innerHTML assignment — potential XSS vector",
     languages: ["javascript", "typescript"],
     tags: ["security", "xss"],
+    demoted: true,
   },
   {
     id: "dangerously-set-html",
@@ -181,6 +194,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     negativeFilter: /(?:test|mock|seed|shuffle|animation|color|position|offset|delay|jitter)/i,
     // Only flag near security-relevant code — UI shuffles/animations are not a risk
     contextRequired: /(?:token|secret|password|key|nonce|salt|hash|crypto|auth|session|jwt|api.?key|credential)/i,
+    demoted: true,
   },
 
   // === Path Traversal ===
@@ -193,6 +207,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     message: "Potential path traversal: dynamic value in file operation",
     languages: ["javascript", "typescript"],
     tags: ["security", "path-traversal"],
+    demoted: true,
   },
 
   // === SSRF ===
@@ -206,6 +221,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     languages: "all",
     tags: ["security", "ssrf"],
     negativeFilter: /(?:API_URL|BASE_URL|apiUrl|baseUrl|base\s*\+|endpoint|config\.|process\.env)/i,
+    demoted: true,
   },
 
   // === Python-specific ===
@@ -241,6 +257,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     message: "TLS certificate verification disabled",
     languages: ["go"],
     tags: ["security", "tls"],
+    floor: true,
   },
 
   // === Rust-specific ===
@@ -253,6 +270,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
     message: "Unsafe block — ensure memory safety invariants are upheld",
     languages: ["rust"],
     tags: ["security", "memory-safety"],
+    demoted: true,
   },
 ];
 
@@ -267,7 +285,11 @@ export const securityAnalyzer: Analyzer = {
   category: "securityPosture",
   requiresAST: false,
   applicableLanguages: "all",
-  version: 2,
+  // Bumped 3: floor/demoted split (analyzerId now "security-floor" for the
+  // absolute-floor subset; five noisy rules force severity "info" + a
+  // "demoted" tag). Invalidates the on-disk findings cache so already-scanned
+  // repos pick up the new classification on their next run.
+  version: 3,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -316,8 +338,12 @@ export const securityAnalyzer: Analyzer = {
           const snippet = line.trim();
 
           findings.push({
-            analyzerId: "security",
-            severity: pattern.severity,
+            // Floor rules (private-key, aws-key, hardcoded-api-key,
+            // hardcoded-token, go-tls-skip-verify) get a distinct analyzer
+            // id so their high-precision findings can be surfaced with a
+            // separate badge downstream. All other rules keep "security".
+            analyzerId: pattern.floor ? "security-floor" : "security",
+            severity: pattern.demoted ? "info" : pattern.severity,
             confidence: pattern.confidence,
             message: `${pattern.message} in ${file.relativePath}:${lineNum}`,
             locations: [{
@@ -325,7 +351,7 @@ export const securityAnalyzer: Analyzer = {
               line: lineNum,
               snippet: snippet.length > 120 ? snippet.slice(0, 120) + "..." : snippet,
             }],
-            tags: pattern.tags,
+            tags: pattern.demoted ? [...pattern.tags, "demoted"] : pattern.tags,
           });
         }
       }

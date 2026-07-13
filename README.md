@@ -8,7 +8,7 @@
 
 It forgets your patterns, repeats code, and breaks what worked. **VibeDrift catches the drift before it spreads** — locally, on your machine.
 
-[![Website](https://img.shields.io/badge/vibedrift.ai-FFD000?style=flat&labelColor=1a1a1a)](https://vibedrift.ai) [![npm](https://img.shields.io/npm/v/@vibedrift/cli.svg?color=FFD000)](https://www.npmjs.com/package/@vibedrift/cli) [![Vibe Drift Score](https://img.shields.io/badge/Vibe_Drift_Score-89-3FB950?style=flat&labelColor=1a1a1a)](https://vibedrift.ai/guide) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?style=flat)](https://discord.gg/YVcQ65Jt3Q)
+[![Website](https://img.shields.io/badge/vibedrift.ai-FFD000?style=flat&labelColor=1a1a1a)](https://vibedrift.ai) [![npm](https://img.shields.io/npm/v/@vibedrift/cli.svg?color=FFD000)](https://www.npmjs.com/package/@vibedrift/cli) [![Vibe Drift Score](https://img.shields.io/badge/Vibe_Drift_Score-91-3FB950?style=flat&labelColor=1a1a1a)](https://vibedrift.ai/guide) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?style=flat)](https://discord.gg/YVcQ65Jt3Q)
 
 **Free · Open source · Runs on your machine**
 
@@ -63,7 +63,7 @@ vibedrift --include "src/**"          # scan only these for a single scan
 - Architectural inconsistencies (half your handlers use a repository, the rest hit raw SQL)
 - Hidden duplicates: two functions doing the same thing under different names
 - Convention drift across naming, imports, error handling, async style, and logging
-- Security gaps: hardcoded secrets, injection risks, unsanitized input
+- Security gaps: hardcoded secrets, injection risks, and routes that skip the auth the rest of your code applies
 - Dead code, complexity hotspots, and half-finished or placeholder implementations
 
 Under the hood, VibeDrift learns your repo's dominant patterns by majority vote, fingerprints logic with Code DNA to catch near-duplicates, and rolls findings into a **Vibe Drift Score** and a **Hygiene Score**. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the engine and the [scoring guide](https://vibedrift.ai/guide) for how findings are weighted.

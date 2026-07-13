@@ -4,7 +4,7 @@ import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 
 function makeCtx(files: Partial<DriftFile>[]): DriftContext {
   const fullFiles: DriftFile[] = files.map((f) => ({
-    path: f.path ?? "src/test.ts",
+    relativePath: f.relativePath ?? "src/test.ts",
     language: f.language ?? "typescript",
     content: f.content ?? "",
     lineCount: (f.content ?? "").split("\n").length,
@@ -19,12 +19,12 @@ function makeCtx(files: Partial<DriftFile>[]): DriftContext {
 describe("logging-consistency detector", () => {
   it("flags the single console.log file in a winston-dominated project", () => {
     const winstonFiles = Array.from({ length: 4 }, (_, i) => ({
-      path: `src/svc${i}.ts`,
+      relativePath: `src/svc${i}.ts`,
       language: "typescript" as const,
       content: `import winston from "winston";\nconst logger = winston.createLogger({});\nlogger.info("started");\n`,
     }));
     const consoleFile = {
-      path: "src/odd.ts",
+      relativePath: "src/odd.ts",
       language: "typescript" as const,
       content: `console.log("hello");\nconsole.error("bad");\n`,
     };
@@ -37,7 +37,7 @@ describe("logging-consistency detector", () => {
 
   it("returns no finding when only console.log is used across the project", () => {
     const files = Array.from({ length: 5 }, (_, i) => ({
-      path: `src/f${i}.ts`,
+      relativePath: `src/f${i}.ts`,
       language: "typescript" as const,
       content: `console.log("hi");\nconsole.error("bye");\n`,
     }));
@@ -50,12 +50,12 @@ describe("logging-consistency detector", () => {
     // anywhere), 1 file uses raw console.* — mirrors the bandcamp repo where
     // createLogger() wraps console.* and NO third-party logger is installed.
     const wrapperFiles = Array.from({ length: 5 }, (_, i) => ({
-      path: `src/svc${i}.ts`,
+      relativePath: `src/svc${i}.ts`,
       language: "typescript" as const,
       content: `import { logger } from "./debug";\nlogger.info("started");\nlogger.warn("careful");\n`,
     }));
     const consoleFile = {
-      path: "src/odd.ts",
+      relativePath: "src/odd.ts",
       language: "typescript" as const,
       content: `console.log("hello");\nconsole.error("bad");\n`,
     };
@@ -69,12 +69,12 @@ describe("logging-consistency detector", () => {
 
   it("still names winston when it is actually present in the code", () => {
     const winstonFiles = Array.from({ length: 5 }, (_, i) => ({
-      path: `src/svc${i}.ts`,
+      relativePath: `src/svc${i}.ts`,
       language: "typescript" as const,
       content: `import winston from "winston";\nconst logger = winston.createLogger({});\nlogger.info("started");\n`,
     }));
     const consoleFile = {
-      path: "src/odd.ts",
+      relativePath: "src/odd.ts",
       language: "typescript" as const,
       content: `console.log("hello");\nconsole.error("bad");\n`,
     };
@@ -89,7 +89,7 @@ describe("logging-consistency detector", () => {
     it("emits divergence when team declares winston but code uses console.log", () => {
       // 5 console.log files. CLAUDE.md declares structured logging.
       const consoleFiles = Array.from({ length: 5 }, (_, i) => ({
-        path: `src/f${i}.ts`,
+        relativePath: `src/f${i}.ts`,
         language: "typescript" as const,
         content: `console.log("hi");\nconsole.error("bye");\n`,
       }));
@@ -114,7 +114,7 @@ describe("logging-consistency detector", () => {
 
     it("no finding when code unanimously matches the declared logger", () => {
       const winstonFiles = Array.from({ length: 5 }, (_, i) => ({
-        path: `src/svc${i}.ts`,
+        relativePath: `src/svc${i}.ts`,
         language: "typescript" as const,
         content: `import winston from "winston";\nlogger.info("hi");\n`,
       }));
