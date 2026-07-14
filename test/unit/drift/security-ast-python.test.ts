@@ -418,7 +418,7 @@ describe("extractPythonRoutesAst: method resolution", () => {
     expect(routes[0].method).toBe("POST");
   });
 
-  it("resolves methods=ALLOWED (a variable) to ALL: statically unresolvable stays in the mutating vote", async () => {
+  it("resolves methods=ALLOWED (a variable with NO same-file assignment) to ALL: the unresolved case; see the resolved-var suite below for the assigned case", async () => {
     const f = await py("var.py", `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
     const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
     expect(routes).toHaveLength(1);
@@ -475,6 +475,254 @@ describe("extractPythonRoutesAst: method resolution", () => {
       `    "/x",\n` +
       `    methods=["POST", "GET"],\n` +
       `)\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+});
+
+// ─── Upgrade 2: methods= same-file variable resolution ──────────────────────
+//
+// A `methods=VAR` kwarg now resolves through VAR's value WHEN VAR is written
+// EXACTLY ONCE at module top level to a literal list/tuple/set of string
+// verbs (reusing the same methodFromLiteral reduction the inline literal path
+// uses). Every other shape — imported, computed, an identifier alias chain,
+// reassigned more than once, or written through any of the poisoned forms
+// below (augmented assignment, a mutating method call, `global`, walrus, a
+// for-loop target, a subscript/slice-target assignment, a `with ... as`
+// binding, or a conditional/def-local assignment) — stays unresolvable and
+// resolves "ALL", never a silent GET: the invariant is never dropping a
+// mutating route out of the vote because its methods= variable was
+// unreadable.
+describe("methods= same-file variable resolution", () => {
+  it("resolves methods=ALLOWED to POST when ALLOWED = [\"GET\", \"POST\"] is the sole same-file assignment (mutating verb wins, same reduction as the inline literal path)", async () => {
+    const f = await py("resolved-list.py",
+      `ALLOWED = ["GET", "POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=VERBS to PUT when VERBS = (\"PUT\",) is a same-file tuple literal", async () => {
+    const f = await py("resolved-tuple.py",
+      `VERBS = ("PUT",)\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("PUT");
+  });
+
+  it("resolves methods=VERBS to DELETE when VERBS = {\"delete\"} is a same-file set literal (uppercased)", async () => {
+    const f = await py("resolved-set.py",
+      `VERBS = {"delete"}\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("DELETE");
+  });
+
+  it("resolves methods=VERBS to GET when VERBS = [\"GET\"]: a fully visible literal legitimately exits the mutating vote; the route IS emitted", async () => {
+    const f = await py("resolved-get.py",
+      `VERBS = ["GET"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=VERBS to GET when VERBS = []: fully visible and empty, mirrors the inline empty-literal pin (visibility, not ambiguity)", async () => {
+    const f = await py("resolved-empty.py",
+      `VERBS = []\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=VERBS to GET when VERBS = [\"MKCOL\"]: fully visible with no recognized verb, mirrors the inline MKCOL pin", async () => {
+    const f = await py("resolved-mkcol.py",
+      `VERBS = ["MKCOL"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=ALLOWED to POST when ALLOWED = [*BASE, \"POST\"]: the visible literal wins, the same shared helper as the inline kwarg", async () => {
+    const f = await py("resolved-splat-verb.py",
+      `ALLOWED = [*BASE, "POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=ALLOWED to ALL when ALLOWED = [*BASE]: no visible literal verb even though the assignment itself is unambiguous", async () => {
+    const f = await py("resolved-splat-only.py",
+      `ALLOWED = [*BASE]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves methods=ALLOWED to POST when ALLOWED: list[str] = [\"POST\"] is an annotated assignment (still an `assignment` node)", async () => {
+    const f = await py("resolved-annotated.py",
+      `ALLOWED: list[str] = ["POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("stays ALL for ALL_VERBS = BASE + EXTRA: a computed (binary_operator) same-file value, not a literal", async () => {
+    const f = await py("computed.py",
+      `ALL_VERBS = BASE + EXTRA\n\n@app.route("/x", methods=ALL_VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for an imported `from config import ALLOWED`: no same-file assignment to chase", async () => {
+    const f = await py("imported.py",
+      `from config import ALLOWED\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for ALLOWED = get_methods(): a computed call, not a literal", async () => {
+    const f = await py("computed-call.py",
+      `ALLOWED = get_methods()\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for an alias chain (A = [\"POST\"]; B = A; methods=B): an identifier RHS is refused, never chased", async () => {
+    const f = await py("alias-chain.py",
+      `A = ["POST"]\nB = A\n\n@app.route("/x", methods=B)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a twice-reassigned variable: two same-file literal assignments make the value ambiguous", async () => {
+    const f = await py("twice-reassigned.py",
+      `ALLOWED = ["GET"]\nALLOWED = ["POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("AUGMENTED-ASSIGNMENT TRAP: ALLOWED = [\"GET\"] then ALLOWED += [\"POST\"] stays ALL, never GET (a naive single-assignment scan would resolve GET and silently drop the POST route from the mutating vote)", async () => {
+    const f = await py("augmented-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED += ["POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL when `global ALLOWED` is declared and written inside a def", async () => {
+    const f = await py("global-write.py",
+      `ALLOWED = ["GET"]\n\ndef configure():\n    global ALLOWED\n    ALLOWED = ["POST"]\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a walrus write to the variable", async () => {
+    const f = await py("walrus-write.py",
+      `ALLOWED = ["GET"]\nif (ALLOWED := recompute()):\n    pass\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a for-loop target write to the variable", async () => {
+    const f = await py("for-target-write.py",
+      `ALLOWED = ["GET"]\nfor ALLOWED in candidate_lists():\n    pass\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("MUTATION TRAP: ALLOWED.append(\"DELETE\") stays ALL, never GET", async () => {
+    const f = await py("append-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED.append("DELETE")\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a tuple-unpack write `x, ALLOWED = pair`", async () => {
+    const f = await py("tuple-unpack-write.py",
+      `ALLOWED = ["GET"]\nx, ALLOWED = pair\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("SLICE-REPLACEMENT TRAP: ALLOWED = [\"GET\"] then ALLOWED[:] = load_methods() stays ALL, never GET (a subscript-left assignment a naive identifier-left census would miss)", async () => {
+    const f = await py("slice-replacement-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED[:] = load_methods()\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("ELEMENT-ASSIGNMENT TRAP: ALLOWED = [\"GET\"] then ALLOWED[0] = \"POST\" stays ALL, never GET (another subscript-left assignment)", async () => {
+    const f = await py("element-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED[0] = "POST"\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("WITH-AS TRAP: `with open(\"m\") as ALLOWED:` rebinds the name, stays ALL", async () => {
+    const f = await py("with-as-trap.py",
+      `ALLOWED = ["GET"]\nwith open("m") as ALLOWED:\n    pass\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a lone assignment inside an `if:` block: conditional, not an unconditional same-file literal", async () => {
+    const f = await py("conditional-assignment.py",
+      `if COND:\n    VERBS = ["GET"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a def-local sole assignment: not a module top-level write", async () => {
+    const f = await py("def-local-assignment.py",
+      `def configure():\n    VERBS = ["GET"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves a multiline decorator with methods=ALLOWED identically to the inline-literal multiline pin (POST)", async () => {
+    const f = await py("multiline-var.py",
+      `ALLOWED = ["POST", "GET"]\n\n` +
+      `@app.route(\n` +
+      `    "/x",\n` +
+      `    methods=ALLOWED,\n` +
+      `)\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves a trailing-kwarg flood with methods=ALLOWED identically to the inline-literal flood pin (POST)", async () => {
+    const f = await py("flood-var.py",
+      `ALLOWED = ["POST"]\n\n` +
+      `@app.route("/x", methods=ALLOWED, strict_slashes=False, endpoint="e", defaults={"a": 1})\n` +
       `def h():\n` +
       `    return {}\n`);
     const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
@@ -1434,11 +1682,12 @@ describe("documented trade-offs (task-review pins)", () => {
     expect(routes[0].method).toBe("GET");
   });
 
-  it("does not bless custom or non-IsAuthenticated permission classes: permission_classes([IsAdminUser]) and ([FooPermission])", async () => {
-    // Only IsAuthenticated is in PERMISSION_AUTH. IsAdminUser is a real DRF class
-    // that requires staff, but it is not in the narrow whitelist, and FooPermission
-    // is an unknown custom class; both resolve hasAuth:false per never-false-bless
-    // (an unrecognized permission class is ambiguity, which never blesses).
+  it("does not bless a custom, unrecognized permission class: permission_classes([FooPermission])", async () => {
+    // FooPermission is not in PERMISSION_AUTH (an unknown custom class is
+    // ambiguity, which never blesses per never-false-bless). IsAdminUser WAS
+    // grouped here too until Upgrade 2 (Task 3): it is now recognized (see the
+    // "IsAdminUser in PERMISSION_AUTH" describe below), so it is asserted
+    // separately as a positive alongside this negative.
     const f = await py("custcompermclass.py",
       `@api_view(["POST"])\n` +
       `@permission_classes([IsAdminUser])\n` +
@@ -1450,9 +1699,49 @@ describe("documented trade-offs (task-review pins)", () => {
       `    return Response({})\n`);
     expect(extractPythonRoutesAst(f.tree!, f.relativePath)
       .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
-      "/a auth=false",
+      "/a auth=true",
       "/b auth=false",
     ]);
+  });
+
+  it("@api_view(METHODS) with a same-file METHODS = [\"POST\"] stays ALL: Upgrade 2 names methods= only, not api_view's positional list argument (deliberate boundary)", async () => {
+    const f = await py("apiview-methodsvar.py",
+      `METHODS = ["POST"]\n\n` +
+      `@api_view(METHODS)\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+});
+
+// ─── Upgrade 2 (Task 3): IsAdminUser recognized in PERMISSION_AUTH ──────────
+//
+// IsAdminUser is unconditional auth (Django's IsAdminUser requires
+// request.user.is_staff, which implies an authenticated user; there is no
+// per-method carve-out the way IsAuthenticatedOrReadOnly has), so recognizing
+// it carries zero false-bless risk. Its neighbors (AllowAny,
+// IsAuthenticatedOrReadOnly, an unrecognized custom class) are unaffected.
+describe("IsAdminUser in PERMISSION_AUTH", () => {
+  it("blesses @permission_classes([IsAdminUser]) BELOW @api_view", async () => {
+    const f = await py("isadminuser.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([IsAdminUser])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=true"]);
+  });
+
+  it("blesses the attribute form @permission_classes([permissions.IsAdminUser])", async () => {
+    const f = await py("isadminuser-attr.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([permissions.IsAdminUser])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=true"]);
   });
 });
 
@@ -1841,8 +2130,12 @@ const NEVER_FALSE_BLESS_SWEEP: Array<{
     source:
       `@api_view(["POST"])\n@permission_classes([IsAdminUser])\ndef a(request):\n    return Response({})\n\n` +
       `@api_view(["POST"])\n@permission_classes([FooPermission])\ndef b(request):\n    return Response({})\n`,
+    // /a is a documented POSITIVE since Upgrade 2 (Task 3): IsAdminUser is now
+    // in PERMISSION_AUTH. Sweep positives are documentation-only (the sweep
+    // assertion filters to `!authed`); /b (FooPermission, unrecognized) is the
+    // negative this entry still exercises.
     groundTruth: [
-      { path: "/a", method: "POST", authed: false },
+      { path: "/a", method: "POST", authed: true },
       { path: "/b", method: "POST", authed: false },
     ],
   },

@@ -25,17 +25,43 @@
  *
  * OPEN QUESTION FOR SIGN-OFF: `resolveMethod`'s handling of a Flask `methods=`
  * kwarg that is not a statically readable list/tuple/set of string literals
- * (a variable, `**kwargs`, or a `*splat` with no visible literal verb)
  * deliberately diverges from the regex extractor. The regex silently defaults
  * such a route to GET, which excludes it from the mutating vote. This AST
  * path instead resolves it to "ALL", which keeps the route IN the mutating
  * vote (matching how an Express `.all()` route is treated). This is a real,
  * user-visible behavior change from today's regex path, not a bug fix; it is
  * called out here for explicit sign-off rather than shipped silently.
- * `asApiViewDecorator` follows the SAME ALL-on-unresolvable convention: an
- * `@api_view([METHOD])` / `@api_view([*BASE])` list whose only verbs are hidden
- * behind a variable resolves to "ALL", not GET. Same open question, same
- * pending sign-off.
+ *
+ * UPGRADE 2 (Task 3) partially resolves this divergence: `methods=VAR` now
+ * reads through VAR's value when, and ONLY when, VAR is written EXACTLY ONCE,
+ * at module top level, to a literal list/tuple/set of string verbs
+ * (`collectMethodsVars`, mirroring `collectRouterNames`'s same flat, no-scope
+ * census). That resolved literal is reduced by the SAME `methodFromLiteral`
+ * helper the inline `methods=[...]` path already used, so a same-file
+ * `ALLOWED = ["GET", "POST"]` behaves identically to an inline
+ * `methods=["GET", "POST"]`. Every other shape of `methods=VAR` still resolves
+ * "ALL", never a silent GET: an identifier with no same-file assignment
+ * (imported, or an alias chain `B = A` — the census refuses to chase an
+ * identifier RHS), a computed value (`BASE + EXTRA`, a `binary_operator`, or a
+ * call), a `**kwargs` splat, a `*splat` with no visible literal verb, a
+ * variable written more than once at top level, a variable written inside a
+ * conditional or a function body (not an UNCONDITIONAL same-file literal), or
+ * a variable written through any poisoned form the census cannot safely read
+ * through: an augmented assignment (`X += ...`), a mutating attribute call
+ * (`X.append(...)`), a `global X` statement, a walrus write, a for-loop
+ * target, a subscript/slice-target assignment (`X[:] = ...`, `X[0] = ...`),
+ * or a `with ... as X:` binding. When in doubt, the census leaves the name
+ * out of its map and `resolveMethod` falls through to "ALL" — the
+ * false-negative direction (never GET-dropping a route out of the mutating
+ * vote) always wins over precision.
+ *
+ * `asApiViewDecorator` follows the SAME ALL-on-unresolvable convention for its
+ * own unresolvable forms, but is DELIBERATELY NOT extended by Upgrade 2: an
+ * `@api_view([METHOD])` / `@api_view([*BASE])` / `@api_view(METHODS)` list
+ * whose only verbs are hidden behind a variable resolves to "ALL", not GET,
+ * even when that variable has a same-file literal assignment. Upgrade 2 names
+ * the Flask `methods=` kwarg only; widening it to api_view's positional list
+ * argument is a separate, unapproved change.
  *
  * DJANGO REST SCOPE (best-effort, function views only): `@api_view(["POST"])`
  * routes are recognized; the URL lives in `urls.py` and cross-file resolution
@@ -165,13 +191,16 @@ const MIDDLEWARE_AUTH_SEGMENTS = new Set([
   "auth", "authentication", "authenticate", "authenticated", "jwt", "oauth", "oauth2", "bearer",
 ]);
 // DRF @permission_classes([...]) EXACT class names that unconditionally require
-// an authenticated request. Deliberately narrow: AllowAny never requires auth;
+// an authenticated request: IsAuthenticated, and IsAdminUser (requires
+// request.user.is_staff, which implies an authenticated user — admin is a
+// strict subset of authed, so recognizing it carries zero false-bless risk).
+// Deliberately narrow otherwise: AllowAny never requires auth;
 // IsAuthenticatedOrReadOnly and DjangoModelPermissionsOrAnonReadOnly only require
 // auth for unsafe (write) methods, which is a per-method condition this
 // route-level check cannot statically resolve, so they are NOT here; any other
 // built-in or custom permission class is unrecognized. Per the never-false-bless
 // invariant, ambiguity and the unrecognized case both resolve to false.
-const PERMISSION_AUTH = new Set(["IsAuthenticated"]);
+const PERMISSION_AUTH = new Set(["IsAuthenticated", "IsAdminUser"]);
 
 // ─── Body-signature lexicons (addendum: hook body classification) ────────────
 // Rejection statuses that mean "request denied for identity reasons".
@@ -297,7 +326,145 @@ function collectRouterNames(root: SyntaxNode): Set<string> {
   return names;
 }
 
-function asRouteDecorator(dec: SyntaxNode, routerNames: Set<string>): PyRoute | null {
+/** Reduces a `list`/`tuple`/`set` literal node to its resolved method: the
+ *  mutating verb when one is present, else the first recognized verb, else
+ *  GET for a fully visible literal (including an empty one — Flask's own
+ *  default), or "ALL" when a non-string element (`*splat`, a bare variable
+ *  entry) hides a possible verb. Shared by `resolveMethod`'s `methods=` kwarg
+ *  (inline literal AND same-file-resolved variable) and
+ *  `asApiViewDecorator`'s `@api_view([...])` list: same literal shape, same
+ *  reduction rules, one implementation. */
+function methodFromLiteral(value: SyntaxNode): string {
+  const children = value.namedChildren.filter((n): n is SyntaxNode => n !== null);
+  const verbs = children
+    .filter((n) => n.type === "string")
+    .map((s) => (pyStringText(s) ?? "").toUpperCase())
+    .filter((v) => HTTP_VERBS.has(v));
+  const hidden = children.some((n) => n.type !== "string");
+  if (verbs.length === 0) return hidden ? "ALL" : "GET"; // [*BASE] vs literal []
+  return verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0];
+}
+
+/** `node` itself when it IS an `identifier`, else every `identifier`
+ *  descendant — covers pattern-unpack targets (`x, ALLOWED = pair`,
+ *  `for a, ALLOWED in pairs:`) without needing to special-case
+ *  `pattern_list`/`tuple_pattern` shapes individually. */
+function identifiersIn(node: SyntaxNode): SyntaxNode[] {
+  if (node.type === "identifier") return [node];
+  return node.descendantsOfType("identifier").filter((n): n is SyntaxNode => n !== null);
+}
+
+/** True when `asn` (an `assignment` node) is a direct module-level statement:
+ *  its parent (`expression_statement`) is itself a direct child of `root`. A
+ *  write nested inside an `if`/`for`/`while`/`try`/`with`/function/class body
+ *  is NOT an unconditional same-file literal — resolving it could pick a
+ *  value that only sometimes runs (the conditional case) or a value scoped to
+ *  a function that never reaches the module binding at all (the def-local
+ *  case) — so it must never become a resolvable methods= candidate. */
+function isTopLevelAssignment(asn: SyntaxNode, root: SyntaxNode): boolean {
+  const stmt = asn.parent;
+  return stmt !== null && stmt.parent !== null && stmt.parent.id === root.id;
+}
+
+/** Names written through a form the census cannot safely read a single value
+ *  through, ANYWHERE in the file (no scope analysis, mirroring
+ *  collectRouterNames's flat census): an augmented assignment (`X += ...`), a
+ *  subscript/slice-target assignment (`X[:] = ...`, `X[0] = ...`), a
+ *  tuple/pattern-unpack assignment target (`x, X = pair`), a `global X`
+ *  statement, a walrus write (`X := ...`), a for-loop target (`for X in
+ *  ...:`), a `with ... as X:` binding, or a mutating attribute call on the
+ *  identifier (`X.append(...)`, `X.<anything>(...)`). A name in this set can
+ *  never resolve through collectMethodsVars, however many literal assignments
+ *  it also has — a write ANYWHERE in the file only ever ADDS poisoning, never
+ *  removes it, so this can only over-poison (stay "ALL"), never under-poison
+ *  into a false GET-drop. */
+function collectPoisonedMethodsNames(root: SyntaxNode): Set<string> {
+  const poisoned = new Set<string>();
+  const add = (n: SyntaxNode | null) => {
+    if (n && n.type === "identifier") poisoned.add(n.text);
+  };
+  for (const asn of root.descendantsOfType("augmented_assignment")) {
+    if (!asn) continue;
+    const left = asn.childForFieldName("left");
+    if (left) identifiersIn(left).forEach(add);
+  }
+  for (const asn of root.descendantsOfType("assignment")) {
+    if (!asn) continue;
+    const left = asn.childForFieldName("left");
+    if (!left) continue;
+    if (left.type === "subscript") {
+      add(left.childForFieldName("value")); // ALLOWED[:] = ... / ALLOWED[0] = ...
+    } else if (left.type !== "identifier") {
+      identifiersIn(left).forEach(add); // pattern_list unpack: x, ALLOWED = pair
+    }
+  }
+  for (const gs of root.descendantsOfType("global_statement")) {
+    if (!gs) continue;
+    gs.namedChildren.forEach(add);
+  }
+  for (const ne of root.descendantsOfType("named_expression")) {
+    if (!ne) continue;
+    add(ne.childForFieldName("name")); // walrus: (ALLOWED := ...)
+  }
+  for (const fs of root.descendantsOfType("for_statement")) {
+    if (!fs) continue;
+    const left = fs.childForFieldName("left");
+    if (left) identifiersIn(left).forEach(add);
+  }
+  for (const wi of root.descendantsOfType("with_item")) {
+    if (!wi) continue;
+    const value = wi.childForFieldName("value");
+    if (value && value.type === "as_pattern") {
+      const alias = value.childForFieldName("alias"); // with ... as ALLOWED:
+      if (alias) identifiersIn(alias).forEach(add);
+    }
+  }
+  for (const call of root.descendantsOfType("call")) {
+    if (!call) continue;
+    const fn = call.childForFieldName("function");
+    if (fn && fn.type === "attribute") add(fn.childForFieldName("object")); // ALLOWED.append(...)
+  }
+  return poisoned;
+}
+
+/** Identifiers assigned, at MODULE TOP LEVEL, to a single unambiguous
+ *  `list`/`tuple`/`set` literal of string verbs — the value a Flask
+ *  `methods=` kwarg may safely resolve through (Upgrade 2). Mirrors
+ *  collectRouterNames's flat, no-scope census: MULTIPLE top-level assignments
+ *  to the same name (any RHS shape, not only a literal — a literal followed
+ *  by a computed reassignment is exactly as ambiguous as two literals) make
+ *  its value ambiguous, and any poisoned write form (collectPoisonedMethodsNames)
+ *  disqualifies it regardless of how many literal assignments exist. A name
+ *  that is imported, computed, an identifier alias (`B = A`: the census
+ *  refuses to chase an identifier RHS), written more than once, written only
+ *  conditionally/def-locally, or poisoned is simply ABSENT from the returned
+ *  map — `resolveMethod` then falls through to "ALL", never a silent GET. */
+function collectMethodsVars(root: SyntaxNode): Map<string, SyntaxNode> {
+  const writeCounts = new Map<string, number>();
+  const literalByName = new Map<string, SyntaxNode>();
+  for (const asn of root.descendantsOfType("assignment")) {
+    if (!asn) continue;
+    const left = asn.childForFieldName("left");
+    if (!left || left.type !== "identifier") continue; // subscript/pattern_list: no plain-name write
+    if (!isTopLevelAssignment(asn, root)) continue; // conditional / def-local: not unconditional
+    const name = left.text;
+    writeCounts.set(name, (writeCounts.get(name) ?? 0) + 1);
+    const right = asn.childForFieldName("right");
+    if (right && ["list", "tuple", "set"].includes(right.type)) literalByName.set(name, right);
+  }
+  const poisoned = collectPoisonedMethodsNames(root);
+  const resolved = new Map<string, SyntaxNode>();
+  for (const [name, node] of literalByName) {
+    if (writeCounts.get(name) === 1 && !poisoned.has(name)) resolved.set(name, node);
+  }
+  return resolved;
+}
+
+function asRouteDecorator(
+  dec: SyntaxNode,
+  routerNames: Set<string>,
+  methodsVars: Map<string, SyntaxNode>,
+): PyRoute | null {
   const expr = dec.namedChild(0);
   if (!expr || expr.type !== "call") return null;
   const fn = expr.childForFieldName("function");
@@ -311,7 +478,7 @@ function asRouteDecorator(dec: SyntaxNode, routerNames: Set<string>): PyRoute | 
   if (!receiver || !(routerNames.has(receiver) || ROUTER_RECEIVER.test(receiver))) return null;
   const path = routePath(args);
   if (path === null || !path.startsWith("/")) return null; // leading-slash gate, same as JS
-  return { method: resolveMethod(attr, args), path, call: expr, receiver };
+  return { method: resolveMethod(attr, args, methodsVars), path, call: expr, receiver };
 }
 
 /** Resolves the HTTP method(s) a route decorator registers.
@@ -324,15 +491,17 @@ function asRouteDecorator(dec: SyntaxNode, routerNames: Set<string>): PyRoute | 
  *  to GET whenever `methods=` isn't a literal list it can pattern-match (a
  *  variable, a set, a splat), which quietly excludes that route from the
  *  mutating vote. This AST path instead emits "ALL" for every statically
- *  unresolvable form (variable value, **kwargs splat, a *splat with no visible
- *  literal verb), so the route STAYS in the mutating vote ("ALL" is a member of
- *  both MUTATION_METHODS and BODY_METHODS), the same way Express's `.all()` is
- *  treated. This is a real behavior change from the regex path and is flagged
- *  as an open question for sign-off, not a silent fix.
+ *  unresolvable form (**kwargs splat, a *splat with no visible literal verb,
+ *  or a methods= variable that Upgrade 2's same-file census cannot safely
+ *  resolve — see `collectMethodsVars`), so the route STAYS in the mutating
+ *  vote ("ALL" is a member of both MUTATION_METHODS and BODY_METHODS), the
+ *  same way Express's `.all()` is treated. This is a real behavior change
+ *  from the regex path and is flagged as an open question for sign-off, not a
+ *  silent fix.
  *
  *  A fully visible, empty `methods=[]` is NOT ambiguous: Flask's own default is
  *  GET, so an empty literal resolves to GET rather than ALL. */
-function resolveMethod(attr: string, args: SyntaxNode): string {
+function resolveMethod(attr: string, args: SyntaxNode, methodsVars: Map<string, SyntaxNode>): string {
   if (attr !== "route" && attr !== "api_route") return attr.toUpperCase();
   const named = args.namedChildren.filter((n): n is SyntaxNode => n !== null);
   const kw = named.find(
@@ -348,15 +517,18 @@ function resolveMethod(attr: string, args: SyntaxNode): string {
     return hasSplat ? "ALL" : "GET";
   }
   const value = kw.childForFieldName("value");
-  if (!value || !["list", "tuple", "set"].includes(value.type)) return "ALL"; // methods=VARIABLE
-  const children = value.namedChildren.filter((n): n is SyntaxNode => n !== null);
-  const verbs = children
-    .filter((n) => n.type === "string")
-    .map((s) => (pyStringText(s) ?? "").toUpperCase())
-    .filter((v) => HTTP_VERBS.has(v));
-  const hidden = children.some((n) => n.type !== "string");
-  if (verbs.length === 0) return hidden ? "ALL" : "GET"; // [*BASE] vs literal []
-  return verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0];
+  if (!value || !["list", "tuple", "set"].includes(value.type)) {
+    // methods=VARIABLE: resolve through a same-file single-literal assignment
+    // (Upgrade 2) when one exists; every other shape (computed, imported,
+    // reassigned, mutated, an identifier alias chain — refuse to chase) stays
+    // "ALL", never a silent GET.
+    if (value?.type === "identifier") {
+      const literal = methodsVars.get(value.text);
+      if (literal) return methodFromLiteral(literal);
+    }
+    return "ALL"; // methods=VARIABLE, computed, imported, reassigned, or mutated
+  }
+  return methodFromLiteral(value);
 }
 
 /** Django REST function views: @api_view(["POST"]). Identifier callee, NOT an
@@ -372,26 +544,19 @@ function asApiViewDecorator(dec: SyntaxNode, definition: SyntaxNode): PyRoute | 
   const list = expr.childForFieldName("arguments")?.namedChild(0);
   let method = "GET"; // DRF default when @api_view() has no args
   if (list && ["list", "tuple", "set"].includes(list.type)) {
-    const children = list.namedChildren.filter((n): n is SyntaxNode => n !== null);
-    const verbs = children
-      .filter((n) => n.type === "string")
-      .map((s) => (pyStringText(s) ?? "").toUpperCase())
-      .filter((v) => HTTP_VERBS.has(v));
-    // A non-string element (a variable verb: @api_view([METHOD]) or
-    // @api_view([*BASE])) is statically unresolvable. Following the module's
-    // ALL-on-unresolvable convention (resolveMethod, pending the owner sign-off
-    // in the header OPEN QUESTION), an unresolvable list with no visible literal
-    // verb resolves ALL so the route STAYS in the mutating vote rather than
-    // silently defaulting GET; a visible literal still resolves it normally.
-    const hidden = children.some((n) => n.type !== "string");
-    method =
-      verbs.length === 0
-        ? hidden
-          ? "ALL"
-          : "GET"
-        : (verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0]);
+    // Reduced by the SAME methodFromLiteral helper resolveMethod's methods=
+    // kwarg uses: a non-string element (a variable verb: @api_view([METHOD])
+    // or @api_view([*BASE])) is statically unresolvable and resolves ALL so
+    // the route STAYS in the mutating vote rather than silently defaulting
+    // GET; a visible literal still resolves it normally.
+    method = methodFromLiteral(list);
   } else if (list) {
-    method = "ALL"; // verbs behind a variable: keep the route in the mutating vote
+    // verbs behind a bare variable (@api_view(METHODS)): stays ALL. Unlike
+    // resolveMethod's methods= kwarg, this is NOT extended by Upgrade 2 even
+    // when METHODS has a same-file literal assignment — a deliberate boundary
+    // (see the header OPEN QUESTION): the approved upgrade names methods=
+    // only, not api_view's positional list argument.
+    method = "ALL";
   }
   // No receiver: DRF function views register via urls.py, not on a router
   // variable. The empty string matches no byReceiver scope, so only global
@@ -1206,6 +1371,7 @@ export function extractPythonFileMiddlewareAst(tree: Tree): FileMiddleware {
 export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const routerNames = collectRouterNames(tree.rootNode);
+  const methodsVars = collectMethodsVars(tree.rootNode);
   const defs = collectFunctionDefs(tree.rootNode);
   const scopes = collectPyMiddleware(tree, defs);
   for (const dd of tree.rootNode.descendantsOfType("decorated_definition")) {
@@ -1242,7 +1408,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     // never argument or path text: @app.post("/validate") is a path, not
     // validation middleware, and must not bless its lane.
     const laneNames = decorators
-      .filter((d) => asRouteDecorator(d, routerNames) === null)
+      .filter((d) => asRouteDecorator(d, routerNames, methodsVars) === null)
       .map((d) => {
         const expr = d.namedChild(0);
         if (!expr) return "";
@@ -1253,7 +1419,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const perVal = laneNames.some((t) => VAL_NAMES.test(t));
     const perRate = laneNames.some((t) => RATE_NAMES.test(t));
     for (const dec of decorators) {
-      const routeFromDecorator = asRouteDecorator(dec, routerNames);
+      const routeFromDecorator = asRouteDecorator(dec, routerNames, methodsVars);
       // asApiViewDecorator is only consulted when the decorator is not already a
       // router/app route, so the api_view-only permission_classes bless below can
       // key off apiViewRoute !== null.
