@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  extractGoRoutesAst, SECURITY_AST_GO,
+  extractGoRoutesAst, extractGoFileMiddlewareAst, SECURITY_AST_GO,
   bodyAuthSignatureGo, classifyGoMiddlewareAuth, collectGoFunctionDefs,
 } from "../../../src/drift/security-ast-go.js";
 import { SECURITY_AST } from "../../../src/drift/security-ast.js";
@@ -1228,5 +1228,302 @@ describe("Task 3: per-route validation and rate-limit lanes", () => {
     // NOT set hasValidation on the AST path — lanes come from structural middleware
     // names only, and hasErrorHandler is hard-coded false.
     expect(rt.hasErrorHandler).toBe(false);
+  });
+});
+
+// ── Task 4: Use()/group-scoped middleware collector (body-first + unsure) ─────
+//
+// OPTION A (LOCKED owner decision governs; the brief's residual wide-core Step 2
+// pins were STALE): an imported / opaque / no-in-file-def Use hook NEVER blesses.
+// The AUTH lane (hasAuth true) is proven ONLY by in-file middleware whose body
+// verifiably rejects (rule 2); imported CORE names (authMiddleware, RequireAuth,
+// middleware.VerifyToken, ...) propagate the UNSURE lane (hasAuth false +
+// authUnsureHook) by the SAME receiver / structural-scope / row rules. The scope
+// model itself (row order, closure shadow, cross-function isolation, (name,scope)
+// poisoning, conditional-Use skip, copy-at-creation) is invariant to which lane
+// carries the signal.
+
+// An in-file middleware whose body verifiably rejects (rule 2 bless).
+const authDef = (name = "authMiddleware") =>
+  `func ${name}(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() }\n`;
+// Factory form (return-of-closure) with a rejecting inner body (rule 2 bless).
+const authFactory = (name = "RequireAuth") =>
+  `func ${name}() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() } }\n`;
+
+describe("Use scoping and group inheritance (AUTH lane via in-file bodies)", () => {
+  it("r.Use(<in-file rejecting body>) blesses a later same-scope route (key absent)", async () => {
+    const [rt] = await routesOf(authDef() + `func routes() {\n\tr.Use(authMiddleware)\n\tr.POST("/x", h)\n}\n`);
+    expect(rt.hasAuth).toBe(true);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("Use arg forms that bless: bare-call factory and multi-arg (in-file body)", async () => {
+    // bare-call factory: r.Use(RequireAuth()) resolved to an in-file rejecting body
+    const a = await routesOf(authFactory() + `func routes() {\n\tr.Use(RequireAuth())\n\tr.POST("/x", h)\n}\n`);
+    expect(a[0].hasAuth).toBe(true);
+    // multi-arg: only the in-file rejecting body confirms; gin.Logger() is ignored
+    const b = await routesOf(authDef() + `func routes() {\n\tr.Use(gin.Logger(), authMiddleware)\n\tr.POST("/x", h)\n}\n`);
+    expect(b[0].hasAuth).toBe(true);
+  });
+
+  it("BODY-FIRST bless under a BORING name (proves the collector reads bodies)", async () => {
+    const src =
+      `func guard(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() }\n` +
+      `func routes() {\n\tr.Use(guard)\n\tr.POST("/x", h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(true);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("BODY-FIRST NON-bless under an AUTH name (rule 3: visible non-enforcing, key absent)", async () => {
+    const src =
+      `func authCheck(c *gin.Context) { log.Printf("auth %s", c.Request.URL.Path); c.Next() }\n` +
+      `func routes() {\n\tr.Use(authCheck)\n\tr.POST("/x", h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("ROW ORDER (Gin runtime-truth, both directions in one fixture)", async () => {
+    // /a is registered BEFORE the Use -> unblessed at runtime; /b AFTER -> blessed.
+    const src = authDef() +
+      `func routes() {\n\tr.POST("/a", h)\n\tr.Use(authMiddleware)\n\tr.POST("/b", h2)\n}\n`;
+    const rts = await routesOf(src);
+    const a = rts.find((r) => r.path === "/a")!;
+    const b = rts.find((r) => r.path === "/b")!;
+    expect(a.hasAuth).toBe(false);
+    expect(b.hasAuth).toBe(true);
+  });
+
+  it("receiver isolation: r.Use(<body>) never blesses a sibling api.POST in the same func", async () => {
+    const src = authDef() +
+      `func routes() {\n\tr.Use(authMiddleware)\n\tr.POST("/blessed", h)\n\tapi.POST("/isolated", h)\n}\n`;
+    const rts = await routesOf(src);
+    expect(rts.find((r) => r.path === "/blessed")!.hasAuth).toBe(true);
+    expect(rts.find((r) => r.path === "/isolated")!.hasAuth).toBe(false);
+  });
+
+  it("group scoping: a group Use blesses the group's routes but never the parent sibling", async () => {
+    const src = authFactory() +
+      `func routes() {\n\tapi := r.Group("/api")\n\tapi.Use(RequireAuth())\n\tapi.POST("/items", h)\n\tr.POST("/public", h)\n}\n`;
+    const rts = await routesOf(src);
+    expect(rts.find((r) => r.path === "/items")!.hasAuth).toBe(true);
+    expect(rts.find((r) => r.path === "/public")!.hasAuth).toBe(false);
+  });
+
+  it("parent-to-group propagation is copy-at-creation (both directions)", async () => {
+    // Use BEFORE the Group creation blesses the group's routes.
+    const before = authDef() +
+      `func routes() {\n\tr.Use(authMiddleware)\n\tapi := r.Group("/api")\n\tapi.POST("/items", h)\n}\n`;
+    expect((await routesOf(before)).find((r) => r.path === "/items")!.hasAuth).toBe(true);
+    // Use AFTER the Group creation does NOT (accepted Gin copy-at-creation semantics).
+    const after = authDef() +
+      `func routes() {\n\tapi := r.Group("/api")\n\tr.Use(authMiddleware)\n\tapi.POST("/items", h)\n}\n`;
+    expect((await routesOf(after)).find((r) => r.path === "/items")!.hasAuth).toBe(false);
+  });
+
+  it("nested transitivity: v1 := api.Group inherits an r.Use registered before api", async () => {
+    const src = authDef() +
+      `func routes() {\n\tr.Use(authMiddleware)\n\tapi := r.Group("/api")\n\tv1 := api.Group("/v1")\n\tv1.POST("/x", h)\n}\n`;
+    expect((await routesOf(src)).find((r) => r.path === "/x")!.hasAuth).toBe(true);
+  });
+
+  it("Echo group-with-inline-middleware: the LAST arg after the path is a middleware candidate", async () => {
+    // e.Group("/admin", authMiddleware) -> the trailing arg (no handler position on
+    // a Group call) is the middleware; the in-file rejecting body blesses.
+    const src = authDef() +
+      `func routes() {\n\tadmin := e.Group("/admin", authMiddleware)\n\tadmin.POST("/users", h)\n}\n`;
+    expect((await routesOf(src)).find((r) => r.path === "/users")!.hasAuth).toBe(true);
+  });
+
+  it("chi closure SHADOW guard: an inner r.Use never blesses the outer receiver's route", async () => {
+    const src = authDef() +
+      `func routes() {\n` +
+      `\tr.Route("/admin", func(r chi.Router) {\n\t\tr.Use(authMiddleware)\n\t\tr.Post("/users", h)\n\t})\n` +
+      `\tr.Post("/public", pub)\n}\n`;
+    const rts = await routesOf(src);
+    expect(rts.find((r) => r.path === "/users")!.hasAuth).toBe(true);
+    expect(rts.find((r) => r.path === "/public")!.hasAuth).toBe(false);
+  });
+
+  it("chi closure derivation (positive): an outer Use BEFORE the Route blesses the closure; AFTER does not", async () => {
+    const before = authDef() +
+      `func routes() {\n\tr.Use(authMiddleware)\n\tr.Route("/admin", func(sub chi.Router) {\n\t\tsub.Post("/x", h)\n\t})\n}\n`;
+    expect((await routesOf(before)).find((r) => r.path === "/x")!.hasAuth).toBe(true);
+    const after = authDef() +
+      `func routes() {\n\tr.Route("/admin", func(sub chi.Router) {\n\t\tsub.Post("/x", h)\n\t})\n\tr.Use(authMiddleware)\n}\n`;
+    expect((await routesOf(after)).find((r) => r.path === "/x")!.hasAuth).toBe(false);
+  });
+
+  it("cross-function Use never blesses (same-scope pin)", async () => {
+    const src = authDef() +
+      `func setup(r *gin.Engine) {\n\tr.Use(authMiddleware)\n}\n` +
+      `func routes(r *gin.Engine) {\n\tr.POST("/x", h)\n}\n`;
+    expect((await routesOf(src)).find((r) => r.path === "/x")!.hasAuth).toBe(false);
+  });
+
+  it("same-name groups across functions inherit INDEPENDENTLY (both directions)", async () => {
+    const src = authDef() +
+      `func first(r *gin.Engine) {\n\tapi := r.Group("/api")\n\tapi.Use(authMiddleware)\n\tapi.POST("/x", h)\n}\n` +
+      `func second(r *gin.Engine) {\n\tapi := r.Group("/api")\n\tapi.POST("/y", h)\n}\n`;
+    const rts = await routesOf(src);
+    // The own-scope mark survives (per-name file-wide poisoning would kill this).
+    expect(rts.find((r) => r.path === "/x")!.hasAuth).toBe(true);
+    // Scope keying alone isolates the second func (its api has no Use).
+    expect(rts.find((r) => r.path === "/y")!.hasAuth).toBe(false);
+  });
+
+  it("same-scope rebind poisoning: 2+ bindings of one name in ONE scope never blesses", async () => {
+    const src = authDef() +
+      `func routes() {\n\tapi := r.Group("/a")\n\tapi.Use(authMiddleware)\n\tapi = r.Group("/b")\n\tapi.POST("/x", h)\n}\n`;
+    expect((await routesOf(src)).find((r) => r.path === "/x")!.hasAuth).toBe(false);
+  });
+
+  it("conditional Use never marks (never-false-bless); an unconditional Use blesses a conditional route", async () => {
+    // Table-driven: each conditional/loop wrapper around the Use suppresses the mark.
+    for (const open of ["if cfg.AuthEnabled {", "for i := 0; i < 1; i++ {", "switch x {\n\tcase 1:", "select {\n\tcase <-ch:"]) {
+      const close = open.includes("case") ? "\t}" : "}";
+      const src = authDef() +
+        `func routes() {\n\t${open}\n\t\tr.Use(authMiddleware)\n\t${close}\n\tr.POST("/x", h)\n}\n`;
+      const rts = await routesOf(src);
+      expect(rts.find((r) => r.path === "/x")!.hasAuth).toBe(false);
+    }
+    // Positive control: the mark is unconditional; only the ROUTE is conditional.
+    const ctrl = authDef() +
+      `func routes() {\n\tr.Use(authMiddleware)\n\tif debug {\n\t\tr.POST("/x", h)\n\t}\n}\n`;
+    expect((await routesOf(ctrl)).find((r) => r.path === "/x")!.hasAuth).toBe(true);
+  });
+
+  it("impure Use arg never marks (null resolution never poisons a later route)", async () => {
+    const a = await routesOf(`func routes() {\n\tr.Use(factory.Make(authCfg).Logger())\n\tr.POST("/x", h)\n}\n`);
+    expect(a.find((r) => r.path === "/x")!.hasAuth).toBe(false);
+    const b = await routesOf(`func routes() {\n\tr.Use(registry.get("authCfg").Logger)\n\tr.POST("/x", h)\n}\n`);
+    expect(b.find((r) => r.path === "/x")!.hasAuth).toBe(false);
+  });
+
+  it("Gorilla: router.Use(<body>) before a HandleFunc(...).Methods(POST) route blesses it", async () => {
+    const src = authDef() +
+      `func routes() {\n\trouter.Use(authMiddleware)\n\trouter.HandleFunc("/x", h).Methods("POST")\n}\n`;
+    expect((await routesOf(src)).find((r) => r.path === "/x")!.hasAuth).toBe(true);
+  });
+
+  it("non-router receiver gate on Use: a Use on a non-router receiver blesses nothing", async () => {
+    const src = authDef() +
+      `func routes() {\n\tq.Use(authMiddleware)\n\tr.POST("/x", h)\n}\n`;
+    const rt = (await routesOf(src)).find((r) => r.path === "/x")!;
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("lanes via Use: rate-limit and validation propagate independently, no auth cross-set", async () => {
+    const rate = await routesOf(`func routes() {\n\tr.Use(middleware.RateLimiter(rate))\n\tr.POST("/x", h)\n}\n`);
+    const rr = rate.find((r) => r.path === "/x")!;
+    expect(rr.hasRateLimit).toBe(true);
+    expect(rr.hasValidation).toBe(false);
+    expect(rr.hasAuth).toBe(false);
+    const val = await routesOf(`func routes() {\n\tr.Use(RequestValidator())\n\tr.POST("/x", h)\n}\n`);
+    const vr = val.find((r) => r.path === "/x")!;
+    expect(vr.hasValidation).toBe(true);
+    expect(vr.hasRateLimit).toBe(false);
+    expect(vr.hasAuth).toBe(false);
+  });
+});
+
+describe("Use scoping unsure state (imported / opaque hooks hedge, never bless)", () => {
+  it("imported non-core Use hook hedges the scope's routes", async () => {
+    const [rt] = await routesOf(`func routes() {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", h)\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBe("middleware.VerifyToken");
+  });
+
+  it("group-scope unsure inherits to the group's routes but not the parent sibling", async () => {
+    const src =
+      `func routes() {\n\tapi := r.Group("/api")\n\tapi.Use(middleware.VerifyToken)\n\tapi.POST("/items", h)\n\tr.POST("/public", h)\n}\n`;
+    const rts = await routesOf(src);
+    const items = rts.find((r) => r.path === "/items")!;
+    expect(items.hasAuth).toBe(false);
+    expect(items.authUnsureHook).toBe("middleware.VerifyToken");
+    const pub = rts.find((r) => r.path === "/public")!;
+    expect(pub.hasAuth).toBe(false);
+    expect(pub.authUnsureHook).toBeUndefined();
+  });
+
+  it("in-file OPAQUE-body Use hook hedges (auth-flavored unresolved callee, non-core name)", async () => {
+    // tokenGuard: auth-flavored ("token"), NOT vetoed, body opaque (checkSession
+    // undefined -> auth-flavored unresolved callee -> opaque, rule 4 unsure).
+    const src =
+      `func tokenGuard(c *gin.Context) { if !checkSession(c) { c.Next(); return }; c.Next() }\n` +
+      `func routes() {\n\tr.Use(tokenGuard)\n\tr.POST("/x", h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBe("tokenGuard");
+  });
+
+  it("auth beats unsure in scope (a confirmed auth mark wins, key absent)", async () => {
+    const src = authFactory() +
+      `func routes() {\n\tr.Use(RequireAuth())\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(true);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("per-route auth clears scope unsure", async () => {
+    const src = authFactory() +
+      `func routes() {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", RequireAuth(), h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(true);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("deterministic attribution: two unsure Use hooks -> FIRST in document order", async () => {
+    const src =
+      `func routes() {\n\tr.Use(middleware.VerifyToken)\n\tr.Use(middleware.CheckToken)\n\tr.POST("/x", h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBe("middleware.VerifyToken");
+  });
+
+  it("imported NON-flavored Use hook: not-auth flat, key ABSENT (zero evidence never hedges)", async () => {
+    const [rt] = await routesOf(`func routes() {\n\tr.Use(middleware.RequestID)\n\tr.POST("/x", h)\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+});
+
+describe("extractGoFileMiddlewareAst (file-level OR of confirmed lanes)", () => {
+  const NONE = { hasAuth: false, hasValidation: false, hasRateLimit: false };
+  const mwIndex = async (src: string) => {
+    const f = await go("mw.go", PKG + src);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    return extractGoFileMiddlewareAst(f.tree!);
+  };
+
+  it("r.Use(<in-file body>) -> hasAuth true", async () => {
+    expect(await mwIndex(authDef() + `func routes() {\n\tr.Use(authMiddleware)\n}\n`))
+      .toEqual({ hasAuth: true, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("a derived group's Use ORs into the file-level index", async () => {
+    expect(await mwIndex(authFactory() + `func routes() {\n\tapi := r.Group("/api")\n\tapi.Use(RequireAuth())\n}\n`))
+      .toEqual({ hasAuth: true, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("inline group middleware ORs into the file-level index", async () => {
+    expect(await mwIndex(authDef() + `func routes() {\n\tadmin := e.Group("/admin", authMiddleware)\n}\n`))
+      .toEqual({ hasAuth: true, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("python-parity: a per-route middleware arg is NOT a file-level bless", async () => {
+    expect(await mwIndex(authFactory() + `func routes() {\n\tr.POST("/x", RequireAuth(), h)\n}\n`)).toEqual(NONE);
+  });
+
+  it("UNSURE never launders into the OR (never-false-bless)", async () => {
+    expect(await mwIndex(`func routes() {\n\tr.Use(middleware.VerifyToken)\n}\n`)).toEqual(NONE);
+  });
+
+  it("unknown Use name / empty / comments-only -> NONE", async () => {
+    expect(await mwIndex(`func routes() {\n\tr.Use(track())\n}\n`)).toEqual(NONE);
+    expect(await mwIndex(`func routes() {}\n`)).toEqual(NONE);
+    expect(await mwIndex(`// just a comment\nfunc routes() {}\n`)).toEqual(NONE);
   });
 });

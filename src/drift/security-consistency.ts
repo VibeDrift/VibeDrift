@@ -36,6 +36,7 @@ import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
 import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
 import { extractPythonRoutesAst, extractPythonFileMiddlewareAst } from "./security-ast-python.js";
+import { extractGoRoutesAst, extractGoFileMiddlewareAst } from "./security-ast-go.js";
 import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
 
 // Canonical mutating set (upper-cased), shared with the in-loop classifier via
@@ -174,6 +175,7 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
     // mentioning app.use(authMiddleware) matches the jsAuth regex), and noise in
     // this index is a file-wide bless.
     const pythonAst = file.language === "python" && !!file.tree && !file.tree.rootNode.hasError;
+    const goAst = file.language === "go" && !!file.tree && !file.tree.rootNode.hasError;
 
     // JS/TS — Express / Hono / Fastify / Koa. AST when a parsed tree is
     // available (structural: gated on a router/app receiver, not just
@@ -184,10 +186,11 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
       jsAuth = mw.hasAuth;
       jsRateLimit = mw.hasRateLimit;
       jsValidation = mw.hasValidation;
-    } else if (pythonAst) {
-      // Cross-language noise: on a clean-parsed python file the js regex arms are
-      // pure noise (they match app.use(...) text inside docstrings/comments), so
-      // force them false rather than let them file-wide-bless a python route.
+    } else if (pythonAst || goAst) {
+      // Cross-language noise on either clean-tree language is a file-wide bless:
+      // on a clean-parsed python OR go file the js regex arms are pure noise (they
+      // match app.use(...) text inside docstrings/comments), so force them false
+      // rather than let them file-wide-bless that file's routes.
       jsAuth = false;
       jsRateLimit = false;
       jsValidation = false;
@@ -198,13 +201,21 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
       jsValidation = /(?:router|app)\s*\.\s*use\s*\(\s*[^,)]*?(?:validate|validator|joi|zod|celebrate)/i.test(c);
     }
 
-    // Go — Echo / Gin / Chi
-    // e.Use(AuthMiddleware) | r.Use(authMiddleware) | g := e.Group(...); g.Use(...)
-    // Forced false on a clean-parsed python file for the same cross-language
-    // noise reason as the js arms above.
-    const goAuth = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Aa]uth|RequireAuth|VerifyToken|JWT|Bearer)/.test(c);
-    const goRateLimit = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Rr]ateLimit|[Tt]hrottle|[Ll]imiter)/.test(c);
-    const goValidation = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Vv]alidate|[Vv]alidator)/.test(c);
+    // Go: Gin / Echo / chi / Gorilla. AST when a clean parsed tree is available;
+    // regex fallback otherwise (keeping Phase A's !pythonAst guards
+    // byte-identical). Byte-compat: for every non-(python-or-go-with-clean-tree)
+    // file, ALL regex arms keep running on the raw content exactly as today.
+    let goAuth: boolean, goRateLimit: boolean, goValidation: boolean;
+    if (goAst) {
+      const mw = extractGoFileMiddlewareAst(file.tree!);
+      goAuth = mw.hasAuth;
+      goRateLimit = mw.hasRateLimit;
+      goValidation = mw.hasValidation;
+    } else {
+      goAuth = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Aa]uth|RequireAuth|VerifyToken|JWT|Bearer)/.test(c);
+      goRateLimit = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Rr]ateLimit|[Tt]hrottle|[Ll]imiter)/.test(c);
+      goValidation = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Vv]alidate|[Vv]alidator)/.test(c);
+    }
 
     // Python — Flask / FastAPI
     // @app.before_request def f() | @blueprint.before_request | app.add_middleware(AuthMW)
@@ -215,9 +226,12 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
       pyRateLimit = mw.hasRateLimit;
       pyValidation = mw.hasValidation;
     } else {
-      pyAuth = /(?:@\w+\.before_request|@blueprint\.before_request|add_middleware\s*\([^,)]*[Aa]uth|@?\bjwt_required\b|@?\blogin_required\b)/.test(c);
-      pyRateLimit = /(?:@\w+\.\w+\s*\([^)]*[Ll]imit|RateLimiter|Limiter\(|add_middleware\s*\([^,)]*[Ll]imit)/.test(c);
-      pyValidation = /add_middleware\s*\([^,)]*[Vv]alid/.test(c);
+      // Forced false on a clean-parsed go file for the same cross-language noise
+      // reason as above (a go comment containing login_required currently sets
+      // pyAuth for that go file).
+      pyAuth = !goAst && /(?:@\w+\.before_request|@blueprint\.before_request|add_middleware\s*\([^,)]*[Aa]uth|@?\bjwt_required\b|@?\blogin_required\b)/.test(c);
+      pyRateLimit = !goAst && /(?:@\w+\.\w+\s*\([^)]*[Ll]imit|RateLimiter|Limiter\(|add_middleware\s*\([^,)]*[Ll]imit)/.test(c);
+      pyValidation = !goAst && /add_middleware\s*\([^,)]*[Vv]alid/.test(c);
     }
 
     index.set(file.relativePath, {
@@ -253,10 +267,27 @@ function inheritedRateLimit(perRoute: boolean, fileMw: FileMiddleware | undefine
 }
 
 function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
+  // AST only on a CLEAN parse: tree-sitter always returns a tree for broken Go
+  // (with ERROR nodes), and error recovery SWALLOWS later valid registrations
+  // into a broken call's argument_list as clean-looking nested calls (a
+  // cross-bless hazard). Any parse error routes the whole file to the regex,
+  // byte-identical to today's behavior INCLUDING the regex path's known
+  // over-blesses (see the pinned-legacy tests).
+  if (file.tree && !file.tree.rootNode.hasError) {
+    // No FileMiddleware argument: the AST path computes receiver-scoped
+    // inheritance from the tree itself (a file-level OR would false-bless
+    // mixed-receiver files, and the index entry may carry cross-language noise
+    // for non-go files).
+    routes.push(...extractGoRoutesAst(file.tree, file.relativePath));
+    return;
+  }
+  extractGoRoutesRegex(file, routes, fileMw.get(file.relativePath));
+}
+
+function extractGoRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddleware: FileMiddleware | undefined) {
   const lines = file.content.split("\n");
   const echoPattern = /\.\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(\s*"([^"]+)"/;
   const gorillaPattern = /HandleFunc\s*\(\s*"([^"]+)".*\.Methods\s*\(\s*"(\w+)"/;
-  const fileMiddleware = fileMw.get(file.relativePath);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

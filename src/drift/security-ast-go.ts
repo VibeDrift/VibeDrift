@@ -1076,17 +1076,299 @@ function goRouteMiddleware(
   };
 }
 
+// ─── Use()/group-scoped middleware collector (Task 4) ────────────────────────
+//
+// Middleware scope model for one Go file. NO app-global lane (Go has no
+// before_app_request analog): r.Use blesses only r-registered routes and
+// r-derived groups. Marks are keyed (receiver name, enclosing function body)
+// with their row; inheritance requires same name + same scope node + mark row
+// strictly below the route row (position-aware: correct for Gin/chi, over-flags
+// late-Use Echo/Gorilla, never false-blesses). A Use call under a
+// conditional/loop ancestor within its function never marks (statically
+// ambiguous registration resolves false). Derivations are in-file provable edges
+// only; a name rebound 2+ times in ONE scope is poisoned for that (name, scope)
+// pair (blessing removed, never added). Every Use/group arg classifies through
+// classifyGoMiddlewareArg (body-first): an imported / opaque / no-in-file-def
+// hook NEVER blesses (LOCKED owner decision) — it resolves UNSURE (auth-flavored
+// name) or NOT-AUTH. The auth lane on a mark is set ONLY by an in-file verifiably
+// rejecting body; the unsureHook rides additively and only fills a route's
+// authUnsureHook when no confirmed auth mark/edge wins first.
+interface GoScopeMark { receiver: string; scope: SyntaxNode; row: number; lanes: FileMiddleware; unsureHook?: string }
+interface GoDerivation {
+  child: string; childScope: SyntaxNode;
+  parent: string; parentScope: SyntaxNode;
+  row: number; inlineLanes: FileMiddleware; inlineUnsureHook?: string;
+}
+interface GoMiddlewareScopes {
+  marks: GoScopeMark[];
+  derivations: GoDerivation[];
+  // (name, scope) pairs with 2+ assignment-form bindings in that ONE scope.
+  // Deliberately NOT per-name file-wide: marks/derivations are already
+  // (name, scope)-keyed, so cross-function same-name bindings cannot cross-bless,
+  // and per-name poisoning would kill the legitimate own-function bless in the
+  // canonical one-group-per-RegisterX layout.
+  poisoned: Array<{ name: string; scope: SyntaxNode }>;
+  routerNames: Set<string>;
+}
+
+// Conditional/loop registration ancestors: a Use CALL nested under any of these
+// (strictly between it and its function body) is statically-ambiguous
+// registration and never marks (env-gated auth is a real Go pattern; a
+// conditional Use is a conservative over-flag, never a bless). Orthogonal to
+// body classification: a reject inside an if/switch branch of a Use hook's BODY
+// still counts (that gates what the hook does, not whether the Use fires).
+const GO_CONDITIONAL_ANCESTORS = new Set([
+  "if_statement", "for_statement", "expression_switch_statement",
+  "type_switch_statement", "select_statement",
+]);
+const GO_NO_LANES: FileMiddleware = { hasAuth: false, hasValidation: false, hasRateLimit: false };
+
+/** Nearest enclosing function body (function_declaration, method_declaration,
+ *  or func_literal), else the source root: the structural scope key that defuses
+ *  chi closure shadowing (an inner r.Use is keyed to the func_literal body, never
+ *  the outer receiver's scope). */
+function enclosingScope(node: SyntaxNode, root: SyntaxNode): SyntaxNode {
+  let cur: SyntaxNode | null = node.parent;
+  while (cur) {
+    if (cur.type === "function_declaration" || cur.type === "method_declaration" || cur.type === "func_literal") {
+      return cur.childForFieldName("body") ?? cur;
+    }
+    cur = cur.parent;
+  }
+  return root;
+}
+
+/** True when a conditional/loop node sits strictly between `node` and its
+ *  enclosing function scope body (statically-ambiguous registration). */
+function hasConditionalRegistrationAncestor(node: SyntaxNode, scope: SyntaxNode): boolean {
+  let cur: SyntaxNode | null = node.parent;
+  while (cur && !cur.equals(scope)) {
+    if (GO_CONDITIONAL_ANCESTORS.has(cur.type)) return true;
+    cur = cur.parent;
+  }
+  return false;
+}
+
+/** BODY-FIRST lanes for a set of Use/group middleware ARG NODES. The auth lane is
+ *  classifyGoMiddlewareArg (body-first); val/rate stay NAME-based on the resolved
+ *  name. Returns the confirmed lanes PLUS the FIRST unsure hook name (only when
+ *  the auth lane did not confirm). The unsure name is a SEPARATE output; it never
+ *  sets hasAuth. */
+function lanesFromArgs(
+  args: SyntaxNode[], defs: Map<string, SyntaxNode | null>,
+): { lanes: FileMiddleware; unsureHook?: string } {
+  let hasAuth = false;
+  let unsureHook: string | undefined;
+  for (const a of args) {
+    const { outcome, name } = classifyGoMiddlewareArg(a, defs);
+    if (outcome === "auth") hasAuth = true;
+    else if (outcome === "unsure" && unsureHook === undefined && name) unsureHook = name;
+  }
+  const names = args.map(goMiddlewareName);
+  const lanes: FileMiddleware = {
+    hasAuth,
+    hasValidation: names.some((n) => n !== null && goNameIsVal(n)),
+    hasRateLimit: names.some((n) => n !== null && goNameIsRate(n)),
+  };
+  // A mark that confirmed auth never hedges (auth wins over its own unsure arg).
+  return hasAuth ? { lanes } : { lanes, unsureHook };
+}
+
+/** Collect the file's Use marks, group/closure derivations, and (name, scope)
+ *  poisoning in one pass set. Receiver-scoped; NO global bucket. */
+function collectGoMiddleware(tree: Tree): GoMiddlewareScopes {
+  const root = tree.rootNode;
+  const defs = collectGoFunctionDefs(root);
+  const routerNames = collectGoRouterNames(root);
+  const marks: GoScopeMark[] = [];
+  const derivations: GoDerivation[] = [];
+  const bindings: Array<{ name: string; scope: SyntaxNode }> = [];
+  const gated = (r: string | null): r is string =>
+    r !== null && (routerNames.has(r) || GO_ROUTER_RECEIVER.test(r));
+
+  // Pass A — Use marks + chi closure-param derivations (call_expression walk).
+  for (const call of root.descendantsOfType("call_expression")) {
+    if (!call || inErroredContext(call)) continue;
+    const fn = call.childForFieldName("function");
+    if (fn?.type !== "selector_expression") continue;
+    const field = fn.childForFieldName("field")?.text ?? "";
+    const receiver = goReceiverName(fn.childForFieldName("operand"));
+
+    if (field === "Use") {
+      if (!gated(receiver)) continue;
+      const scope = enclosingScope(call, root);
+      if (hasConditionalRegistrationAncestor(call, scope)) continue;
+      const named = goNamed(call.childForFieldName("arguments"));
+      const { lanes, unsureHook } = lanesFromArgs(named, defs);
+      marks.push({ receiver, scope, row: call.startPosition.row, lanes, unsureHook });
+      continue;
+    }
+
+    // chi closure-param derivation: r.Route("/x", func(sub chi.Router){...}) makes
+    // `sub` a child router whose scope is the CLOSURE BODY, inheriting the parent
+    // stack as of the Route call's row (chi copy-at-Route-time). Closure params
+    // are a single structural binding and never poison.
+    if (CLOSURE_ROUTE_FIELDS.has(field)) {
+      if (!gated(receiver)) continue;
+      const lit = goNamed(call.childForFieldName("arguments")).find((n) => n.type === "func_literal");
+      if (!lit) continue;
+      const param = lit.childForFieldName("parameters")?.descendantsOfType("parameter_declaration")[0];
+      const pname = param?.childForFieldName("name");
+      const closureBody = lit.childForFieldName("body");
+      if (pname?.type !== "identifier" || !closureBody) continue;
+      derivations.push({
+        child: pname.text, childScope: closureBody,
+        parent: receiver, parentScope: enclosingScope(call, root),
+        row: call.startPosition.row, inlineLanes: { ...GO_NO_LANES },
+      });
+    }
+  }
+
+  // Pass B — Group / Subrouter derivations + assignment-form binding counts.
+  const recordDecl = (nameNode: SyntaxNode | null, valueNode: SyntaxNode | null) => {
+    if (!nameNode || nameNode.type !== "identifier") return;
+    const scope = enclosingScope(nameNode, root);
+    bindings.push({ name: nameNode.text, scope });
+    if (!valueNode || valueNode.type !== "call_expression" || inErroredContext(valueNode)) return;
+    const fn = valueNode.childForFieldName("function");
+    if (fn?.type !== "selector_expression") return;
+    const field = fn.childForFieldName("field")?.text;
+    const row = valueNode.startPosition.row;
+    if (field === GROUP_FIELD) {
+      const parent = goReceiverName(fn.childForFieldName("operand"));
+      if (parent === null) return;
+      // On a Group creation call every arg AFTER the path is a middleware
+      // candidate INCLUDING the last (no handler position).
+      const inlineArgs = goNamed(valueNode.childForFieldName("arguments")).slice(1);
+      const { lanes, unsureHook } = lanesFromArgs(inlineArgs, defs);
+      derivations.push({
+        child: nameNode.text, childScope: scope,
+        parent, parentScope: scope, row, inlineLanes: lanes, inlineUnsureHook: unsureHook,
+      });
+    } else if (field === SUBROUTER_FIELD) {
+      const inner = fn.childForFieldName("operand"); // the PathPrefix(...) call
+      if (inner?.type !== "call_expression") return;
+      const innerFn = inner.childForFieldName("function");
+      if (innerFn?.type !== "selector_expression") return;
+      const parent = goReceiverName(innerFn.childForFieldName("operand"));
+      if (parent === null) return;
+      derivations.push({
+        child: nameNode.text, childScope: scope,
+        parent, parentScope: scope, row, inlineLanes: { ...GO_NO_LANES },
+      });
+    }
+  };
+  for (const decl of root.descendantsOfType(["short_var_declaration", "assignment_statement"])) {
+    if (!decl || inErroredContext(decl)) continue;
+    const left = decl.childForFieldName("left");
+    const right = decl.childForFieldName("right");
+    if (left?.type !== "expression_list" || right?.type !== "expression_list") continue;
+    const lc = goNamed(left);
+    const rc = goNamed(right);
+    for (let i = 0; i < lc.length && i < rc.length; i++) recordDecl(lc[i], rc[i]);
+  }
+  for (const spec of root.descendantsOfType("var_spec")) {
+    if (!spec || inErroredContext(spec)) continue;
+    const value = spec.childForFieldName("value"); // expression_list
+    recordDecl(spec.childForFieldName("name"), value?.namedChild(0) ?? null);
+  }
+
+  // A (name, scope) pair bound 2+ times in ONE scope is poisoned for that pair
+  // (blessing removed, never added). (name, scope)-keyed so another function's
+  // same-name binding cannot suppress this one.
+  const poisoned: Array<{ name: string; scope: SyntaxNode }> = [];
+  for (const b of bindings) {
+    const count = bindings.filter((o) => o.name === b.name && o.scope.equals(b.scope)).length;
+    if (count >= 2 && !poisoned.some((p) => p.name === b.name && p.scope.equals(b.scope))) {
+      poisoned.push({ name: b.name, scope: b.scope });
+    }
+  }
+
+  return { marks, derivations, poisoned, routerNames };
+}
+
+/** True when (receiver, scope) inherits `lane` from a same-scope mark row-below
+ *  `beforeRow`, or transitively from a derivation's inline lane / parent scope. */
+function scopeLane(
+  s: GoMiddlewareScopes, receiver: string, scope: SyntaxNode,
+  beforeRow: number, lane: keyof FileMiddleware, depth = 0,
+): boolean {
+  if (depth > 8) return false; // pathological chains terminate
+  if (s.poisoned.some((p) => p.name === receiver && p.scope.equals(scope))) return false;
+  if (s.marks.some((m) =>
+    m.receiver === receiver && m.scope.equals(scope) && m.row < beforeRow && m.lanes[lane],
+  )) return true;
+  for (const d of s.derivations) {
+    if (d.child !== receiver || !d.childScope.equals(scope)) continue;
+    if (d.inlineLanes[lane]) return true; // creation-time group middleware
+    if (scopeLane(s, d.parent, d.parentScope, d.row, lane, depth + 1)) return true;
+  }
+  return false;
+}
+
+/** First inheritable UNSURE hook for (receiver, scope, row). Receiver-scoped
+ *  only (no global tier). NEVER consulted unless the AUTH lane is already false
+ *  for this route (auth beats unsure): the caller passes it only into the
+ *  `hasAuth ? undefined : ...` branch. First-wins in (row, then document) order
+ *  so attribution is deterministic. */
+function scopeUnsureHook(
+  s: GoMiddlewareScopes, receiver: string, scope: SyntaxNode, beforeRow: number, depth = 0,
+): string | undefined {
+  if (depth > 8) return undefined;
+  if (s.poisoned.some((p) => p.name === receiver && p.scope.equals(scope))) return undefined;
+  const own = s.marks
+    .filter((m) => m.receiver === receiver && m.scope.equals(scope) && m.row < beforeRow && m.unsureHook)
+    .sort((a, b) => a.row - b.row)[0];
+  if (own?.unsureHook) return own.unsureHook;
+  for (const d of s.derivations) {
+    if (d.child !== receiver || !d.childScope.equals(scope)) continue;
+    if (d.inlineUnsureHook) return d.inlineUnsureHook;
+    const up = scopeUnsureHook(s, d.parent, d.parentScope, d.row, depth + 1);
+    if (up) return up;
+  }
+  return undefined;
+}
+
+/** File-level OR of every scope: the seam-2 index entry (public FileMiddleware
+ *  shape, unchanged) and the regex fallback's inheritance input. Route-level
+ *  inheritance on the AST path does NOT read this OR; extractGoRoutesAst consumes
+ *  the scopes directly (receiver + scope + row). UNSURE hooks are NEVER OR-ed in
+ *  (honesty invariant, mirror extractPythonFileMiddlewareAst). */
+export function extractGoFileMiddlewareAst(tree: Tree): FileMiddleware {
+  const s = collectGoMiddleware(tree);
+  const all = [...s.marks.map((m) => m.lanes), ...s.derivations.map((d) => d.inlineLanes)];
+  return {
+    hasAuth: all.some((x) => x.hasAuth),
+    hasValidation: all.some((x) => x.hasValidation),
+    hasRateLimit: all.some((x) => x.hasRateLimit),
+  };
+}
+
 export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
   const routes: RouteInfo[] = [];
-  const routerNames = collectGoRouterNames(tree.rootNode);
-  const defs = collectGoFunctionDefs(tree.rootNode);
+  const root = tree.rootNode;
+  const routerNames = collectGoRouterNames(root);
+  const defs = collectGoFunctionDefs(root);
+  const scopes = collectGoMiddleware(tree);
   const gated = (r: string | null): r is string =>
     r !== null && (routerNames.has(r) || GO_ROUTER_RECEIVER.test(r));
 
   const emit = (
-    method: string, path: string, call: SyntaxNode,
+    method: string, path: string, call: SyntaxNode, receiver: string,
     mw: { hasAuth: boolean; hasValidation: boolean; hasRateLimit: boolean; unsureHook: string | undefined },
   ) => {
+    // Finalize per-route lanes + unsure by folding in receiver-scoped inheritance
+    // (per-route/wrap already resolved in `mw`). The route's structural scope and
+    // row key the lookup; auth beats unsure, so the scope-unsure fallback is read
+    // ONLY when hasAuth is false.
+    const routeScope = enclosingScope(call, root);
+    const routeRow = call.startPosition.row;
+    const hasAuth = mw.hasAuth || scopeLane(scopes, receiver, routeScope, routeRow, "hasAuth");
+    const hasValidation = mw.hasValidation || scopeLane(scopes, receiver, routeScope, routeRow, "hasValidation");
+    const hasRateLimit = mw.hasRateLimit || scopeLane(scopes, receiver, routeScope, routeRow, "hasRateLimit");
+    const authUnsureHook = hasAuth
+      ? undefined
+      : (mw.unsureHook ?? scopeUnsureHook(scopes, receiver, routeScope, routeRow));
     routes.push({
       method,
       path,
@@ -1095,14 +1377,14 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       // fluent forms, i.e. the anchor, never a chained .Methods() call's own
       // row): the @vibedrift-public suppression binding depends on it.
       line: call.startPosition.row + 1,
-      // Per-route body-first auth (Task 3); scope inheritance is Task 4.
-      hasAuth: mw.hasAuth,
-      hasValidation: mw.hasValidation,
-      hasRateLimit: mw.hasRateLimit,
+      // Per-route body-first auth (Task 3) OR receiver-scoped inheritance (Task 4).
+      hasAuth,
+      hasValidation,
+      hasRateLimit,
       hasErrorHandler: false, // write-only field; JS and Python AST hard-code false
       // authUnsureHook only on a NON-blessed, auth-flavored-opaque route; the key
       // is ABSENT otherwise so every other Go route serializes byte-identically.
-      ...(mw.unsureHook !== undefined ? { authUnsureHook: mw.unsureHook } : {}),
+      ...(authUnsureHook !== undefined ? { authUnsureHook } : {}),
     });
   };
 
@@ -1125,7 +1407,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       if (arg0Raw === null || !arg0Raw.startsWith("/")) continue; // leading-slash gate
       // Middleware are the args strictly between the path (arg0) and the handler
       // (last); the last arg is the handler and is NEVER classified.
-      emit(directVerb, arg0Raw, call, goRouteMiddleware(named, 0, null, fnOperand, defs));
+      emit(directVerb, arg0Raw, call, receiver ?? "", goRouteMiddleware(named, 0, null, fnOperand, defs));
       continue;
     }
 
@@ -1134,7 +1416,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
     if (ANY_FIELDS.has(field)) {
       if (!gated(receiver)) continue;
       if (arg0Raw === null || !arg0Raw.startsWith("/")) continue;
-      emit("ALL", arg0Raw, call, goRouteMiddleware(named, 0, null, fnOperand, defs));
+      emit("ALL", arg0Raw, call, receiver ?? "", goRouteMiddleware(named, 0, null, fnOperand, defs));
       continue;
     }
 
@@ -1158,7 +1440,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       if (path === null || !path.startsWith("/")) continue;
       // Verb-first: verb=arg0, path=arg1, so the middleware window starts after
       // arg1; the handler (last arg) is never classified.
-      emit(method, path, call, goRouteMiddleware(named, 1, null, fnOperand, defs));
+      emit(method, path, call, receiver ?? "", goRouteMiddleware(named, 1, null, fnOperand, defs));
       continue;
     }
 
@@ -1174,7 +1456,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       // The handler is the arg right after the path (arg1); for these forms it
       // may be a WRAP callee (auth(handler)) — the only body-first position here.
       const wrapCallee = named.length > 1 ? named[1] : null;
-      emit(method, split.path, call, goRouteMiddleware(named, 0, wrapCallee, fnOperand, defs));
+      emit(method, split.path, call, receiver ?? "", goRouteMiddleware(named, 0, wrapCallee, fnOperand, defs));
       continue;
     }
   }
