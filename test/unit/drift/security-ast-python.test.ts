@@ -1167,3 +1167,516 @@ describe("extractPythonRoutesAst: Django REST function views", () => {
     expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
   });
 });
+
+// ─── Task 6: adversarial hardening ──────────────────────────────────────────
+//
+// Every fixture here is fed straight to extractPythonRoutesAst on whatever tree
+// tree-sitter produces (error-recovered or clean). The bar is twofold: the
+// extractor must never THROW on hostile input, and it must never emit a route
+// with hasAuth:true that the source does not actually protect. The
+// security-critical member of this group is the merged decorated_definition
+// (a syntax error fusing two handlers' decorators into one node): blessing, or
+// even extracting, across that boundary would let one handler inherit another's
+// auth decorators.
+describe("malformed and adversarial input", () => {
+  const dds = (f: { tree?: unknown }) =>
+    (f as { tree: { rootNode: { descendantsOfType(t: string): unknown[] } } }).tree.rootNode
+      .descendantsOfType("decorated_definition")
+      .filter((n): n is { hasError: boolean } => n !== null) as Array<{ hasError: boolean }>;
+
+  it("does not throw and finds zero routes when an unclosed decorator paren erases the file's decorator structure", async () => {
+    // Unclosed paren early, a fully valid @app.route("/still-good") later. Error
+    // recovery does not produce a decorated_definition for either route (the
+    // whole decorator structure is erased), so the AST path finds nothing. Recall
+    // on this file is preserved at the DETECT level, where rootNode.hasError routes
+    // the file to the regex extractor (see security-consistency.test.ts, Task 6).
+    const f = await py("unclosed.py",
+      `@app.route("/broken"\n` +
+      `@app.route("/still-good")\n` +
+      `def good():\n` +
+      `    return {}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(true);
+    expect(() => extractPythonRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("CROSS-BLESS GUARD: a missing def colon fuses both handlers into one errored dd, which emits ZERO routes", async () => {
+    // PINNED EXACT SOURCE (the merged-dd shape is variant-sensitive): the missing
+    // colon after `def bad()` makes tree-sitter fuse everything from /bad through
+    // /good into a SINGLE decorated_definition holding
+    // [decorator, decorator, ERROR, decorator, function_definition] with
+    // dd.hasError === true. The dd.hasError skip means /good can never inherit
+    // /bad's @login_required and /bad can never be silently dropped as authed —
+    // the extractor emits nothing at all from the fused node. This is the
+    // security-critical guard of Task 6.
+    const f = await py("mergedcolon.py",
+      `@app.post("/bad")\n` +
+      `@login_required\n` +
+      `def bad()\n` +
+      `    return 1\n` +
+      `@app.post("/good")\n` +
+      `def good():\n` +
+      `    return 2\n`);
+    expect(f.tree!.rootNode.hasError).toBe(true);
+    const errored = dds(f);
+    expect(errored).toHaveLength(1);
+    expect(errored[0].hasError).toBe(true);
+    expect(() => extractPythonRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("extracts a clean sibling dd's route while skipping a dd whose handler body has a parse error", async () => {
+    // The error is confined to /bad's body (`x = = 1`), so /bad's dd carries
+    // hasError and is skipped, but /good parses into its own clean dd and IS
+    // extracted. rootNode.hasError is cumulative (true for the whole file), which
+    // is why DETECT routes this file to the regex path; the extractor is exercised
+    // directly here to prove the per-dd skip is surgical, not file-wide.
+    const f = await py("bodyerror.py",
+      `@app.post("/bad")\n` +
+      `def bad():\n` +
+      `    x = = 1\n\n` +
+      `@app.post("/good")\n` +
+      `def good():\n` +
+      `    return 2\n`);
+    expect(() => extractPythonRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual(["POST /good auth=false"]);
+  });
+
+  it("returns [] with no throw for garbled binary-ish content; middleware is all-false", async () => {
+    const f = await py("garbled.py", ` ÿþ garbage   def ( ) : :`);
+    expect(() => extractPythonRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual({
+      hasAuth: false, hasValidation: false, hasRateLimit: false,
+    });
+  });
+
+  it("returns [] for an empty file and a comments-only file", async () => {
+    const empty = await py("empty.py", ``);
+    const comments = await py("comments.py", `# just a comment\n# @app.route("/x")\n`);
+    expect(extractPythonRoutesAst(empty.tree!, empty.relativePath)).toEqual([]);
+    expect(extractPythonRoutesAst(comments.tree!, comments.relativePath)).toEqual([]);
+  });
+
+  it("does not extract a route from a module docstring or an assigned multiline string that contains route text", async () => {
+    const f = await py("strings.py",
+      `"""\n` +
+      `@app.route("/fake", methods=["POST"])\n` +
+      `"""\n` +
+      `x = """\n` +
+      `@app.route("/fake2", methods=["POST"])\n` +
+      `"""\n`);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("does not extract @app.route(...) decorating a CLASS (definition.type gate)", async () => {
+    const f = await py("routeclass.py", `@app.route("/x")\nclass Foo:\n    pass\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("extracts a route-decorated method inside a class body (recursive descendant walk)", async () => {
+    const f = await py("methodroute.py",
+      `class Foo:\n` +
+      `    @app.route("/x")\n` +
+      `    def handler(self):\n` +
+      `        return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["GET /x"]);
+  });
+
+  it("extracts a route-decorated nested function (no false leak, no drop)", async () => {
+    const f = await py("nested.py",
+      `def outer():\n` +
+      `    @app.post("/inner")\n` +
+      `    def inner():\n` +
+      `        return {}\n` +
+      `    return inner\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /inner"]);
+  });
+
+  it("emits two RouteInfos for an identical route decorator duplicated on two functions (no dedup, pinned deliberate)", async () => {
+    const f = await py("dup.py",
+      `@app.post("/x")\n` +
+      `def a():\n` +
+      `    return {}\n\n` +
+      `@app.post("/x")\n` +
+      `def b():\n` +
+      `    return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /x", "POST /x"]);
+  });
+
+  it("resolves a kwarg flood to POST /x (path first, methods read, other kwargs ignored)", async () => {
+    const f = await py("flood.py",
+      `@app.route("/x", methods=["POST"], strict_slashes=False, endpoint="e", defaults={"a": 1})\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /x"]);
+  });
+
+  it("does not throw on a conditional decorator and does not bless it: @(login_required if PROD else noop)", async () => {
+    // The conditional expression is neither an identifier, an attribute, nor a
+    // recognized auth call, so it can never bless; the sibling @app.post route is
+    // still extracted, unauthed.
+    const f = await py("conditional.py",
+      `@(login_required if PROD else noop)\n` +
+      `@app.post("/x")\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    expect(() => extractPythonRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual(["POST /x auth=false"]);
+  });
+
+  it("ignores getattr(app, \"route\")(\"/x\") — the callee is a call, not an app/router attribute", async () => {
+    const f = await py("getattr.py",
+      `@getattr(app, "route")("/x")\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  // ── Unicode ──
+  it("handles a unicode path and a unicode handler name, blessing @login_required stacked BELOW the route decorator", async () => {
+    const f = await py("unicode.py",
+      `@app.route("/café", methods=["POST"])\n` +
+      `@login_required\n` +
+      `def crée_commande():\n` +
+      `    return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual(["POST /café auth=true"]);
+  });
+
+  it("does not bless a unicode auth-decorator name (@認証必須): recognition is an ASCII lexicon", async () => {
+    const f = await py("unicodeauth.py",
+      `@app.post("/x")\n` +
+      `@認証必須\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("does not extract a unicode receiver (@ルーター.route): a non-ASCII receiver is a recognition miss, never a bless", async () => {
+    const f = await py("unicoderecv.py",
+      `@ルーター.route("/x")\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("does not bless body-only auth (if not g.user: abort(401) inside the handler)", async () => {
+    // In-body enforcement is invisible to a decorator/parameter-level check;
+    // resolving it to false is the correct never-false-bless direction (an
+    // over-flag, never an over-bless).
+    const f = await py("bodyauth.py",
+      `@app.post("/x")\n` +
+      `def h():\n` +
+      `    if not g.user:\n` +
+      `        abort(401)\n` +
+      `    return {}\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+});
+
+// ─── Task 6: task-review pins (documenting existing behavior; NOT changing it) ──
+describe("documented trade-offs (task-review pins)", () => {
+  it("a fully-literal methods list of only unrecognized verbs resolves GET and exits the mutating vote", async () => {
+    // methods=["MKCOL"] is fully visible but holds no HTTP_VERBS member, so it is
+    // treated like an empty literal list: GET (Flask's default), which keeps the
+    // route OUT of the mutating auth vote. Documented trade from the Task 2
+    // review: an exotic-but-real WebDAV verb is not surfaced as mutating. Not
+    // ambiguity (the list is fully readable), so "ALL" would be wrong here.
+    const f = await py("mkcol.py", `@app.route("/x", methods=["MKCOL"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("does not bless custom or non-IsAuthenticated permission classes: permission_classes([IsAdminUser]) and ([FooPermission])", async () => {
+    // Only IsAuthenticated is in PERMISSION_AUTH. IsAdminUser is a real DRF class
+    // that requires staff, but it is not in the narrow whitelist, and FooPermission
+    // is an unknown custom class; both resolve hasAuth:false per never-false-bless
+    // (an unrecognized permission class is ambiguity, which never blesses).
+    const f = await py("custcompermclass.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([IsAdminUser])\n` +
+      `def a(request):\n` +
+      `    return Response({})\n\n` +
+      `@api_view(["POST"])\n` +
+      `@permission_classes([FooPermission])\n` +
+      `def b(request):\n` +
+      `    return Response({})\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/a auth=false",
+      "/b auth=false",
+    ]);
+  });
+});
+
+// ─── Task 6: the systematic never-false-bless sweep ─────────────────────────
+//
+// A single registry of every ambiguity / "cannot determine" branch the Python
+// extractor has, restated as a fixture with ground truth. ONE table-driven test
+// asserts the invariant that matters: no route whose ground truth is
+// authed:false is ever emitted with hasAuth:true. Positive (authed:true) entries
+// are documentation only — the assertion filters to the negatives. Any NEW
+// python fixture added in a later task MUST be registered here so the invariant
+// keeps whole-module coverage. Broken-parse fixtures are included too: they emit
+// nothing, and `emitted?.hasAuth ?? false` treats "not emitted" as not-blessed.
+const NEVER_FALSE_BLESS_SWEEP: Array<{
+  name: string;
+  source: string;
+  groundTruth: Array<{ path: string; method: string; authed: boolean }>;
+}> = [
+  // ── Decorator-order (positional auth binding) ──
+  {
+    name: "auth-above-route",
+    source:
+      `@login_required\n@app.post("/orders")\ndef create_order():\n    return {}\n`,
+    groundTruth: [{ path: "/orders", method: "POST", authed: false }],
+  },
+  {
+    name: "mixed-stack-a-b",
+    source:
+      `@app.post("/a")\n@login_required\n@app.post("/b")\ndef h():\n    return {}\n`,
+    groundTruth: [
+      { path: "/a", method: "POST", authed: true },
+      { path: "/b", method: "POST", authed: false },
+    ],
+  },
+  // ── flask-jwt-extended optional auth ──
+  {
+    name: "jwt-optional-true",
+    source:
+      `@app.post("/x")\n@jwt_required(optional=True)\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "jwt-optional-flag",
+    source:
+      `@app.post("/x")\n@jwt_required(optional=OPTIONAL_AUTH)\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  // ── Decorator lexicon near-misses ──
+  {
+    name: "feature-requires",
+    source:
+      `@app.post("/a")\n@feature.requires("new_ui")\ndef a():\n    return {}\n\n` +
+      `@app.post("/b")\n@pytest.mark.requires\ndef b():\n    return {}\n`,
+    groundTruth: [
+      { path: "/a", method: "POST", authed: false },
+      { path: "/b", method: "POST", authed: false },
+    ],
+  },
+  {
+    name: "author-stats-substring",
+    source: `@app.post("/x")\n@author_stats\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "track-metrics-and-guard",
+    source:
+      `@app.post("/a")\n@track_metrics\ndef a():\n    return {}\n\n` +
+      `@app.post("/b")\n@guard\ndef b():\n    return {}\n`,
+    groundTruth: [
+      { path: "/a", method: "POST", authed: false },
+      { path: "/b", method: "POST", authed: false },
+    ],
+  },
+  {
+    name: "adjacent-noleak",
+    source:
+      `@app.post("/a")\n@login_required\ndef a():\n    return {}\n\n` +
+      `@app.post("/b")\ndef b():\n    return {}\n`,
+    groundTruth: [
+      { path: "/a", method: "POST", authed: true },
+      { path: "/b", method: "POST", authed: false },
+    ],
+  },
+  // ── Unrecognized / invisible auth signals (all resolve false) ──
+  {
+    name: "unicode-auth-decorator",
+    source: `@app.post("/x")\n@認証必須\ndef h():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "conditional-decorator",
+    source:
+      `@(login_required if PROD else noop)\n@app.post("/x")\ndef h():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "body-only-auth",
+    source:
+      `@app.post("/x")\ndef h():\n    if not g.user:\n        abort(401)\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  // ── FastAPI Depends: non-auth dependencies ──
+  {
+    name: "depends-nonauth",
+    source:
+      `@router.post("/db")\ndef h1(db=Depends(get_db)):\n    return {}\n\n` +
+      `@router.post("/settings")\ndef h2(x=Depends(get_settings)):\n    return {}\n\n` +
+      `@router.post("/pagination")\ndef h3(x=Depends(pagination_params)):\n    return {}\n\n` +
+      `@router.post("/bare")\ndef h4(x=Depends()):\n    return {}\n`,
+    groundTruth: [
+      { path: "/db", method: "POST", authed: false },
+      { path: "/settings", method: "POST", authed: false },
+      { path: "/pagination", method: "POST", authed: false },
+      { path: "/bare", method: "POST", authed: false },
+    ],
+  },
+  // ── Depends segment near-miss set (brief-mandated) ──
+  {
+    name: "depends-nearmiss",
+    source:
+      `@router.post("/x1")\ndef h1(a=Depends(get_author_stats)):\n    return {}\n\n` +
+      `@router.post("/x2")\ndef h2(a=Depends(get_authors)):\n    return {}\n\n` +
+      `@router.post("/x3")\ndef h3(a=Depends(get_jwt_settings)):\n    return {}\n\n` +
+      `@router.post("/x4")\ndef h4(a=Depends(get_api_key_usage_stats)):\n    return {}\n\n` +
+      `@router.post("/x5")\ndef h5(a=Depends(get_current_user_optional)):\n    return {}\n\n` +
+      `@router.post("/x6")\ndef h6(a=Depends(get_current_user_or_none)):\n    return {}\n`,
+    groundTruth: [
+      { path: "/x1", method: "POST", authed: false },
+      { path: "/x2", method: "POST", authed: false },
+      { path: "/x3", method: "POST", authed: false },
+      { path: "/x4", method: "POST", authed: false },
+      { path: "/x5", method: "POST", authed: false },
+      { path: "/x6", method: "POST", authed: false },
+    ],
+  },
+  // ── Depends: argument text never blesses (incl. Depends(Client(url=jwt_issuer_url))) ──
+  {
+    name: "depends-argtext",
+    source:
+      `@router.post("/x1")\ndef h1(a=Depends(make_client("oauth2_url"))):\n    return {}\n\n` +
+      `@router.post("/x2")\ndef h2(a=Depends(Client(url=jwt_issuer_url))):\n    return {}\n`,
+    groundTruth: [
+      { path: "/x1", method: "POST", authed: false },
+      { path: "/x2", method: "POST", authed: false },
+    ],
+  },
+  // ── dependencies= kwarg on the route decorator ──
+  {
+    name: "dep-kwarg",
+    source:
+      `@router.post("/dep-verify", dependencies=[Depends(verify_token)])\ndef h1():\n    return {}\n\n` +
+      `@router.post("/dep-db", dependencies=[Depends(get_db)])\ndef h2():\n    return {}\n\n` +
+      `@router.post("/dep-author", dependencies=[Depends(get_author_stats)])\ndef h3():\n    return {}\n\n` +
+      `@router.post("/dep-unrelated", dependencies=[Security(some_unrelated_name)])\ndef h4():\n    return {}\n`,
+    groundTruth: [
+      { path: "/dep-verify", method: "POST", authed: true },
+      { path: "/dep-db", method: "POST", authed: false },
+      { path: "/dep-author", method: "POST", authed: false },
+      { path: "/dep-unrelated", method: "POST", authed: false },
+    ],
+  },
+  // ── Module-level Annotated alias (Depends invisible at the param) ──
+  {
+    name: "annotated-alias",
+    source:
+      `CurrentUser = Annotated[User, Depends(get_current_user)]\n\n` +
+      `@router.post("/alias")\ndef h(user: CurrentUser):\n    return {}\n`,
+    groundTruth: [{ path: "/alias", method: "POST", authed: false }],
+  },
+  // ── Mixed-receiver middleware files (brief-mandated) ──
+  {
+    name: "mixed-bp",
+    source:
+      `@admin_bp.before_request\ndef require_login():\n    return None\n\n` +
+      `@admin_bp.route("/users", methods=["POST"])\ndef create_user():\n    return {}\n\n` +
+      `@public_bp.route("/webhook", methods=["POST"])\ndef webhook():\n    return {}\n`,
+    groundTruth: [
+      { path: "/users", method: "POST", authed: true },
+      { path: "/webhook", method: "POST", authed: false },
+    ],
+  },
+  {
+    name: "mixed-router",
+    source:
+      `admin_router = APIRouter(dependencies=[Depends(get_current_user)])\n` +
+      `public_router = APIRouter()\n\n` +
+      `@admin_router.post("/admin")\ndef admin_op():\n    return {}\n\n` +
+      `@public_router.post("/public")\ndef public_op():\n    return {}\n`,
+    groundTruth: [
+      { path: "/admin", method: "POST", authed: true },
+      { path: "/public", method: "POST", authed: false },
+    ],
+  },
+  // ── DRF permission_classes negatives ──
+  {
+    name: "perm-allowany",
+    source:
+      `@api_view(["POST"])\n@permission_classes([AllowAny])\ndef create_thing(request):\n    return Response({})\n`,
+    groundTruth: [{ path: "/create_thing", method: "POST", authed: false }],
+  },
+  {
+    name: "perm-readonly",
+    source:
+      `@api_view(["POST"])\n@permission_classes([IsAuthenticatedOrReadOnly])\ndef create_thing(request):\n    return Response({})\n`,
+    groundTruth: [{ path: "/create_thing", method: "POST", authed: false }],
+  },
+  {
+    name: "perm-above-apiview",
+    source:
+      `@permission_classes([IsAuthenticated])\n@api_view(["POST"])\ndef create_thing(request):\n    return Response({})\n`,
+    groundTruth: [{ path: "/create_thing", method: "POST", authed: false }],
+  },
+  {
+    name: "apiview-noperm",
+    source:
+      `@api_view(["POST"])\ndef create_thing(request):\n    return Response({})\n`,
+    groundTruth: [{ path: "/create_thing", method: "POST", authed: false }],
+  },
+  {
+    name: "perm-custom",
+    source:
+      `@api_view(["POST"])\n@permission_classes([IsAdminUser])\ndef a(request):\n    return Response({})\n\n` +
+      `@api_view(["POST"])\n@permission_classes([FooPermission])\ndef b(request):\n    return Response({})\n`,
+    groundTruth: [
+      { path: "/a", method: "POST", authed: false },
+      { path: "/b", method: "POST", authed: false },
+    ],
+  },
+  // ── Broken-parse fixtures (emit nothing; nothing can be blessed) ──
+  {
+    name: "merged-dd-missing-colon",
+    source:
+      `@app.post("/bad")\n@login_required\ndef bad()\n    return 1\n` +
+      `@app.post("/good")\ndef good():\n    return 2\n`,
+    groundTruth: [
+      { path: "/bad", method: "POST", authed: false },
+      { path: "/good", method: "POST", authed: false },
+    ],
+  },
+  {
+    name: "body-error-clean-sibling",
+    source:
+      `@app.post("/bad")\ndef bad():\n    x = = 1\n\n` +
+      `@app.post("/good")\ndef good():\n    return 2\n`,
+    groundTruth: [
+      { path: "/bad", method: "POST", authed: false },
+      { path: "/good", method: "POST", authed: false },
+    ],
+  },
+];
+
+describe("never-false-bless sweep", () => {
+  it("no route with ground truth authed:false is ever emitted hasAuth:true", async () => {
+    for (const entry of NEVER_FALSE_BLESS_SWEEP) {
+      const f = await py(`sweep/${entry.name}.py`, entry.source);
+      const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+      for (const gt of entry.groundTruth.filter((g) => !g.authed)) {
+        const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
+        expect(emitted?.hasAuth ?? false, `${entry.name}: ${gt.method} ${gt.path}`).toBe(false);
+      }
+    }
+  });
+});
