@@ -25,3 +25,6 @@ eval/reports/
 
 # Score-discrimination harness clone cache (cloned upstream repos)
 eval/discrimination/.cache/
+
+# Internal security sub-phase plans (local execution docs, not for the public repo)
+PLAN-security-conformance-phase*.md
