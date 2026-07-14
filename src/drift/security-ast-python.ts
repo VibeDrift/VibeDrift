@@ -32,6 +32,13 @@
  * vote (matching how an Express `.all()` route is treated). This is a real,
  * user-visible behavior change from today's regex path, not a bug fix; it is
  * called out here for explicit sign-off rather than shipped silently.
+ *
+ * DJANGO REST SCOPE (best-effort, function views only): `@api_view(["POST"])`
+ * routes are recognized; the URL lives in `urls.py` and cross-file resolution
+ * is an explicit non-goal, so the path is synthesized as `"/" + handler name`.
+ * Class-based `APIView`/`ViewSet` and `urls.py` `path(...)` registrations emit
+ * ZERO routes in Sub-Phase A. DRF settings-level default permissions are
+ * unknowable statically and never bless.
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
@@ -126,12 +133,20 @@ const AUTH_SUBJECT_SEGMENTS = new Set([
 const MIDDLEWARE_AUTH_SEGMENTS = new Set([
   "auth", "authentication", "authenticate", "authenticated", "jwt", "oauth", "oauth2", "bearer",
 ]);
+// DRF @permission_classes([...]) EXACT class names that unconditionally require
+// an authenticated request. Deliberately narrow: AllowAny never requires auth;
+// IsAuthenticatedOrReadOnly and DjangoModelPermissionsOrAnonReadOnly only require
+// auth for unsafe (write) methods, which is a per-method condition this
+// route-level check cannot statically resolve, so they are NOT here; any other
+// built-in or custom permission class is unrecognized. Per the never-false-bless
+// invariant, ambiguity and the unrecognized case both resolve to false.
+const PERMISSION_AUTH = new Set(["IsAuthenticated"]);
 
 export const SECURITY_AST_PY = {
   ROUTE_METHODS, HTTP_VERBS, MUTATING_VERBS, ROUTER_RECEIVER, ROUTER_CONSTRUCTORS,
   AUTH_DECORATORS, DEPENDS_AUTH_SEGMENTS, DEPENDS_AUTH_PAIRS, DEPENDS_VETO_SEGMENTS,
   VAL_NAMES, RATE_NAMES, AUTH_CORE_SEGMENTS, AUTH_ENFORCE_SEGMENTS,
-  AUTH_SUBJECT_SEGMENTS, MIDDLEWARE_AUTH_SEGMENTS,
+  AUTH_SUBJECT_SEGMENTS, MIDDLEWARE_AUTH_SEGMENTS, PERMISSION_AUTH,
 };
 
 /** Value of a Python string-ish path argument with quotes AND prefixes stripped.
@@ -266,6 +281,51 @@ function resolveMethod(attr: string, args: SyntaxNode): string {
   const hidden = children.some((n) => n.type !== "string");
   if (verbs.length === 0) return hidden ? "ALL" : "GET"; // [*BASE] vs literal []
   return verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0];
+}
+
+/** Django REST function views: @api_view(["POST"]). Identifier callee, NOT an
+ *  attribute, so the router-receiver gate does not apply here. Path is
+ *  synthesized from the handler name (urls.py resolution is a non-goal). */
+function asApiViewDecorator(dec: SyntaxNode, definition: SyntaxNode): PyRoute | null {
+  const expr = dec.namedChild(0);
+  if (!expr || expr.type !== "call") return null;
+  const fn = expr.childForFieldName("function");
+  if (!fn || fn.type !== "identifier" || fn.text !== "api_view") return null;
+  const fnName = definition.childForFieldName("name")?.text;
+  if (!fnName) return null;
+  const list = expr.childForFieldName("arguments")?.namedChild(0);
+  let method = "GET"; // DRF default when @api_view() has no args
+  if (list && ["list", "tuple", "set"].includes(list.type)) {
+    const verbs = list.namedChildren
+      .filter((n): n is SyntaxNode => n !== null && n.type === "string")
+      .map((s) => (pyStringText(s) ?? "").toUpperCase())
+      .filter((v) => HTTP_VERBS.has(v));
+    method = verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0] ?? "GET";
+  } else if (list) {
+    method = "ALL"; // verbs behind a variable: keep the route in the mutating vote
+  }
+  // No receiver: DRF function views register via urls.py, not on a router
+  // variable. The empty string matches no byReceiver scope, so only global
+  // (app-scoped) middleware can ever inherit onto these routes.
+  return { method, path: `/${fnName}`, call: expr, receiver: "" };
+}
+
+/** @permission_classes([IsAuthenticated]) as a POSITIONAL auth decorator.
+ *  AllowAny, an empty list, or an unrecognized class resolves false. Position
+ *  matters (DRF: it must sit BELOW @api_view or it is never enforced), so this is
+ *  a per-decorator predicate feeding the same authDecoratorRows mechanism as the
+ *  Flask auth decorators. */
+function isAuthPermissionClasses(dec: SyntaxNode): boolean {
+  const expr = dec.namedChild(0);
+  if (!expr || expr.type !== "call") return false;
+  const fn = expr.childForFieldName("function");
+  if (!fn || fn.type !== "identifier" || fn.text !== "permission_classes") return false;
+  const list = expr.childForFieldName("arguments")?.namedChild(0);
+  if (!list) return false;
+  const names = list.namedChildren
+    .filter((n): n is SyntaxNode => n !== null)
+    .map((n) => (n.type === "attribute" ? (n.childForFieldName("attribute")?.text ?? "") : n.text));
+  return names.some((n) => PERMISSION_AUTH.has(n));
 }
 
 /** Final name segment of a decorator expression: "login_required" for
@@ -559,6 +619,11 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const authDecoratorRows = decorators
       .filter(isAuthDecorator)
       .map((d) => d.startPosition.row);
+    // @permission_classes([IsAuthenticated]) is a POSITIONAL auth decorator too
+    // (DRF: it must sit BELOW @api_view or it is never enforced), so it folds
+    // into the same rows array and the same "row > dec.startPosition.row" check
+    // below.
+    authDecoratorRows.push(...decorators.filter(isAuthPermissionClasses).map((d) => d.startPosition.row));
     const paramAuth = paramsHaveAuthDependency(definition);
     // Validation / rate-limit lanes match NON-ROUTE decorator CALLEE NAMES only
     // (@limiter.limit -> "limiter.limit", @validate_schema -> "validate_schema"),
@@ -576,7 +641,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const perVal = laneNames.some((t) => VAL_NAMES.test(t));
     const perRate = laneNames.some((t) => RATE_NAMES.test(t));
     for (const dec of decorators) {
-      const route = asRouteDecorator(dec, routerNames);
+      const route = asRouteDecorator(dec, routerNames) ?? asApiViewDecorator(dec, definition);
       if (!route) continue;
       routes.push({
         method: route.method,

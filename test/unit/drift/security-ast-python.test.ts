@@ -1071,3 +1071,99 @@ describe("receiver-scoped middleware inheritance (via extractPythonRoutesAst)", 
     expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
   });
 });
+
+describe("extractPythonRoutesAst: Django REST function views", () => {
+  it("extracts @api_view([\"POST\"]) as one route, line = the @api_view decorator line", async () => {
+    const f = await py("views.py",
+      `@api_view(["POST"])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual([
+      "POST /create_thing auth=false",
+    ]);
+    expect(routes[0].line).toBe(1);
+  });
+
+  it("prefers the mutating verb: @api_view([\"GET\", \"POST\"]) -> POST", async () => {
+    const f = await py("views.py",
+      `@api_view(["GET", "POST"])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /create_thing"]);
+  });
+
+  it("defaults @api_view() with no arguments to GET (DRF documented default)", async () => {
+    const f = await py("views.py",
+      `@api_view()\n` +
+      `def list_things(request):\n` +
+      `    return Response([])\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual(["GET /list_things"]);
+  });
+
+  it("blesses @permission_classes([IsAuthenticated]) BELOW @api_view (applied first, enforced)", async () => {
+    const f = await py("views.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([IsAuthenticated])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=true"]);
+  });
+
+  it("does NOT bless @permission_classes([IsAuthenticated]) ABOVE @api_view: decorators apply bottom-up, so api_view builds the wrapped view before the permission attribute is set", async () => {
+    const f = await py("views.py",
+      `@permission_classes([IsAuthenticated])\n` +
+      `@api_view(["POST"])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=false"]);
+  });
+
+  it("does not bless @permission_classes([AllowAny])", async () => {
+    const f = await py("views.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([AllowAny])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=false"]);
+  });
+
+  it("does not bless @permission_classes([IsAuthenticatedOrReadOnly]): conditional per-method permission is ambiguous, resolves false", async () => {
+    const f = await py("views.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([IsAuthenticatedOrReadOnly])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=false"]);
+  });
+
+  it("does not bless @api_view([\"POST\"]) with no permission_classes at all", async () => {
+    const f = await py("views.py",
+      `@api_view(["POST"])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=false"]);
+  });
+
+  it("class-based views (APIView/ViewSet) are pinned OUT: zero routes even with permission_classes set", async () => {
+    const f = await py("views.py",
+      `class MyView(APIView):\n` +
+      `    permission_classes = [IsAuthenticated]\n\n` +
+      `    def post(self, request):\n` +
+      `        return Response({})\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("urls.py path(...) registrations emit zero routes: cross-file resolution is a non-goal", async () => {
+    const f = await py("urls.py",
+      `urlpatterns = [path("things/", views.create_thing)]\n`);
+    expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+});
