@@ -37,11 +37,14 @@ describe("checkForUpdate (cache + fetch behavior)", () => {
   // Redirect HOME to a temp dir so cache writes are isolated per test.
   let tmpHome: string;
   let origHome: string | undefined;
+  let origUserProfile: string | undefined;
 
   beforeEach(async () => {
     tmpHome = await mkdtemp(join(tmpdir(), "vd-update-check-"));
     origHome = process.env.HOME;
+    origUserProfile = process.env.USERPROFILE;
     process.env.HOME = tmpHome;
+    process.env.USERPROFILE = tmpHome;
     // Reset the module registry so the cache-path constant re-resolves
     // against the new HOME (the module reads homedir() at import).
     vi.resetModules();
@@ -50,6 +53,8 @@ describe("checkForUpdate (cache + fetch behavior)", () => {
   afterEach(async () => {
     if (origHome !== undefined) process.env.HOME = origHome;
     else delete process.env.HOME;
+    if (origUserProfile !== undefined) process.env.USERPROFILE = origUserProfile;
+    else delete process.env.USERPROFILE;
     await rm(tmpHome, { recursive: true, force: true });
   });
 

@@ -73,14 +73,20 @@ describe("isIndexStale", () => {
 describe("write/load round-trip", () => {
   let home: string;
   let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
   beforeAll(() => {
     // Redirect homedir() to a temp dir so the test never touches the real ~/.vibedrift
     home = mkdtempSync(join(tmpdir(), "vd-eidx-"));
     prevHome = process.env.HOME;
+    prevUserProfile = process.env.USERPROFILE;
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
   });
   afterAll(() => {
     if (prevHome !== undefined) process.env.HOME = prevHome;
+    else delete process.env.HOME;
+    if (prevUserProfile !== undefined) process.env.USERPROFILE = prevUserProfile;
+    else delete process.env.USERPROFILE;
     rmSync(home, { recursive: true, force: true });
   });
 

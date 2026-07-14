@@ -17,13 +17,13 @@ async function gitInit(dir: string): Promise<void> {
   await run(dir, "git init -q");
   await run(dir, 'git config user.email "test@example.com"');
   await run(dir, 'git config user.name "Test"');
-  await run(dir, "git config core.hooksPath /dev/null");
+  await run(dir, "git config core.hooksPath .git/hooks-disabled");
 }
 
 async function commit(dir: string, isoDate: string, msg: string): Promise<void> {
-  const env = `GIT_AUTHOR_DATE="${isoDate}" GIT_COMMITTER_DATE="${isoDate}"`;
-  await run(dir, `${env} git add -A`);
-  await run(dir, `${env} git commit -q -m "${msg}"`);
+  const env = { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate };
+  await execP("git add -A", { cwd: dir, env });
+  await execP(`git commit -q -m "${msg}"`, { cwd: dir, env });
 }
 
 /**

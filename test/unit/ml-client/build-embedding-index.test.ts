@@ -14,6 +14,7 @@ describe("buildEmbeddingIndex", () => {
   let repo: string;
   let home: string;
   let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
 
   beforeAll(() => {
     repo = mkdtempSync(join(tmpdir(), "vd-bei-repo-"));
@@ -21,10 +22,15 @@ describe("buildEmbeddingIndex", () => {
     writeFileSync(join(repo, "b.ts"), "export function addNumbers(a, b){ const total = a + b; return total; }\n");
     home = mkdtempSync(join(tmpdir(), "vd-bei-home-"));
     prevHome = process.env.HOME;
+    prevUserProfile = process.env.USERPROFILE;
     process.env.HOME = home; // redirect ~/.vibedrift to a temp dir
+    process.env.USERPROFILE = home;
   });
   afterAll(() => {
     if (prevHome !== undefined) process.env.HOME = prevHome;
+    else delete process.env.HOME;
+    if (prevUserProfile !== undefined) process.env.USERPROFILE = prevUserProfile;
+    else delete process.env.USERPROFILE;
     rmSync(repo, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   });

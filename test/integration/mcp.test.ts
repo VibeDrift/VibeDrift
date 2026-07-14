@@ -33,7 +33,7 @@ async function connect(home: string): Promise<Client> {
   const transport = new StdioClientTransport({
     command: "node",
     args: [CLI, "mcp"],
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home },
   });
   const client = new Client({ name: "test-client", version: "0.0.0" });
   await client.connect(transport);
@@ -56,7 +56,7 @@ describe("MCP integration — Pro plan (tools serve)", () => {
     // Build the baseline the real way: a scan under the SAME HOME the server reads
     // (the cache dir is derived from HOME, so this writes to home/.vibedrift).
     execFileSync("node", [CLI, repo, "--local-only", "--format", "terminal"], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, USERPROFILE: home },
       stdio: "ignore",
     });
     client = await connect(home);
@@ -155,7 +155,7 @@ describe("MCP integration — deep-scan nudge piggybacks on a write-time tool", 
     }
     writeFileSync(join(repo, "then0.ts"), "export function then0(){\n  return a().then(r => r);\n}\n");
     execFileSync("node", [CLI, repo, "--local-only", "--format", "terminal"], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, USERPROFILE: home },
       stdio: "ignore",
     });
     client = await connect(home);

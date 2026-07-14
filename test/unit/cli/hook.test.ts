@@ -48,7 +48,10 @@ describe("runHook in a temp git repo", () => {
     const content = readFileSync(hookPath, "utf8");
     expect(content).toContain(HOOK_MARKER);
     expect(content).toContain("--fail-on-score 80");
-    expect(statSync(hookPath).mode & 0o100).toBeTruthy(); // owner-executable
+    // Unix file permissions don't exist on Windows — skip this check there
+    if (process.platform !== "win32") {
+      expect(statSync(hookPath).mode & 0o100).toBeTruthy(); // owner-executable
+    }
   });
 
   it("uninstall removes a VibeDrift-created hook", async () => {

@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { collectGitMetadata } from "../../../src/core/git-metadata.js";
 
 const execP = promisify(exec);
 
@@ -18,24 +17,46 @@ async function initRepo(dir: string): Promise<void> {
   await run(dir, 'git config user.name "Test"');
   // Suppress any pre-commit/prepare-commit-msg hooks the user may have
   // configured globally — we want hermetic, fast commits.
-  await run(dir, "git config core.hooksPath /dev/null");
+  await run(dir, "git config core.hooksPath .git/hooks-disabled");
 }
 
 async function commitWithDate(dir: string, isoDate: string, msg: string): Promise<void> {
-  const env = `GIT_AUTHOR_DATE="${isoDate}" GIT_COMMITTER_DATE="${isoDate}"`;
-  await run(dir, `${env} git add -A`);
-  await run(dir, `${env} git commit -q -m "${msg}"`);
+  const env = { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate };
+  await execP("git add -A", { cwd: dir, env });
+  await execP(`git commit -q -m "${msg}"`, { cwd: dir, env });
 }
 
 describe("collectGitMetadata", () => {
   let dir: string;
+  let fakeHome: string;
+  let origHome: string | undefined;
+  let origUserProfile: string | undefined;
+
+  /** Dynamic import so vi.resetModules() forces CACHE_DIR to re-evaluate. */
+  async function collectGitMetadata(rootDir: string) {
+    const mod = await import("../../../src/core/git-metadata.js");
+    return mod.collectGitMetadata(rootDir);
+  }
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "vibedrift-git-test-"));
+    fakeHome = await mkdtemp(join(tmpdir(), "vibedrift-git-home-"));
+    // Redirect homedir() so the git-metadata cache goes to a temp dir
+    // (CACHE_DIR is evaluated at module load time, so we must resetModules)
+    origHome = process.env.HOME;
+    origUserProfile = process.env.USERPROFILE;
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    vi.resetModules();
   });
 
   afterEach(async () => {
+    if (origHome !== undefined) process.env.HOME = origHome;
+    else delete process.env.HOME;
+    if (origUserProfile !== undefined) process.env.USERPROFILE = origUserProfile;
+    else delete process.env.USERPROFILE;
     await rm(dir, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
   });
 
   it("returns null when the directory is not a git repo", async () => {
