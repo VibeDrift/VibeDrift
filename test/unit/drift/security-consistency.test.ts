@@ -1,14 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { securityConsistency } from "../../../src/drift/security-consistency.js";
-import { runDriftDetection } from "../../../src/drift/index.js";
+import { runDriftDetection, driftFindingToFinding } from "../../../src/drift/index.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
+import { extractGoFileMiddlewareAst } from "../../../src/drift/security-ast-go.js";
 import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
   SECURITY_SUPPRESSION_ANALYZER_ID,
 } from "../../../src/drift/security-suppression.js";
+import { renderTerminalOutput } from "../../../src/output/terminal.js";
+import type { ScanResult, Finding } from "../../../src/core/types.js";
 
 function mkCtx(files: DriftFile[]): DriftContext {
   return {
@@ -1462,5 +1465,221 @@ describe("Go AST wiring (Task 4)", () => {
     const withoutGo = securityConsistency.detect({ files: [js], totalLines: js.lineCount, dominantLanguage: "typescript" } as any);
     const withGo = securityConsistency.detect({ files: [js, gof], totalLines: js.lineCount + gof.lineCount, dominantLanguage: "typescript" } as any);
     expect(withGo).toEqual(withoutGo);
+  });
+});
+
+// ── Task 5 (Go): the shipped hedge reused end-to-end, zero parallel code ─────
+//
+// Tasks 3-4 gave Go routes `authUnsureHook`; the hedge mechanism itself
+// (hedgedDeviatorPattern, hedgeRecommendationSuffix, and the terminal's
+// isHedgedAuthFinding/hedgedSecurityConsequence) is language-neutral and was
+// shipped for Python (#43). This block proves a Go-sourced unsure route flows
+// through the SAME mechanism with no Go-specific branch anywhere in the
+// pipeline, up to and including the terminal renderer.
+describe("Task 5 (Go): unsure-hook hedge reuses the shipped Python mechanism", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const authFinding = (fs: any[]) => fs.find((f: any) => f.subCategory === "Auth middleware");
+  // In-file factory whose inner body verifiably rejects (rule 2 bless, not a
+  // name bless) — same fixture shape as Task 4's Go wiring tests.
+  const goAuthFactory =
+    `func AuthMiddleware() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() } }\n`;
+  const goPeer = (dir: string, n: number) =>
+    goTree(`${dir}/peer${n}.go`,
+      goAuthFactory + `func routes${n}(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.POST("/peer${n}", createX)\n}\n`);
+
+  it("dominance vote: a Go unsure Use hook renders the byte-for-byte hedged deviator, and the recommendation names it", async () => {
+    const peers = await Promise.all([goPeer("src/t5dom", 1), goPeer("src/t5dom", 2), goPeer("src/t5dom", 3), goPeer("src/t5dom", 4)]);
+    const unsure = await goTree("src/t5dom/orders.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/orders", createOrder)\n}\n`);
+    const findings = securityConsistency.detect(mkCtx([...peers, unsure]));
+
+    expect(findings.filter((f: any) => f.subCategory === "Auth middleware")).toHaveLength(1);
+    const a = authFinding(findings)!;
+    expect(a.deviatingFiles).toHaveLength(1);
+    // Byte-for-byte hedgedDeviatorPattern — the same function Python's hedge uses.
+    expect(a.deviatingFiles[0].detectedPattern).toBe(
+      "POST /orders: auth not confirmed, double check hook 'middleware.VerifyToken'",
+    );
+    expect(a.deviatingFiles[0].detectedPattern).not.toMatch(/—|--/);
+    expect(a.recommendation).toContain("Double check");
+    expect(a.recommendation).toContain("middleware.VerifyToken");
+  });
+
+  it("confident Go sibling: a plainly-unauthed route (no Use hook at all) keeps today's exact flat deviator", async () => {
+    const peers = await Promise.all([goPeer("src/t5domflat", 1), goPeer("src/t5domflat", 2), goPeer("src/t5domflat", 3), goPeer("src/t5domflat", 4)]);
+    const bare = await goTree("src/t5domflat/orders.go", `func routes(r *gin.Engine) {\n\tr.POST("/orders", createOrder)\n}\n`);
+    const a = authFinding(securityConsistency.detect(mkCtx([...peers, bare])))!;
+    expect(a.deviatingFiles[0].detectedPattern).toBe("POST /orders — no Auth middleware");
+    expect(a.recommendation).not.toMatch(/double check/i);
+    expect(a.recommendation).not.toContain("middleware.VerifyToken");
+  });
+
+  it("uniform-auth-gap (Go): the unsure route among uniformly-unauthed mutating routes hedges; peers keep the flat '— no auth' string; counts/severity/confidence unchanged", async () => {
+    const flat = (n: number) =>
+      goTree(`src/t5gap/f${n}.go`, `func routes${n}(r *gin.Engine) {\n\tr.POST("/f${n}", createX)\n}\n`);
+    const flats = await Promise.all([flat(1), flat(2), flat(3)]);
+    const unsure = await goTree("src/t5gap/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    // Baseline evidence so analyzeUniformAuthGap doesn't stay silent: the repo
+    // knows how to auth elsewhere (matches the repoHasAuthMachinery symbol list).
+    const machinery = await goTree("src/t5gap/lib/auth.go", `func AuthMiddleware() {}\n`);
+    const a = authFinding(securityConsistency.detect(mkCtx([...flats, unsure, machinery])))!;
+
+    expect(a.finding).toBe("4 mutating route(s) lack auth while the codebase uses auth elsewhere");
+    expect(a.confidence).toBe(0.6);
+    expect(a.severity).toBe("error");
+    const byPath = new Map(a.deviatingFiles.map((d: any) => [d.path, d.detectedPattern]));
+    expect(byPath.get("src/t5gap/x.go")).toBe(
+      "POST /x: auth not confirmed, double check hook 'middleware.VerifyToken'",
+    );
+    expect(byPath.get("src/t5gap/f1.go")).toBe("POST /f1 — no auth");
+    expect(byPath.get("src/t5gap/f2.go")).toBe("POST /f2 — no auth");
+    expect(byPath.get("src/t5gap/f3.go")).toBe("POST /f3 — no auth");
+    expect(a.recommendation).toContain("Double check");
+    expect(a.recommendation).toContain("middleware.VerifyToken");
+  });
+
+  it("no cross-property leakage (Go): validation and rate-limit findings never carry the auth hedge for a route that also lacks them", async () => {
+    const peer = (n: number) =>
+      goTree(`src/t5leak/p${n}.go`,
+        goAuthFactory +
+        `func routes${n}(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.Use(middleware.RateLimiter(rate))\n\tr.Use(RequestValidator())\n\tr.POST("/p${n}", createX)\n}\n`);
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4)]);
+    const unsure = await goTree("src/t5leak/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    const findings = securityConsistency.detect(mkCtx([...peers, unsure]));
+
+    const val = findings.find((f: any) => f.subCategory === "Input validation");
+    const rate = findings.find((f: any) => f.subCategory === "Rate limiting");
+    expect(val).toBeDefined();
+    expect(rate).toBeDefined();
+    for (const f of [val!, rate!]) {
+      for (const d of (f as any).deviatingFiles) {
+        expect(d.detectedPattern).not.toMatch(/double check/i);
+        expect(d.detectedPattern).not.toContain("middleware.VerifyToken");
+      }
+      expect((f as any).recommendation).not.toMatch(/double check/i);
+      expect((f as any).recommendation).not.toContain("middleware.VerifyToken");
+    }
+    // Sanity: the auth finding IS hedged in the same run — this proves the gate
+    // at `propertyName === SECURITY_SUBCATEGORIES.auth` is doing the excluding,
+    // not an accidental absence of the hook name anywhere in this corpus.
+    expect(authFinding(findings)!.deviatingFiles[0].detectedPattern).toContain(
+      "double check hook 'middleware.VerifyToken'",
+    );
+  });
+
+  it("vote-arithmetic invariance (Go): hedging changes COPY only, never dominantCount/total/consistency/severity/confidence", async () => {
+    const hedgedPeers = await Promise.all([goPeer("src/t5inv", 1), goPeer("src/t5inv", 2), goPeer("src/t5inv", 3), goPeer("src/t5inv", 4)]);
+    const unsure = await goTree("src/t5inv/orders.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/orders", createOrder)\n}\n`);
+    const hedged = authFinding(securityConsistency.detect(mkCtx([...hedgedPeers, unsure])))!;
+
+    // Control: same corpus, unsure Use line deleted so /orders reads confidently
+    // unauthed instead of unsure.
+    const ctrlPeers = await Promise.all([goPeer("src/t5invctrl", 1), goPeer("src/t5invctrl", 2), goPeer("src/t5invctrl", 3), goPeer("src/t5invctrl", 4)]);
+    const ctrl = await goTree("src/t5invctrl/orders.go", `func routes(r *gin.Engine) {\n\tr.POST("/orders", createOrder)\n}\n`);
+    const flatFinding = authFinding(securityConsistency.detect(mkCtx([...ctrlPeers, ctrl])))!;
+
+    for (const k of ["dominantCount", "totalRelevantFiles", "consistencyScore", "severity", "confidence"] as const) {
+      expect((hedged as any)[k]).toBe((flatFinding as any)[k]);
+    }
+    expect(hedged.deviatingFiles[0].detectedPattern).not.toBe(flatFinding.deviatingFiles[0].detectedPattern);
+  });
+
+  it("FileMiddleware honesty (Go, detect boundary): an unsure-only Use hook never sets file-level hasAuth", async () => {
+    const unsure = await goTree("src/t5honesty/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    expect(unsure.tree!.rootNode.hasError).toBe(false);
+    const mw = extractGoFileMiddlewareAst(unsure.tree!);
+    expect(mw.hasAuth).toBe(false);
+  });
+});
+
+// ── Task 5 (Go): terminal hedge visibility ────────────────────────────────
+//
+// terminal.ts is the one render surface that hardcodes a confident consequence
+// ("Unprotected routes may be exposed in production") instead of passing
+// `recommendation`/`detectedPattern` straight through (#43 gated it on
+// isHedgedAuthFinding). html/csv/docx/json/fix-prompt never special-case the
+// hedge — they render `recommendation`/`detectedPattern` verbatim regardless of
+// source language, so a Go-sourced hedge already reaches them with no code
+// change (verified by inspection: none of those renderers branch on the hedge
+// or on language). Only terminal.ts needs an end-to-end pin.
+describe("Task 5 (Go): terminal hedge visibility", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const goAuthFactory =
+    `func AuthMiddleware() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() } }\n`;
+  const goPeer = (dir: string, n: number) =>
+    goTree(`${dir}/peer${n}.go`,
+      goAuthFactory + `func routes${n}(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.POST("/peer${n}", createX)\n}\n`);
+
+  // The real pipeline computes `consistencyImpact` in the scoring engine, one
+  // stage past driftFindingToFinding (src/scoring/engine.ts), which is out of
+  // scope here. Mirror the shipped Python terminal-hedge test: give each
+  // finding a fixed consistencyImpact so it clears the Fix Plan's meaningful-
+  // impact floor, the same way `terminal-hedge.test.ts` does. Everything else
+  // (recommendation, detectedPattern) is the REAL Go extractor's output.
+  const toFinding = (d: any): Finding => ({
+    ...driftFindingToFinding(d),
+    consistencyImpact: 5,
+  });
+
+  const emptyCat = { score: 20, maxScore: 20, locked: false, findingCount: 0, applicable: true };
+  function scanResultOf(findings: Finding[]): ScanResult {
+    return {
+      context: {
+        rootDir: "/tmp/proj",
+        dominantLanguage: "go",
+        languageBreakdown: new Map(),
+        totalLines: 500,
+        files: [],
+        intentHints: [],
+      },
+      compositeScore: 82,
+      maxCompositeScore: 100,
+      percentile: null,
+      peerLanguage: "go",
+      scores: {
+        architecturalConsistency: { ...emptyCat, applicable: false },
+        redundancy: { ...emptyCat, applicable: false },
+        dependencyHealth: { ...emptyCat, applicable: false },
+        securityPosture: { ...emptyCat },
+        intentClarity: { ...emptyCat, applicable: false },
+      },
+      hygieneScore: 0,
+      maxHygieneScore: 0,
+      hygieneScores: {},
+      findings,
+      driftFindings: [],
+      driftScores: {},
+      perFileScores: new Map(),
+      teaseMessages: [],
+      deepInsights: [],
+      scanTimeMs: 5,
+    } as unknown as ScanResult;
+  }
+
+  it("hedged Go finding: terminal does not show the flat confident consequence and surfaces the hook name plus 'double check'", async () => {
+    const peers = await Promise.all([goPeer("src/t5term", 1), goPeer("src/t5term", 2), goPeer("src/t5term", 3), goPeer("src/t5term", 4)]);
+    const unsure = await goTree("src/t5term/x.go",
+      `func routes(r *gin.Engine) {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", createX)\n}\n`);
+    const driftFindings = securityConsistency.detect(mkCtx([...peers, unsure]));
+    const out = renderTerminalOutput(scanResultOf(driftFindings.map(toFinding)));
+
+    expect(out).not.toContain("Unprotected routes may be exposed in production");
+    expect(out).toContain("middleware.VerifyToken");
+    expect(out.toLowerCase()).toContain("double check");
+  });
+
+  it("confident Go sibling finding: terminal keeps the flat consequence and shows no hedge", async () => {
+    const peers = await Promise.all([goPeer("src/t5term2", 1), goPeer("src/t5term2", 2), goPeer("src/t5term2", 3), goPeer("src/t5term2", 4)]);
+    const bare = await goTree("src/t5term2/x.go", `func routes(r *gin.Engine) {\n\tr.POST("/x", createX)\n}\n`);
+    const driftFindings = securityConsistency.detect(mkCtx([...peers, bare]));
+    const out = renderTerminalOutput(scanResultOf(driftFindings.map(toFinding)));
+
+    expect(out).toContain("Unprotected routes may be exposed in production");
+    expect(out.toLowerCase()).not.toContain("double check");
+    expect(out).not.toContain("middleware.VerifyToken");
   });
 });

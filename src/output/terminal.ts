@@ -138,7 +138,7 @@ function scoreColorFn(score: number, max: number): typeof chalk {
 }
 
 /**
- * True when this is an auth-consistency finding the Python body-signature
+ * True when this is an auth-consistency finding the Python or Go body-signature
  * analyzer could not confirm: its recommendation carries the appended "Double
  * check" hedge naming a before_request hook. For such a finding the flat
  * confident "unprotected routes" consequence is a FALSE claim, so the terminal

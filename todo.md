@@ -1,5 +1,14 @@
 # CLI backlog
 
+- **Hedge recommendation noun is Python-flavored for Go/mixed findings.** The
+  shared `hedgeRecommendationSuffix` (`src/drift/security-consistency.ts`) and
+  the terminal's read-back regex (`src/output/terminal.ts`, `before_request
+  hook (...)`) hardcode the Flask/FastAPI noun "before_request hook", which is
+  inaccurate for a Go middleware/handler hedge (e.g. `middleware.VerifyToken`).
+  Neutralizing it requires changing the producer and the terminal regex in
+  lockstep (a language-aware branch so Python stays byte-identical), which is
+  reserved for the user-facing honesty pass. Parked.
+
 - **No per-call logging in the MCP server (tool calls are invisible).** The stdio
   server (`src/mcp/server.ts`) only writes startup (`vibedrift-mcp running on
   stdio`), a one-time baseline-index line, and `Fatal:` to stderr — never a line

@@ -49,13 +49,13 @@ const BODY_METHODS = ["POST", "PUT", "PATCH", "ALL"];
 
 // ─── Hedged copy for auth routes whose hook could not be verified ────────────
 //
-// A route only carries `authUnsureHook` on the Python AST path, and only when
-// `hasAuth === false` (a blessed route never sets it). Task 4 turns the flat
-// "no auth" copy into a HEDGE that names the exact before_request-style hook the
-// user should verify. The route stays not-authed in every vote — this is copy
-// only. JS/TS/Go/regex routes never set the field, so they always take the flat
-// arm and render byte-identically. No em-dash / double hyphen in the hedged
-// strings (comma/colon/period only).
+// A route only carries `authUnsureHook` on the Python or Go AST path, and only
+// when `hasAuth === false` (a blessed route never sets it). Task 4 turns the
+// flat "no auth" copy into a HEDGE that names the exact before_request-style
+// hook the user should verify. The route stays not-authed in every vote — this
+// is copy only. JS/TS routes and the regex fallback never set the field, so
+// they always take the flat arm and render byte-identically. No em-dash /
+// double hyphen in the hedged strings (comma/colon/period only).
 
 /** Per-deviator hedged pattern naming the unresolved hook, e.g.
  *  `POST /x: auth not confirmed, double check hook 'verify_session'`. */
