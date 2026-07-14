@@ -612,6 +612,22 @@ describe("methods= same-file variable resolution", () => {
     expect(routes[0].method).toBe("ALL");
   });
 
+  it("CONDITIONAL-REASSIGN TRAP: ALLOWED = [\"GET\"] then `if F: ALLOWED = [\"GET\", \"POST\"]` stays ALL, never GET (a nested module-scope reassign is a SECOND write that poisons the name, not an invisible one)", async () => {
+    const f = await py("conditional-reassign.py",
+      `ALLOWED = ["GET"]\nif FEATURE_WRITES:\n    ALLOWED = ["GET", "POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("TRY-REASSIGN TRAP: ALLOWED = [\"GET\"] then `try: ALLOWED = load()` stays ALL, never GET (a try-block rebind is a second write)", async () => {
+    const f = await py("try-reassign.py",
+      `ALLOWED = ["GET"]\ntry:\n    ALLOWED = load()\nexcept Exception:\n    pass\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
   it("AUGMENTED-ASSIGNMENT TRAP: ALLOWED = [\"GET\"] then ALLOWED += [\"POST\"] stays ALL, never GET (a naive single-assignment scan would resolve GET and silently drop the POST route from the mutating vote)", async () => {
     const f = await py("augmented-trap.py",
       `ALLOWED = ["GET"]\nALLOWED += ["POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
@@ -2510,6 +2526,8 @@ describe("unsure-state sweep + structural invariants (addendum Task 5)", () => {
       ["call rhs", `ALLOWED = get_methods()\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
       ["identifier alias chain", `ALLOWED = OTHER\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
       ["twice reassigned", `ALLOWED = ["GET"]\nALLOWED = ["POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["conditional reassign (nested second write)", `ALLOWED = ["GET"]\nif F:\n    ALLOWED = ["GET", "POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["try-block reassign (nested second write)", `ALLOWED = ["GET"]\ntry:\n    ALLOWED = load()\nexcept Exception:\n    pass\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
       ["augmented", `ALLOWED = ["GET"]\nALLOWED += ["POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
       ["conditional (not top-level)", `if PROD:\n    ALLOWED = ["POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
       ["subscript element write", `ALLOWED = ["GET"]\nALLOWED[0] = "POST"\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],

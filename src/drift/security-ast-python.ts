@@ -366,6 +366,21 @@ function isTopLevelAssignment(asn: SyntaxNode, root: SyntaxNode): boolean {
   return stmt !== null && stmt.parent !== null && stmt.parent.id === root.id;
 }
 
+/** True when `node` sits inside a `function_definition` / `lambda` body anywhere
+ *  up to `root`. A variable local to a function is a DIFFERENT binding from the
+ *  module-level name, so a def-local write must not count toward the module
+ *  name's write census (preserving def-local precision). A write merely nested in
+ *  a module-scope `if`/`try`/`with`/`for` is NOT excluded — it rebinds the same
+ *  module name and so DOES count. */
+function isInsideFunctionBody(node: SyntaxNode, root: SyntaxNode): boolean {
+  let p = node.parent;
+  while (p !== null && p.id !== root.id) {
+    if (p.type === "function_definition" || p.type === "lambda") return true;
+    p = p.parent;
+  }
+  return false;
+}
+
 /** Names written through a form the census cannot safely read a single value
  *  through, ANYWHERE in the file (no scope analysis, mirroring
  *  collectRouterNames's flat census): an augmented assignment (`X += ...`), a
@@ -430,15 +445,19 @@ function collectPoisonedMethodsNames(root: SyntaxNode): Set<string> {
 /** Identifiers assigned, at MODULE TOP LEVEL, to a single unambiguous
  *  `list`/`tuple`/`set` literal of string verbs — the value a Flask
  *  `methods=` kwarg may safely resolve through (Upgrade 2). Mirrors
- *  collectRouterNames's flat, no-scope census: MULTIPLE top-level assignments
- *  to the same name (any RHS shape, not only a literal — a literal followed
- *  by a computed reassignment is exactly as ambiguous as two literals) make
- *  its value ambiguous, and any poisoned write form (collectPoisonedMethodsNames)
- *  disqualifies it regardless of how many literal assignments exist. A name
- *  that is imported, computed, an identifier alias (`B = A`: the census
- *  refuses to chase an identifier RHS), written more than once, written only
- *  conditionally/def-locally, or poisoned is simply ABSENT from the returned
- *  map — `resolveMethod` then falls through to "ALL", never a silent GET. */
+ *  collectRouterNames's flat census: MULTIPLE module-scope writes to the same
+ *  name make its value ambiguous, where a write is counted at ANY module-scope
+ *  DEPTH (a top-level assignment AND a nested `if F: ALLOWED = [...]` / try-block
+ *  rebind both count — any RHS shape, not only a literal), so a nested reassign
+ *  poisons rather than silently vanishing. Only a def-local write (a different
+ *  binding) is excluded from the count. Any poisoned write form
+ *  (collectPoisonedMethodsNames) disqualifies the name regardless of how many
+ *  literal assignments exist; the single RECORDED literal must still be
+ *  top-level. A name that is imported, computed, an identifier alias (`B = A`:
+ *  the census refuses to chase an identifier RHS), written more than once at
+ *  module scope, written only conditionally/def-locally, or poisoned is simply
+ *  ABSENT from the returned map — `resolveMethod` then falls through to "ALL",
+ *  never a silent GET. */
 function collectMethodsVars(root: SyntaxNode): Map<string, SyntaxNode> {
   const writeCounts = new Map<string, number>();
   const literalByName = new Map<string, SyntaxNode>();
@@ -446,11 +465,21 @@ function collectMethodsVars(root: SyntaxNode): Map<string, SyntaxNode> {
     if (!asn) continue;
     const left = asn.childForFieldName("left");
     if (!left || left.type !== "identifier") continue; // subscript/pattern_list: no plain-name write
-    if (!isTopLevelAssignment(asn, root)) continue; // conditional / def-local: not unconditional
+    if (isInsideFunctionBody(asn, root)) continue; // def-local: a different binding
     const name = left.text;
+    // Count identifier-left writes at ANY module-scope depth: a nested reassign
+    // (`if F: ALLOWED = [...]`, a try-block rebind) is a SECOND write that
+    // POISONS the name (writeCounts > 1 -> unresolvable -> ALL), never an
+    // invisible one that silently GET-drops the route. A nested write MUST NOT be
+    // skipped before it is counted (the original bug).
     writeCounts.set(name, (writeCounts.get(name) ?? 0) + 1);
     const right = asn.childForFieldName("right");
-    if (right && ["list", "tuple", "set"].includes(right.type)) literalByName.set(name, right);
+    // Only a TOP-LEVEL literal is a safe single value to read through; a nested
+    // literal only sometimes runs, so it is never the RECORDED value even though
+    // the write above still counts toward poisoning.
+    if (isTopLevelAssignment(asn, root) && right && ["list", "tuple", "set"].includes(right.type)) {
+      literalByName.set(name, right);
+    }
   }
   const poisoned = collectPoisonedMethodsNames(root);
   const resolved = new Map<string, SyntaxNode>();
