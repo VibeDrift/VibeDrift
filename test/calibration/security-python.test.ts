@@ -194,6 +194,23 @@ describe("Python calibration: S4 negative control (uniformly public by design)",
 });
 
 describe("Python calibration: S5 uniformly-authed control", () => {
+  it("non-vacuity FIRST: extracts 13 routes across the corpus, every one authed, before silence can mean anything", async () => {
+    // Self-contained guard: zero findings below only means "uniform auth" once we
+    // know the routes were actually seen AND recognized as authed. 8 Flask + 5
+    // FastAPI route files, one route each; the auth/app/deps support files carry
+    // no routes.
+    let total = 0;
+    for (const f of uniformlyAuthed()) {
+      const driftFile = await fileWithTree(f.path, f.content, "python");
+      const routes = extractPythonRoutesAst(driftFile.tree!, driftFile.relativePath);
+      for (const r of routes) {
+        expect(r.hasAuth, `${f.path} ${r.method} ${r.path}`).toBe(true);
+        total += 1;
+      }
+    }
+    expect(total).toBe(13);
+  });
+
   it("produces zero security_posture findings across the whole Flask + FastAPI corpus, incl. validation and rate-limit", async () => {
     const ctx = await ctxFor(uniformlyAuthed());
     const findings = securityConsistency.detect(ctx as any);

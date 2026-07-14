@@ -126,7 +126,7 @@ async function main(): Promise<void> {
 
   // 3. Python security corpus (own root, own row label). This exercises the
   // AST extractor's realistic Flask fixture through the FULL on-disk scan
-  // pipeline (not the direct detector call test/calibration/security-python.ts
+  // pipeline (not the direct detector call test/calibration/security-python.test.ts
   // uses), and is kept out of the TS baseline/injector loop above by design:
   // merging Python files into generateBaseline() would contaminate the
   // naming/architecture rows and shift the clean-scan FP floor, and merging
