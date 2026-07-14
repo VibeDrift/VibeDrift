@@ -121,14 +121,23 @@ const RATE_NAMES = /(?:rate_?limit|throttle|limiter|slowapi|slowdown)/i;
 // hooks that do not authenticate. Whole-segment matching makes substring blessing
 // structurally impossible.
 const AUTH_CORE_SEGMENTS = new Set(["auth", "authenticate", "authenticated"]);
-// LEXICON NOTE (pending owner lexicon sign-off): these two sets are broader than
-// the plan's Integration contract. Beyond the contract, ENFORCE adds
-// verify/verified, protect/protected, restrict/restricted, and SUBJECT adds
-// users, jwt, role(s), admin, credentials. The additions expand the two-tier
-// (ENFORCE + SUBJECT) bless surface, so the closest non-auth neighbors are pinned
-// FALSE by boundary tests (restricted_zone_redirect, track_user_metrics,
-// role_labels, protect_branch) to keep the surface explicit. The sets are left
-// UNCHANGED here; any narrowing waits on the owner's lexicon decision.
+// KNOWN FALSE-BLESS EXPOSURE (owner decision required): the ENFORCE+SUBJECT
+// two-tier match blesses attributive non-auth hook names such as
+// verify_user_email (email-confirmation flow) and protect_user_data (data
+// scrubbing): ENFORCE verb + SUBJECT noun both match even though the hook
+// does not authenticate. This shape exists in the plan's pinned sets as well
+// (verify + user), so it is inherent to the two-tier design, not only to the
+// additions. Resolution options for the owner: narrow the ENFORCE x SUBJECT
+// cross-product, add attributive vetoes (subject followed by an object noun
+// like email/data/profile), or accept as documented risk. Blessing suppresses
+// findings, so this is the false-bless direction, never a safe over-flag.
+// Also note: verify_token in AUTH_DECORATORS matches flask-httpauth's
+// @auth.verify_token registration decorator, which is not a route wrapper;
+// if stacked on a route handler it would leak-bless (non-idiomatic, low
+// risk). The closest non-auth neighbors are pinned FALSE by boundary tests
+// (restricted_zone_redirect, track_user_metrics, role_labels, protect_branch)
+// to keep the surface explicit. The sets are left UNCHANGED here; any
+// narrowing waits on the owner's lexicon decision.
 const AUTH_ENFORCE_SEGMENTS = new Set([
   "require", "required", "requires", "verify", "verified", "ensure",
   "protect", "protected", "restrict", "restricted",

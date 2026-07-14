@@ -1548,6 +1548,54 @@ describe("hook-name lexicon boundary pins (Fix 4)", () => {
   });
 });
 
+// ─── KNOWN EXPOSURE pins: two-tier hook lexicon false-bless (owner decision
+// pending) ─────────────────────────────────────────────────────────────────
+//
+// These document CURRENT behavior; they do NOT endorse it. The ENFORCE+SUBJECT
+// two-tier match (see the KNOWN FALSE-BLESS EXPOSURE comment above
+// AUTH_ENFORCE_SEGMENTS in security-ast-python.ts) blesses attributive
+// non-auth hook names whose ENFORCE verb targets an object noun that also
+// happens to be a SUBJECT segment: verify_user_email only sends an
+// email-confirmation link, and protect_user_data only scrubs/anonymizes
+// stored data, but neither hook authenticates a request. Blessing means the
+// extractor marks the receiver's routes hasAuth:true, which is the
+// false-bless direction the module exists to prevent, not a safe over-flag.
+// Pinned here so a future lexicon resolution flips these deliberately instead
+// of silently.
+describe("KNOWN EXPOSURE pins: two-tier hook lexicon false-bless (pending owner decision)", () => {
+  it("KNOWN EXPOSURE pending owner decision: verify_user_email before_request hook blesses its receiver's routes via ENFORCE+SUBJECT", async () => {
+    const f = await py("exposure-verify-user-email.py",
+      `@app.before_request\n` +
+      `def verify_user_email():\n` +
+      `    return None\n\n` +
+      `@app.route("/x", methods=["POST"])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    // CURRENT behavior, documented as exposure: ENFORCE "verify" + SUBJECT
+    // "user" both match a hook that only confirms an email address. A future
+    // lexicon fix is expected to flip this to auth=false; update this
+    // assertion deliberately when it does, not as collateral of a refactor.
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+  });
+
+  it("KNOWN EXPOSURE pending owner decision: protect_user_data before_request hook blesses its receiver's routes via ENFORCE+SUBJECT", async () => {
+    const f = await py("exposure-protect-user-data.py",
+      `@app.before_request\n` +
+      `def protect_user_data():\n` +
+      `    return None\n\n` +
+      `@app.route("/y", methods=["POST"])\n` +
+      `def y():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    // CURRENT behavior, documented as exposure: ENFORCE "protect" + SUBJECT
+    // "user" both match a hook that only scrubs/anonymizes stored data. A
+    // future lexicon fix is expected to flip this to auth=false; update this
+    // assertion deliberately when it does, not as collateral of a refactor.
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/y auth=true"]);
+  });
+});
+
 // ─── Task 6: the systematic never-false-bless sweep ─────────────────────────
 //
 // A single registry of every ambiguity / "cannot determine" branch the Python
