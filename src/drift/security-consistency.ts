@@ -118,6 +118,15 @@ export interface RouteInfo {
   hasValidation: boolean;
   hasRateLimit: boolean;
   hasErrorHandler: boolean;
+  /** Python AST path only: the name of a before_request-style hook whose BODY is
+   *  auth-flavored but statically unverifiable (an opaque helper, an imported or
+   *  attribute target, a duplicate def). Present ONLY when `hasAuth === false`;
+   *  `hasAuth === true` always omits it. An "unsure" route still counts as
+   *  not-authed in every vote (never blesses) — this field only lets a renderer
+   *  hedge the finding copy to name the exact hook the user should double-check.
+   *  Never set on JS/TS/Go or the regex fallback, so those routes serialize
+   *  byte-identically. */
+  authUnsureHook?: string;
 }
 
 // ─── Phase 1: file-level middleware index ────────────────────────────

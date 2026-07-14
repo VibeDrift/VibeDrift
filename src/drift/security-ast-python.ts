@@ -122,31 +122,24 @@ const VAL_NAMES = /(?:pydantic|validate|validator|schema|serializer|marshmallow)
 const RATE_NAMES = /(?:rate_?limit|throttle|limiter|slowapi|slowdown)/i;
 
 // Two-tier segment lexicon for before_request / before_app_request HOOK HANDLER
-// names (see nameHasAuthToken). Deliberately stricter than the file-level regex,
-// which blesses ANY before_request. tier 1: a CORE segment alone (an unambiguous
+// names (see nameHasAuthToken). tier 1: a CORE segment alone (an unambiguous
 // authn word). tier 2: an ENFORCEMENT verb segment AND a SUBJECT segment anywhere
-// in the name. A lone SUBJECT (login / token / user) or a lone ENFORCE verb never
-// blesses: track_login_metrics, verify_content_type, and set_csrf_token are real
-// hooks that do not authenticate. Whole-segment matching makes substring blessing
-// structurally impossible.
+// in the name. A lone SUBJECT (login / token / user) or a lone ENFORCE verb is
+// never a token: track_login_metrics, verify_content_type, and set_csrf_token are
+// real hooks that do not authenticate. Whole-segment matching makes substring
+// blessing structurally impossible.
+//
+// BODY-FIRST (addendum): the hook path no longer blesses on NAME alone.
+// classifyHookAuth classifies by BODY behavior first; a name token only ever acts
+// as a SECOND tier, and only when the body is UNRESOLVABLE (opaque). A CORE token
+// (auth/authenticate, or an AUTH_DECORATORS name) with an opaque body blesses; an
+// ENFORCE+SUBJECT token (verify_user_email, protect_user_data, enforce_session)
+// with an opaque/absent body resolves UNSURE (a hedge, never a bless), and with a
+// VISIBLE non-enforcing body resolves flat not-auth. So the old ENFORCE+SUBJECT
+// attributive false-bless is closed: those names can hedge, never bless, and a
+// visible email/scrub body is plainly not-auth. (verify_token also appears in
+// AUTH_DECORATORS as a ROUTE decorator, unaffected here.)
 const AUTH_CORE_SEGMENTS = new Set(["auth", "authenticate", "authenticated"]);
-// KNOWN FALSE-BLESS EXPOSURE (owner decision required): the ENFORCE+SUBJECT
-// two-tier match blesses attributive non-auth hook names such as
-// verify_user_email (email-confirmation flow) and protect_user_data (data
-// scrubbing): ENFORCE verb + SUBJECT noun both match even though the hook
-// does not authenticate. This shape exists in the plan's pinned sets as well
-// (verify + user), so it is inherent to the two-tier design, not only to the
-// additions. Resolution options for the owner: narrow the ENFORCE x SUBJECT
-// cross-product, add attributive vetoes (subject followed by an object noun
-// like email/data/profile), or accept as documented risk. Blessing suppresses
-// findings, so this is the false-bless direction, never a safe over-flag.
-// Also note: verify_token in AUTH_DECORATORS matches flask-httpauth's
-// @auth.verify_token registration decorator, which is not a route wrapper;
-// if stacked on a route handler it would leak-bless (non-idiomatic, low
-// risk). The closest non-auth neighbors are pinned FALSE by boundary tests
-// (restricted_zone_redirect, track_user_metrics, role_labels, protect_branch)
-// to keep the surface explicit. The sets are left UNCHANGED here; any
-// narrowing waits on the owner's lexicon decision.
 const AUTH_ENFORCE_SEGMENTS = new Set([
   "require", "required", "requires", "verify", "verified", "ensure",
   "protect", "protected", "restrict", "restricted",
@@ -470,18 +463,34 @@ function nameHasAuthToken(name: string): boolean {
 // Classifies a before_request-style hook by what its BODY does, not what its
 // name suggests. `bodyAuthSignature` walks the body (plus ONE hop into a
 // same-file helper) and returns "reject" | "none" | "opaque"; `classifyHookAuth`
-// layers name precedence on top (an optionality-veto name always wins;
-// otherwise behavior beats a name; an opaque body hedges as "unsure" unless the
-// name is an unambiguous CORE auth token). Every walk keeps the module's
-// per-node `hasError` gate, so error-recovery nodes never contribute a bless.
+// layers name precedence on top and produces the THREE-WAY outcome
+// "auth" | "not-auth" | "unsure" (an optionality-veto name always wins; otherwise
+// behavior beats a name — a verified reject blesses even a boring name, a visible
+// non-enforcing body is not-auth whatever the name; an opaque body hedges as
+// "unsure" unless the name is an unambiguous CORE token). Wired into the hook path
+// (collectPyMiddleware) for both the decorator and call-registration forms.
+//
+// INVARIANT AMENDMENT: "unsure" is not-authed INTERNALLY — it never sets a hasAuth
+// lane, never reaches the FileMiddleware OR, and never blesses a route (hasAuth
+// stays false). It only records the hook's name (RouteInfo.authUnsureHook) so a
+// renderer can hedge the copy. NEVER-FALSE-BLESS holds: every ambiguous branch
+// resolves toward not-authed.
+//
+// TWO SAFE-DIRECTION TIGHTENINGS (this addendum): (1) the body scan prunes nested
+// def/lambda subtrees, so a reject that is not executed inline never counts; (2) a
+// 403 blesses only inside a reject driven by a credential-referencing guard
+// condition, never on body-wide co-occurrence with an unrelated credential read.
+// Both move strictly toward never-false-bless.
 //
 // MEASURED reject-catalog recall gaps (SAFE, over-flag direction — a later pass
 // may widen deliberately): reject via a Response/make_response object
 // (abort(make_response(..., 401)) / abort(Response(status=401)), arg0 a call not
 // an integer); Flask-Login `return login_manager.unauthorized()` (an attribute
-// call outside KNOWN_AUTH_PRIMITIVES); and custom auth exceptions outside the
-// lexicon (raise Http401, raise NotAuthenticated). All resolve opaque/unsure or
-// not-auth today, never a false-bless.
+// call outside KNOWN_AUTH_PRIMITIVES); custom auth exceptions outside the lexicon
+// (raise Http401, raise NotAuthenticated); and a credential-guarded 403 reached
+// only via an `elif` branch (the guard walk reads the `if` condition + its
+// consequence, not the alternative). All resolve opaque/unsure or not-auth today,
+// never a false-bless.
 
 // Calls whose reject/target semantics are read in the raise/return walks (or are
 // merely nested), so the generic call walk must not re-interpret them.
@@ -601,43 +610,158 @@ function isCredentialGetCall(call: SyntaxNode): boolean {
   return arg0 !== null && arg0.type === "string" && keyIsCredential(pyStringText(arg0));
 }
 
+/** Descendants of `node` of one of `types`, NOT descending into nested
+ *  `function_definition` / `lambda` subtrees. A reject signature inside a nested
+ *  def is not executed inline, so it must not count as the hook rejecting; the
+ *  hook's own try/if/for branches (and one-hop helper bodies, scanned
+ *  separately) still count. Pre-order; the root `node` itself is never yielded. */
+function prunedDescendants(node: SyntaxNode, types: Set<string>): SyntaxNode[] {
+  const out: SyntaxNode[] = [];
+  const visit = (n: SyntaxNode) => {
+    for (const child of n.namedChildren) {
+      if (!child) continue;
+      if (child.type === "function_definition" || child.type === "lambda") continue;
+      if (types.has(child.type)) out.push(child);
+      visit(child);
+    }
+  };
+  visit(node);
+  return out;
+}
+const CALL_T = new Set(["call"]);
+const COMPARISON_T = new Set(["comparison_operator"]);
+const SUBSCRIPT_T = new Set(["subscript"]);
+
+/** Like `prunedDescendants` but also yields `node` itself when it matches — an
+ *  `if` condition often IS the comparison/call/subscript, which a
+ *  descendants-only walk would miss. */
+function prunedSelfAndDescendants(node: SyntaxNode, types: Set<string>): SyntaxNode[] {
+  const out = prunedDescendants(node, types);
+  if (types.has(node.type)) out.unshift(node);
+  return out;
+}
+
+/** True when a node subtree reads a credential/session/auth surface, by the SAME
+ *  three shapes the body scan recognizes: a session/cookie/header `.get("<cred>")`
+ *  call; a `<cred> is None` comparison or a `"<cred>" in/not in <x>` comparison;
+ *  or a `session["<cred>"]` / `g["<cred>"]` subscript. Deliberately NOT a bare
+ *  credential-named identifier read (that would over-match user_agent, username,
+ *  ...): keeping this identical to the body-wide `credentialRead` detection
+ *  guarantees the guarded-403 blessing set is a strict SUBSET of the pre-tightening
+ *  body-wide set, so the tightening only ever REMOVES blesses, never adds one. */
+function nodeHasCredentialRead(node: SyntaxNode): boolean {
+  for (const call of prunedSelfAndDescendants(node, CALL_T)) {
+    if (!call.hasError && isCredentialGetCall(call)) return true;
+  }
+  for (const cmp of prunedSelfAndDescendants(node, COMPARISON_T)) {
+    if (cmp.hasError) continue;
+    const ops = cmp.children
+      .filter((c): c is SyntaxNode => c !== null && !c.isNamed)
+      .map((c) => c.type);
+    const named = cmp.namedChildren.filter((n): n is SyntaxNode => n !== null);
+    if (ops.includes("is")) {
+      const hasNone = named.some((n) => n.type === "none");
+      const credOperand = named.some(
+        (n) =>
+          (n.type === "identifier" || n.type === "attribute") &&
+          nameSegments(n.text).some((s) => CREDENTIAL_KEY_SEGMENTS.has(s)),
+      );
+      if (hasNone && credOperand) return true;
+    }
+    if (ops.includes("in") || ops.includes("not in")) {
+      if (named.some((n) => n.type === "string" && keyIsCredential(pyStringText(n)))) return true;
+    }
+  }
+  for (const sub of prunedSelfAndDescendants(node, SUBSCRIPT_T)) {
+    if (sub.hasError) continue;
+    const value = sub.childForFieldName("value");
+    if (!value || value.type !== "identifier" || !(value.text === "session" || value.text === "g")) {
+      continue;
+    }
+    const idx = sub.childForFieldName("subscript");
+    if (idx && idx.type === "string" && keyIsCredential(pyStringText(idx))) return true;
+  }
+  return false;
+}
+
+/** True when a subtree contains a 403 reject: `abort(403)`, a raised
+ *  `HTTPException` with status 403, or a `(expr, 403)` return tuple. Nested def
+ *  subtrees are pruned (same inline-execution rule as the body scan). */
+function subtreeHas403Reject(node: SyntaxNode): boolean {
+  for (const call of prunedDescendants(node, CALL_T)) {
+    if (call.hasError) continue;
+    if (finalName(call.childForFieldName("function")) === "abort") {
+      if (rejectStatusKind(call.childForFieldName("arguments")?.namedChild(0) ?? null) === "403") return true;
+    }
+  }
+  for (const rs of prunedDescendants(node, new Set(["raise_statement"]))) {
+    if (rs.hasError) continue;
+    const raised = rs.namedChild(0);
+    if (
+      raised?.type === "call" &&
+      finalName(raised.childForFieldName("function")) === "HTTPException" &&
+      httpExceptionStatus(raised) === "403"
+    ) {
+      return true;
+    }
+  }
+  for (const ret of prunedDescendants(node, new Set(["return_statement"]))) {
+    if (ret.hasError) continue;
+    const val = ret.namedChild(0);
+    if (val?.type === "expression_list") {
+      const kids = val.namedChildren.filter((n): n is SyntaxNode => n !== null);
+      if (rejectStatusKind(kids[kids.length - 1] ?? null) === "403") return true;
+    }
+  }
+  return false;
+}
+
 interface BodySignals {
   reject401: boolean;
-  reject403: boolean;
+  /** A 403 reject that sits inside an `if` whose CONDITION reads a credential
+   *  surface. A bare 403 anywhere no longer contributes (a lone 403 is routinely
+   *  a CSRF / IP / maintenance gate, not an authentication denial). */
+  reject403Guarded: boolean;
   opaqueHint: boolean;
   credentialRead: boolean;
 }
 
 /** One body's direct signals; `hop` = whether a same-file helper body may be
- *  followed (depth exactly 1). reject401 blesses ALONE; reject403 blesses only
- *  WITH a credentialRead (403 is routinely non-auth). */
+ *  followed (depth exactly 1). reject401 blesses ALONE; a 403 blesses only via
+ *  reject403Guarded (inside an `if <credential-condition>:` branch), since a bare
+ *  403 is routinely non-auth. Nested def/lambda subtrees are pruned throughout. */
 function scanBody(
   body: SyntaxNode,
   defs: Map<string, SyntaxNode | null>,
   hop: boolean,
 ): BodySignals {
   const out: BodySignals = {
-    reject401: false, reject403: false, opaqueHint: false, credentialRead: false,
+    reject401: false, reject403Guarded: false, opaqueHint: false, credentialRead: false,
   };
   const merge = (s: BodySignals) => {
     out.reject401 = out.reject401 || s.reject401;
-    out.reject403 = out.reject403 || s.reject403;
+    out.reject403Guarded = out.reject403Guarded || s.reject403Guarded;
     out.opaqueHint = out.opaqueHint || s.opaqueHint;
     out.credentialRead = out.credentialRead || s.credentialRead;
   };
 
-  // Calls: aborts, auth primitives, one-hop helpers, opaque hints, credential .get.
-  for (const call of body.descendantsOfType("call")) {
-    if (!call || call.hasError) continue;
-    if (isCredentialGetCall(call)) out.credentialRead = true;
+  // Credential-surface reads (the three shapes: .get call, is-None / in-string
+  // comparison, session/g subscript). Body-wide here; scoped to an if-condition
+  // in the guarded-403 walk below via the same helper.
+  if (nodeHasCredentialRead(body)) out.credentialRead = true;
+
+  // Calls: aborts, auth primitives, one-hop helpers, opaque hints.
+  // Nested def/lambda subtrees are pruned (a reject there is not executed inline).
+  for (const call of prunedDescendants(body, CALL_T)) {
+    if (call.hasError) continue;
     const fn = call.childForFieldName("function");
     const args = call.childForFieldName("arguments");
     const name = finalName(fn);
     if (name === "abort") {
       const arg0 = args?.namedChild(0) ?? null;
-      const kind = rejectStatusKind(arg0);
-      if (kind === "401") out.reject401 = true;
-      else if (kind === "403") out.reject403 = true;
+      // 401 blesses alone; a bare abort(403) contributes NOTHING (only a
+      // credential-guarded 403 blesses, handled by the if-walk below).
+      if (rejectStatusKind(arg0) === "401") out.reject401 = true;
       else if (arg0 !== null && arg0.type !== "integer") out.opaqueHint = true; // abort(code_var)
       continue;
     }
@@ -660,9 +784,23 @@ function scanBody(
     if (name !== null && hintHit(name)) out.opaqueHint = true; // unresolvable flavored callee
   }
 
+  // Guarded 403: an `if <credential-condition>: ... <403 reject> ...`. A 403 is
+  // routinely a non-auth denial (CSRF, IP allowlist, maintenance), so it blesses
+  // ONLY when the reject is driven by a guard condition that reads a credential
+  // surface, never on body-wide co-occurrence with an unrelated credential read.
+  for (const ifs of prunedDescendants(body, new Set(["if_statement"]))) {
+    if (ifs.hasError) continue;
+    const cond = ifs.childForFieldName("condition");
+    const cons = ifs.childForFieldName("consequence");
+    if (cond && cons && nodeHasCredentialRead(cond) && subtreeHas403Reject(cons)) {
+      out.reject403Guarded = true;
+    }
+  }
+
   // raise <exception>: HTTPException status, else the auth-exception lexicon.
-  for (const rs of body.descendantsOfType("raise_statement")) {
-    if (!rs || rs.hasError) continue;
+  // A bare 403 HTTPException contributes nothing (same asymmetry as abort(403)).
+  for (const rs of prunedDescendants(body, new Set(["raise_statement"]))) {
+    if (rs.hasError) continue;
     const raised = rs.namedChild(0);
     if (!raised) continue;
     if (
@@ -671,7 +809,6 @@ function scanBody(
     ) {
       const st = httpExceptionStatus(raised);
       if (st === "401") out.reject401 = true;
-      else if (st === "403") out.reject403 = true;
       else if (st === "unreadable") out.opaqueHint = true;
       continue;
     }
@@ -679,9 +816,10 @@ function scanBody(
     if (rn !== null && isAuthExceptionName(rn)) out.reject401 = true;
   }
 
-  // return: a login-flavored redirect, or an (expr, 401|403) tuple.
-  for (const ret of body.descendantsOfType("return_statement")) {
-    if (!ret || ret.hasError) continue;
+  // return: a login-flavored redirect, or an (expr, 401) tuple. A trailing 403
+  // tuple contributes nothing here; a credential-guarded one is caught above.
+  for (const ret of prunedDescendants(body, new Set(["return_statement"]))) {
+    if (ret.hasError) continue;
     const val = ret.namedChild(0);
     if (!val) continue;
     if (val.type === "call") {
@@ -695,43 +833,8 @@ function scanBody(
     }
     if (val.type === "expression_list") {
       const kids = val.namedChildren.filter((n): n is SyntaxNode => n !== null);
-      const kind = rejectStatusKind(kids[kids.length - 1] ?? null);
-      if (kind === "401") out.reject401 = true;
-      else if (kind === "403") out.reject403 = true;
+      if (rejectStatusKind(kids[kids.length - 1] ?? null) === "401") out.reject401 = true;
     }
-  }
-
-  // Credential-surface reads (comparison + subscript shapes; the .get call shape
-  // is folded into the call walk above via isCredentialGetCall).
-  for (const cmp of body.descendantsOfType("comparison_operator")) {
-    if (!cmp || cmp.hasError) continue;
-    const ops = cmp.children
-      .filter((c): c is SyntaxNode => c !== null && !c.isNamed)
-      .map((c) => c.type);
-    const named = cmp.namedChildren.filter((n): n is SyntaxNode => n !== null);
-    if (ops.includes("is")) {
-      const hasNone = named.some((n) => n.type === "none");
-      const credOperand = named.some(
-        (n) =>
-          (n.type === "identifier" || n.type === "attribute") &&
-          nameSegments(n.text).some((s) => CREDENTIAL_KEY_SEGMENTS.has(s)),
-      );
-      if (hasNone && credOperand) out.credentialRead = true;
-    }
-    if (ops.includes("in") || ops.includes("not in")) {
-      if (named.some((n) => n.type === "string" && keyIsCredential(pyStringText(n)))) {
-        out.credentialRead = true;
-      }
-    }
-  }
-  for (const sub of body.descendantsOfType("subscript")) {
-    if (!sub || sub.hasError) continue;
-    const value = sub.childForFieldName("value");
-    if (!value || value.type !== "identifier" || !(value.text === "session" || value.text === "g")) {
-      continue;
-    }
-    const idx = sub.childForFieldName("subscript");
-    if (idx && idx.type === "string" && keyIsCredential(pyStringText(idx))) out.credentialRead = true;
   }
 
   return out;
@@ -751,14 +854,15 @@ export function collectFunctionDefs(root: SyntaxNode): Map<string, SyntaxNode | 
 }
 
 /** A hook body's three-way auth signal. 401-family blesses alone; a 403 blesses
- *  only when a credential surface is also read; an uncorroborated 403 is neither
- *  reject nor opaque (keeps the hedge meaningful). */
+ *  only inside a reject driven by a credential-referencing guard condition
+ *  (`if <credential>: abort(403)`); a bare/uncorroborated 403 is neither reject
+ *  nor opaque (keeps the hedge meaningful). */
 export function bodyAuthSignature(
   body: SyntaxNode,
   defs: Map<string, SyntaxNode | null>,
 ): BodySignal {
   const s = scanBody(body, defs, true);
-  if (s.reject401 || (s.reject403 && s.credentialRead)) return "reject";
+  if (s.reject401 || s.reject403Guarded) return "reject";
   if (s.opaqueHint || s.credentialRead) return "opaque";
   return "none";
 }
@@ -859,10 +963,14 @@ function isAuthDecorator(dec: SyntaxNode): boolean {
   return false;
 }
 
-/** Any Depends(...)/Security(...) call under `scope` whose RESOLVED dependency
- *  name matches the segment lexicon. Bare Depends(), an unresolvable target, or a
- *  vetoed name resolves false. */
-function callsWithAuthDependency(scope: SyntaxNode): boolean {
+/** Any Depends(...)/Security(...) call under `scope` whose RESOLVED dependency is
+ *  auth enforcement. Resolution order (never-false-bless): (1) an optional /
+ *  settings / stats-flavored VETO name never blesses, by name OR body; (2) a
+ *  name-segment lexicon hit blesses; (3) additive — a boring name whose
+ *  SAME-FILE def body raises a verified reject (Depends(load_actor) where
+ *  load_actor 401s) blesses. Bare Depends() or an unresolvable target resolves
+ *  false. */
+function callsWithAuthDependency(scope: SyntaxNode, defs: Map<string, SyntaxNode | null>): boolean {
   for (const call of scope.descendantsOfType("call")) {
     if (!call) continue;
     const fn = call.childForFieldName("function");
@@ -870,7 +978,16 @@ function callsWithAuthDependency(scope: SyntaxNode): boolean {
     if (fn.text !== "Depends" && fn.text !== "Security") continue;
     const target = call.childForFieldName("arguments")?.namedChild(0);
     const name = target ? dependencyTargetName(target) : null;
-    if (name !== null && dependsNameIsAuth(name)) return true;
+    if (name === null) continue;
+    // veto first: get_current_user_optional admits anonymous requests even if its
+    // body raises 401, so neither the name hit nor the body branch may bless it.
+    if (nameSegments(name).some((s) => DEPENDS_VETO_SEGMENTS.has(s))) continue;
+    if (dependsNameIsAuth(name)) return true; // name-segment hit
+    const def = defs.get(name); // same-file body reject (additive)
+    if (def) {
+      const body = def.childForFieldName("body");
+      if (body && bodyAuthSignature(body, defs) === "reject") return true;
+    }
   }
   return false;
 }
@@ -879,14 +996,14 @@ function callsWithAuthDependency(scope: SyntaxNode): boolean {
  *  node covers plain defaults (default_parameter), typed defaults
  *  (typed_default_parameter), and Annotated[T, Depends(...)] (typed_parameter,
  *  where the call nests under the TYPE field's generic_type). */
-function paramsHaveAuthDependency(definition: SyntaxNode): boolean {
+function paramsHaveAuthDependency(definition: SyntaxNode, defs: Map<string, SyntaxNode | null>): boolean {
   const params = definition.childForFieldName("parameters");
-  return params ? callsWithAuthDependency(params) : false;
+  return params ? callsWithAuthDependency(params, defs) : false;
 }
 
 /** Route-decorator-level dependencies kwarg:
  *  @router.post("/x", dependencies=[Depends(verify_token)]). */
-function routeCallHasAuthDependency(call: SyntaxNode): boolean {
+function routeCallHasAuthDependency(call: SyntaxNode, defs: Map<string, SyntaxNode | null>): boolean {
   const args = call.childForFieldName("arguments");
   if (!args) return false;
   const kw = args.namedChildren.find(
@@ -896,7 +1013,7 @@ function routeCallHasAuthDependency(call: SyntaxNode): boolean {
       n.childForFieldName("name")?.text === "dependencies",
   );
   const value = kw?.childForFieldName("value");
-  return value ? callsWithAuthDependency(value) : false;
+  return value ? callsWithAuthDependency(value, defs) : false;
 }
 
 /** Middleware scopes for one python file. Python file-level middleware attaches
@@ -910,14 +1027,23 @@ function routeCallHasAuthDependency(call: SyntaxNode): boolean {
 interface PyMiddlewareScopes {
   global: FileMiddleware;
   byReceiver: Map<string, FileMiddleware>;
+  /** First (document-order) unsure hook name at app scope, or null. An unsure
+   *  hook NEVER sets a hasAuth lane; it only records the name a route inherits so
+   *  a renderer can hedge. hasAuth stays false, so the FileMiddleware OR never
+   *  launders an unsure hook into a bless. */
+  globalUnsure: string | null;
+  /** First (document-order) unsure hook name per named receiver. */
+  unsureByReceiver: Map<string, string>;
 }
 
 const APP_SCOPED_RECEIVER = /^(?:app|application)$/;
 
-function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
+function collectPyMiddleware(tree: Tree, defs: Map<string, SyntaxNode | null>): PyMiddlewareScopes {
   const scopes: PyMiddlewareScopes = {
     global: { hasAuth: false, hasValidation: false, hasRateLimit: false },
     byReceiver: new Map(),
+    globalUnsure: null,
+    unsureByReceiver: new Map(),
   };
   const mark = (receiver: string, appWide: boolean, lane: keyof FileMiddleware) => {
     if (appWide || APP_SCOPED_RECEIVER.test(receiver)) {
@@ -929,6 +1055,31 @@ function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
       { hasAuth: false, hasValidation: false, hasRateLimit: false };
     entry[lane] = true;
     scopes.byReceiver.set(receiver, entry);
+  };
+  // First-wins: the earliest unsure hook on a scope is the one a route names.
+  const markUnsure = (receiver: string, appWide: boolean, hookName: string) => {
+    if (!hookName) return; // a lambda has no openable name; stay flat not-auth
+    if (appWide || APP_SCOPED_RECEIVER.test(receiver)) {
+      if (scopes.globalUnsure === null) scopes.globalUnsure = hookName;
+      return;
+    }
+    if (!scopes.unsureByReceiver.has(receiver)) scopes.unsureByReceiver.set(receiver, hookName);
+  };
+  // Three-way hook classification -> lane / hedge marks on the receiver scope.
+  const applyHookOutcome = (
+    receiver: string,
+    appWide: boolean,
+    hookName: string,
+    body: SyntaxNode | null,
+    nameIsSimpleIdentifier: boolean,
+  ) => {
+    const outcome = classifyHookAuth(hookName, body, defs, nameIsSimpleIdentifier);
+    if (outcome === "auth") mark(receiver, appWide, "hasAuth");
+    else if (outcome === "unsure") markUnsure(receiver, appWide, hookName);
+    // Validation / rate-limit lanes stay NAME-based and independent of the body:
+    // body analysis is the auth lane only.
+    if (RATE_NAMES.test(hookName)) mark(receiver, appWide, "hasRateLimit");
+    if (VAL_NAMES.test(hookName)) mark(receiver, appWide, "hasValidation");
   };
   const routerNames = collectRouterNames(tree.rootNode);
   const gated = (r: string | null): r is string =>
@@ -956,9 +1107,11 @@ function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
       const receiver = receiverName(attr.childForFieldName("object"));
       if (!gated(receiver)) continue;
       const appWide = hook === "before_app_request";
-      if (nameHasAuthToken(fnName)) mark(receiver, appWide, "hasAuth");
-      if (RATE_NAMES.test(fnName)) mark(receiver, appWide, "hasRateLimit");
-      if (VAL_NAMES.test(fnName)) mark(receiver, appWide, "hasValidation");
+      // Body-first: a verified reject body blesses even under a boring name; a
+      // visible non-enforcing body never blesses whatever the name (the
+      // verify_user_email fix); an opaque body hedges as unsure unless the name
+      // is an unambiguous CORE token. A decorated hook name is a simple identifier.
+      applyHookOutcome(receiver, appWide, fnName, definition.childForFieldName("body"), true);
     }
   }
 
@@ -966,6 +1119,32 @@ function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
     if (!call || call.hasError) continue;
     const fn = call.childForFieldName("function");
     if (!fn) continue;
+    // Call-form hook registration: app.before_request(fn) / (lambda) / (Cls.method).
+    // The decorator form @app.before_request() also parses to a call with an
+    // attribute callee, but its argument_list is empty (the function is decorated
+    // separately), so the arg0 gate below skips it (handled by the decorator loop).
+    if (
+      fn.type === "attribute" &&
+      (fn.childForFieldName("attribute")?.text === "before_request" ||
+        fn.childForFieldName("attribute")?.text === "before_app_request")
+    ) {
+      const receiver = receiverName(fn.childForFieldName("object"));
+      if (!gated(receiver)) continue;
+      const arg0 = call.childForFieldName("arguments")?.namedChild(0) ?? null;
+      if (!arg0) continue; // decorator-form empty call, or before_request() with no target
+      const appWide = fn.childForFieldName("attribute")?.text === "before_app_request";
+      if (arg0.type === "identifier") {
+        // Same-file def -> classify its body; imported (not in defs) -> name-tier.
+        const def = defs.get(arg0.text) ?? null;
+        applyHookOutcome(receiver, appWide, arg0.text, def ? def.childForFieldName("body") : null, true);
+      } else if (arg0.type === "attribute") {
+        applyHookOutcome(receiver, appWide, arg0.text, null, false); // Cls.method: hedge only
+      } else if (arg0.type === "lambda") {
+        applyHookOutcome(receiver, appWide, "", arg0, false); // scan the lambda body
+      }
+      // Any other arg0 shape is unresolvable: blesses nothing (never-false-bless).
+      continue;
+    }
     if (fn.type === "attribute" && fn.childForFieldName("attribute")?.text === "add_middleware") {
       const receiver = receiverName(fn.childForFieldName("object"));
       if (!gated(receiver)) continue;
@@ -1005,7 +1184,7 @@ function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
     if (!fn || fn.type !== "identifier") continue;
     if (fn.text !== "APIRouter" && fn.text !== "FastAPI") continue;
     const value = kwargValue(right, "dependencies");
-    if (value && callsWithAuthDependency(value)) mark(left.text, false, "hasAuth");
+    if (value && callsWithAuthDependency(value, defs)) mark(left.text, false, "hasAuth");
   }
   return scopes;
 }
@@ -1015,7 +1194,7 @@ function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
  *  inheritance on the AST path does NOT read this OR; extractPythonRoutesAst
  *  consumes collectPyMiddleware directly (receiver-scoped). */
 export function extractPythonFileMiddlewareAst(tree: Tree): FileMiddleware {
-  const scopes = collectPyMiddleware(tree);
+  const scopes = collectPyMiddleware(tree, collectFunctionDefs(tree.rootNode));
   const all = [scopes.global, ...scopes.byReceiver.values()];
   return {
     hasAuth: all.some((s) => s.hasAuth),
@@ -1027,7 +1206,8 @@ export function extractPythonFileMiddlewareAst(tree: Tree): FileMiddleware {
 export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const routerNames = collectRouterNames(tree.rootNode);
-  const scopes = collectPyMiddleware(tree);
+  const defs = collectFunctionDefs(tree.rootNode);
+  const scopes = collectPyMiddleware(tree, defs);
   for (const dd of tree.rootNode.descendantsOfType("decorated_definition")) {
     // Error recovery can merge adjacent handlers' decorators into one dd;
     // blessing (or even extracting) across that boundary is forbidden.
@@ -1056,7 +1236,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const permissionClassRows = decorators
       .filter(isAuthPermissionClasses)
       .map((d) => d.startPosition.row);
-    const paramAuth = paramsHaveAuthDependency(definition);
+    const paramAuth = paramsHaveAuthDependency(definition, defs);
     // Validation / rate-limit lanes match NON-ROUTE decorator CALLEE NAMES only
     // (@limiter.limit -> "limiter.limit", @validate_schema -> "validate_schema"),
     // never argument or path text: @app.post("/validate") is a path, not
@@ -1081,6 +1261,20 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
       const route = routeFromDecorator ?? apiViewRoute;
       if (!route) continue;
       const fromApiView = apiViewRoute !== null;
+      const hasAuth =
+        authDecoratorRows.some((row) => row > dec.startPosition.row) ||
+        (fromApiView &&
+          permissionClassRows.some((row) => row > dec.startPosition.row)) ||
+        paramAuth ||
+        routeCallHasAuthDependency(route.call, defs) ||
+        scopes.global.hasAuth ||
+        (scopes.byReceiver.get(route.receiver)?.hasAuth ?? false);
+      // A route is hedged "unsure" ONLY when it is not otherwise authed AND an
+      // unsure hook is in its scope (receiver-specific first, then app-wide). The
+      // field implies hasAuth === false; a blessed route never carries it.
+      const unsureHook = hasAuth
+        ? undefined
+        : (scopes.unsureByReceiver.get(route.receiver) ?? scopes.globalUnsure ?? undefined);
       routes.push({
         method: route.method,
         path: route.path,
@@ -1089,14 +1283,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
         // not the def line): regex parity, and the @vibedrift-public suppression
         // binding depends on it.
         line: dec.startPosition.row + 1,
-        hasAuth:
-          authDecoratorRows.some((row) => row > dec.startPosition.row) ||
-          (fromApiView &&
-            permissionClassRows.some((row) => row > dec.startPosition.row)) ||
-          paramAuth ||
-          routeCallHasAuthDependency(route.call) ||
-          scopes.global.hasAuth ||
-          (scopes.byReceiver.get(route.receiver)?.hasAuth ?? false),
+        hasAuth,
         hasValidation:
           perVal ||
           scopes.global.hasValidation ||
@@ -1106,6 +1293,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
           scopes.global.hasRateLimit ||
           (scopes.byReceiver.get(route.receiver)?.hasRateLimit ?? false),
         hasErrorHandler: false, // write-only field; JS AST extractor hard-codes false too
+        ...(unsureHook !== undefined ? { authUnsureHook: unsureHook } : {}),
       });
     }
   }

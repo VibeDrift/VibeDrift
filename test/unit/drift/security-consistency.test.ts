@@ -842,7 +842,7 @@ describe("Python AST wiring (Task 4)", () => {
   it("inheritance: a before_request auth hook blesses every route in its file (no auth finding among 4 hook-files)", async () => {
     const hookFile = (p: string) =>
       pyTree(`src/routes/${p}.py`,
-        `@app.before_request\ndef require_login():\n    return None\n\n` +
+        `@app.before_request\ndef require_login():\n    abort(401)\n\n` +
         `@app.post("/${p}")\ndef ${p}():\n    return {}\n`);
     const files = await Promise.all([hookFile("a"), hookFile("b"), hookFile("c"), hookFile("d")]);
     const ctx = { files, totalLines: files.reduce((s, f) => s + f.lineCount, 0), dominantLanguage: "typescript" };
@@ -852,7 +852,7 @@ describe("Python AST wiring (Task 4)", () => {
   it("inheritance: a file with no hook stays unauthed and is flagged among hook-blessed peers", async () => {
     const hookFile = (p: string) =>
       pyTree(`src/routes/${p}.py`,
-        `@app.before_request\ndef require_login():\n    return None\n\n` +
+        `@app.before_request\ndef require_login():\n    abort(401)\n\n` +
         `@app.post("/${p}")\ndef ${p}():\n    return {}\n`);
     const authed = await Promise.all([hookFile("a"), hookFile("b"), hookFile("c"), hookFile("d")]);
     const bare = await pyTree("src/routes/e.py", `@app.post("/e")\ndef e():\n    return {}\n`);
@@ -870,7 +870,7 @@ describe("Python AST wiring (Task 4)", () => {
     const mixed = await pyTree("src/routes/mixed.py",
       `@admin_bp.before_request\n` +      // L1
       `def require_login():\n` +          // L2
-      `    return None\n\n` +             // L3, L4
+      `    abort(401)\n\n` +              // L3, L4
       `@admin_bp.route("/users", methods=["POST"])\n` + // L5
       `def create_user():\n` +           // L6
       `    return {}\n\n` +               // L7, L8
