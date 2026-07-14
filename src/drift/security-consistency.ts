@@ -46,6 +46,33 @@ const MUTATION_METHODS = [...SECURITY_AST.MUTATING].map((m) => m.toUpperCase());
 // Body-bearing methods for the validation vote (DELETE usually has no body).
 const BODY_METHODS = ["POST", "PUT", "PATCH", "ALL"];
 
+// ─── Hedged copy for auth routes whose hook could not be verified ────────────
+//
+// A route only carries `authUnsureHook` on the Python AST path, and only when
+// `hasAuth === false` (a blessed route never sets it). Task 4 turns the flat
+// "no auth" copy into a HEDGE that names the exact before_request-style hook the
+// user should verify. The route stays not-authed in every vote — this is copy
+// only. JS/TS/Go/regex routes never set the field, so they always take the flat
+// arm and render byte-identically. No em-dash / double hyphen in the hedged
+// strings (comma/colon/period only).
+
+/** Per-deviator hedged pattern naming the unresolved hook, e.g.
+ *  `POST /x: auth not confirmed, double check hook 'verify_session'`. */
+function hedgedDeviatorPattern(r: RouteInfo): string {
+  return `${r.method} ${r.path}: auth not confirmed, double check hook '${r.authUnsureHook}'`;
+}
+
+/** Sentence appended to an auth finding's recommendation when some deviators are
+ *  unsure (their hook body could not be verified). Empty string when none are
+ *  hedged, so a confident finding's recommendation is byte-identical. `names` is
+ *  the sorted distinct set of hook names. */
+function hedgeRecommendationSuffix(deviators: RouteInfo[]): string {
+  const hedged = deviators.filter((r) => r.authUnsureHook);
+  if (hedged.length === 0) return "";
+  const names = [...new Set(hedged.map((r) => r.authUnsureHook!))].sort().join(", ");
+  return ` ${hedged.length} of these could not be confirmed: a before_request hook (${names}) may authenticate them but its body could not be verified. Double check those hooks before treating the routes as unauthenticated.`;
+}
+
 // Does the codebase use auth machinery anywhere? If it does, a mutating route
 // with no auth is drift ("you know how to auth — this route forgot"), not an
 // intentionally-public API. Specific symbols only, to keep false positives low.
@@ -93,13 +120,15 @@ function analyzeUniformAuthGap(
     consistencyScore: mutating.length ? Math.round((have / mutating.length) * 100) : 0,
     deviatingFiles: unauthed.map((r) => ({
       path: r.file,
-      detectedPattern: `${r.method} ${r.path} — no auth`,
+      detectedPattern: r.authUnsureHook ? hedgedDeviatorPattern(r) : `${r.method} ${r.path} — no auth`,
       evidence: [{ line: r.line, code: `${r.method} ${r.path}` }],
     })),
     dominantFiles: [],
-    recommendation: declared
-      ? `${opts.hint!.source}:${opts.hint!.line} declares auth is required. Add auth middleware to these ${unauthed.length} mutating route(s), or mark them explicitly public.`
-      : `These ${unauthed.length} mutating route(s) have no auth while the codebase authenticates elsewhere. Add auth middleware, or confirm they are intentionally public.`,
+    recommendation:
+      (declared
+        ? `${opts.hint!.source}:${opts.hint!.line} declares auth is required. Add auth middleware to these ${unauthed.length} mutating route(s), or mark them explicitly public.`
+        : `These ${unauthed.length} mutating route(s) have no auth while the codebase authenticates elsewhere. Add auth middleware, or confirm they are intentionally public.`) +
+      hedgeRecommendationSuffix(unauthed),
   };
 }
 
@@ -118,6 +147,15 @@ export interface RouteInfo {
   hasValidation: boolean;
   hasRateLimit: boolean;
   hasErrorHandler: boolean;
+  /** Python AST path only: the name of a before_request-style hook whose BODY is
+   *  auth-flavored but statically unverifiable (an opaque helper, an imported or
+   *  attribute target, a duplicate def). Present ONLY when `hasAuth === false`;
+   *  `hasAuth === true` always omits it. An "unsure" route still counts as
+   *  not-authed in every vote (never blesses) — this field only lets a renderer
+   *  hedge the finding copy to name the exact hook the user should double-check.
+   *  Never set on JS/TS/Go or the regex fallback, so those routes serialize
+   *  byte-identically. */
+  authUnsureHook?: string;
 }
 
 // ─── Phase 1: file-level middleware index ────────────────────────────
@@ -440,11 +478,19 @@ function analyzeSecurityProperty(
     consistencyScore: Math.round(ratio * 100),
     deviatingFiles: withoutProperty.map((r) => ({
       path: r.file,
-      detectedPattern: `${r.method} ${r.path} — no ${propertyName}`,
+      // Hedge only the AUTH subcategory: authUnsureHook is an auth-only marker,
+      // and gating on propertyName keeps the validation / rate-limit findings'
+      // deviator copy free of the hook name for a route that also misses those.
+      detectedPattern:
+        propertyName === SECURITY_SUBCATEGORIES.auth && r.authUnsureHook
+          ? hedgedDeviatorPattern(r)
+          : `${r.method} ${r.path} — no ${propertyName}`,
       evidence: [{ line: r.line, code: `${r.method} ${r.path}` }],
     })),
     dominantFiles: [...new Set(withProperty.map((r) => r.file))].sort().slice(0, 3),
-    recommendation: `${withProperty.length} of ${applicableRoutes.length} routes have ${propertyName}. Review ${withoutProperty.length} unprotected routes — apply per-route middleware or move them under a router that does.`,
+    recommendation:
+      `${withProperty.length} of ${applicableRoutes.length} routes have ${propertyName}. Review ${withoutProperty.length} unprotected routes — apply per-route middleware or move them under a router that does.` +
+      (propertyName === SECURITY_SUBCATEGORIES.auth ? hedgeRecommendationSuffix(withoutProperty) : ""),
   };
 }
 

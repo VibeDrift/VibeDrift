@@ -2,7 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   extractPythonRoutesAst,
   extractPythonFileMiddlewareAst,
+  bodyAuthSignature,
+  classifyHookAuth,
+  collectFunctionDefs,
+  SECURITY_AST_PY,
 } from "../../../src/drift/security-ast-python.js";
+import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
+import { securityConsistency } from "../../../src/drift/security-consistency.js";
+import { SECURITY_SUBCATEGORIES } from "../../../src/drift/types.js";
+import type { SyntaxNode } from "../../../src/core/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 
 const py = (path: string, src: string) => fileWithTree(path, src, "python");
@@ -413,7 +421,7 @@ describe("extractPythonRoutesAst: method resolution", () => {
     expect(routes[0].method).toBe("POST");
   });
 
-  it("resolves methods=ALLOWED (a variable) to ALL: statically unresolvable stays in the mutating vote", async () => {
+  it("resolves methods=ALLOWED (a variable with NO same-file assignment) to ALL: the unresolved case; see the resolved-var suite below for the assigned case", async () => {
     const f = await py("var.py", `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
     const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
     expect(routes).toHaveLength(1);
@@ -470,6 +478,270 @@ describe("extractPythonRoutesAst: method resolution", () => {
       `    "/x",\n` +
       `    methods=["POST", "GET"],\n` +
       `)\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+});
+
+// ─── Upgrade 2: methods= same-file variable resolution ──────────────────────
+//
+// A `methods=VAR` kwarg now resolves through VAR's value WHEN VAR is written
+// EXACTLY ONCE at module top level to a literal list/tuple/set of string
+// verbs (reusing the same methodFromLiteral reduction the inline literal path
+// uses). Every other shape — imported, computed, an identifier alias chain,
+// reassigned more than once, or written through any of the poisoned forms
+// below (augmented assignment, a mutating method call, `global`, walrus, a
+// for-loop target, a subscript/slice-target assignment, a `with ... as`
+// binding, or a conditional/def-local assignment) — stays unresolvable and
+// resolves "ALL", never a silent GET: the invariant is never dropping a
+// mutating route out of the vote because its methods= variable was
+// unreadable.
+describe("methods= same-file variable resolution", () => {
+  it("resolves methods=ALLOWED to POST when ALLOWED = [\"GET\", \"POST\"] is the sole same-file assignment (mutating verb wins, same reduction as the inline literal path)", async () => {
+    const f = await py("resolved-list.py",
+      `ALLOWED = ["GET", "POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=VERBS to PUT when VERBS = (\"PUT\",) is a same-file tuple literal", async () => {
+    const f = await py("resolved-tuple.py",
+      `VERBS = ("PUT",)\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("PUT");
+  });
+
+  it("resolves methods=VERBS to DELETE when VERBS = {\"delete\"} is a same-file set literal (uppercased)", async () => {
+    const f = await py("resolved-set.py",
+      `VERBS = {"delete"}\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("DELETE");
+  });
+
+  it("resolves methods=VERBS to GET when VERBS = [\"GET\"]: a fully visible literal legitimately exits the mutating vote; the route IS emitted", async () => {
+    const f = await py("resolved-get.py",
+      `VERBS = ["GET"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=VERBS to GET when VERBS = []: fully visible and empty, mirrors the inline empty-literal pin (visibility, not ambiguity)", async () => {
+    const f = await py("resolved-empty.py",
+      `VERBS = []\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=VERBS to GET when VERBS = [\"MKCOL\"]: fully visible with no recognized verb, mirrors the inline MKCOL pin", async () => {
+    const f = await py("resolved-mkcol.py",
+      `VERBS = ["MKCOL"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=ALLOWED to POST when ALLOWED = [*BASE, \"POST\"]: the visible literal wins, the same shared helper as the inline kwarg", async () => {
+    const f = await py("resolved-splat-verb.py",
+      `ALLOWED = [*BASE, "POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=ALLOWED to ALL when ALLOWED = [*BASE]: no visible literal verb even though the assignment itself is unambiguous", async () => {
+    const f = await py("resolved-splat-only.py",
+      `ALLOWED = [*BASE]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves methods=ALLOWED to POST when ALLOWED: list[str] = [\"POST\"] is an annotated assignment (still an `assignment` node)", async () => {
+    const f = await py("resolved-annotated.py",
+      `ALLOWED: list[str] = ["POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("stays ALL for ALL_VERBS = BASE + EXTRA: a computed (binary_operator) same-file value, not a literal", async () => {
+    const f = await py("computed.py",
+      `ALL_VERBS = BASE + EXTRA\n\n@app.route("/x", methods=ALL_VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for an imported `from config import ALLOWED`: no same-file assignment to chase", async () => {
+    const f = await py("imported.py",
+      `from config import ALLOWED\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for ALLOWED = get_methods(): a computed call, not a literal", async () => {
+    const f = await py("computed-call.py",
+      `ALLOWED = get_methods()\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for an alias chain (A = [\"POST\"]; B = A; methods=B): an identifier RHS is refused, never chased", async () => {
+    const f = await py("alias-chain.py",
+      `A = ["POST"]\nB = A\n\n@app.route("/x", methods=B)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a twice-reassigned variable: two same-file literal assignments make the value ambiguous", async () => {
+    const f = await py("twice-reassigned.py",
+      `ALLOWED = ["GET"]\nALLOWED = ["POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("CONDITIONAL-REASSIGN TRAP: ALLOWED = [\"GET\"] then `if F: ALLOWED = [\"GET\", \"POST\"]` stays ALL, never GET (a nested module-scope reassign is a SECOND write that poisons the name, not an invisible one)", async () => {
+    const f = await py("conditional-reassign.py",
+      `ALLOWED = ["GET"]\nif FEATURE_WRITES:\n    ALLOWED = ["GET", "POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("TRY-REASSIGN TRAP: ALLOWED = [\"GET\"] then `try: ALLOWED = load()` stays ALL, never GET (a try-block rebind is a second write)", async () => {
+    const f = await py("try-reassign.py",
+      `ALLOWED = ["GET"]\ntry:\n    ALLOWED = load()\nexcept Exception:\n    pass\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("AUGMENTED-ASSIGNMENT TRAP: ALLOWED = [\"GET\"] then ALLOWED += [\"POST\"] stays ALL, never GET (a naive single-assignment scan would resolve GET and silently drop the POST route from the mutating vote)", async () => {
+    const f = await py("augmented-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED += ["POST"]\n\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL when `global ALLOWED` is declared and written inside a def", async () => {
+    const f = await py("global-write.py",
+      `ALLOWED = ["GET"]\n\ndef configure():\n    global ALLOWED\n    ALLOWED = ["POST"]\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a walrus write to the variable", async () => {
+    const f = await py("walrus-write.py",
+      `ALLOWED = ["GET"]\nif (ALLOWED := recompute()):\n    pass\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a for-loop target write to the variable", async () => {
+    const f = await py("for-target-write.py",
+      `ALLOWED = ["GET"]\nfor ALLOWED in candidate_lists():\n    pass\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("MUTATION TRAP: ALLOWED.append(\"DELETE\") stays ALL, never GET", async () => {
+    const f = await py("append-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED.append("DELETE")\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a tuple-unpack write `x, ALLOWED = pair`", async () => {
+    const f = await py("tuple-unpack-write.py",
+      `ALLOWED = ["GET"]\nx, ALLOWED = pair\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("SLICE-REPLACEMENT TRAP: ALLOWED = [\"GET\"] then ALLOWED[:] = load_methods() stays ALL, never GET (a subscript-left assignment a naive identifier-left census would miss)", async () => {
+    const f = await py("slice-replacement-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED[:] = load_methods()\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("ELEMENT-ASSIGNMENT TRAP: ALLOWED = [\"GET\"] then ALLOWED[0] = \"POST\" stays ALL, never GET (another subscript-left assignment)", async () => {
+    const f = await py("element-trap.py",
+      `ALLOWED = ["GET"]\nALLOWED[0] = "POST"\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("WITH-AS TRAP: `with open(\"m\") as ALLOWED:` rebinds the name, stays ALL", async () => {
+    const f = await py("with-as-trap.py",
+      `ALLOWED = ["GET"]\nwith open("m") as ALLOWED:\n    pass\n\n` +
+      `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a lone assignment inside an `if:` block: conditional, not an unconditional same-file literal", async () => {
+    const f = await py("conditional-assignment.py",
+      `if COND:\n    VERBS = ["GET"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("stays ALL for a def-local sole assignment: not a module top-level write", async () => {
+    const f = await py("def-local-assignment.py",
+      `def configure():\n    VERBS = ["GET"]\n\n@app.route("/x", methods=VERBS)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves a multiline decorator with methods=ALLOWED identically to the inline-literal multiline pin (POST)", async () => {
+    const f = await py("multiline-var.py",
+      `ALLOWED = ["POST", "GET"]\n\n` +
+      `@app.route(\n` +
+      `    "/x",\n` +
+      `    methods=ALLOWED,\n` +
+      `)\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves a trailing-kwarg flood with methods=ALLOWED identically to the inline-literal flood pin (POST)", async () => {
+    const f = await py("flood-var.py",
+      `ALLOWED = ["POST"]\n\n` +
+      `@app.route("/x", methods=ALLOWED, strict_slashes=False, endpoint="e", defaults={"a": 1})\n` +
       `def h():\n` +
       `    return {}\n`);
     const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
@@ -893,15 +1165,30 @@ describe("per-route validation and rate-limit lanes", () => {
 describe("extractPythonFileMiddlewareAst", () => {
   const NONE = { hasAuth: false, hasValidation: false, hasRateLimit: false };
 
-  it("blesses @app.before_request def require_login() (auth hook, tier 2)", async () => {
+  // MIGRATION (body-first): a visible pass-stub body never blesses, whatever the
+  // name. require_login/check_auth/verify_token used to bless on NAME alone; now
+  // the fully-visible `pass` body resolves not-auth (the name never rescues a
+  // visible non-enforcing body). Each keeps its named pass-body negative and gains
+  // a body-positive twin proving a real reject body under the same name blesses.
+  it("does NOT bless @app.before_request def require_login() with a pass stub (visible body, body-first)", async () => {
     const f = await py("mw.py", `@app.before_request\ndef require_login():\n    pass\n`);
     expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual({
-      hasAuth: true, hasValidation: false, hasRateLimit: false,
+      hasAuth: false, hasValidation: false, hasRateLimit: false,
     });
   });
 
-  it("blesses @bp.before_request def check_auth() (auth CORE segment, tier 1)", async () => {
+  it("blesses @app.before_request def require_login() with an abort(401) body (body-positive twin)", async () => {
+    const f = await py("mw.py", `@app.before_request\ndef require_login():\n    abort(401)\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(true);
+  });
+
+  it("does NOT bless @bp.before_request def check_auth() with a pass stub (CORE name, still not rescued)", async () => {
     const f = await py("mw.py", `@bp.before_request\ndef check_auth():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+
+  it("blesses @bp.before_request def check_auth() with an abort(401) body (body-positive twin)", async () => {
+    const f = await py("mw.py", `@bp.before_request\ndef check_auth():\n    abort(401)\n`);
     expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(true);
   });
 
@@ -922,9 +1209,24 @@ describe("extractPythonFileMiddlewareAst", () => {
     expect(extractPythonFileMiddlewareAst(csrf.tree!).hasAuth).toBe(false);
   });
 
-  it("blesses @app.before_request def verify_token() (ENFORCE verify + SUBJECT token)", async () => {
+  it("does NOT bless @app.before_request def verify_token() with a pass stub (visible body, body-first)", async () => {
     const f = await py("mw.py", `@app.before_request\ndef verify_token():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+
+  it("blesses @app.before_request def verify_token() with an abort(401) body (body-positive twin)", async () => {
+    const f = await py("mw.py", `@app.before_request\ndef verify_token():\n    abort(401)\n`);
     expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(true);
+  });
+
+  it("still blesses @verify_token as a ROUTE decorator below @app.post (AUTH_DECORATORS untouched)", async () => {
+    const f = await py("routedec.py",
+      `@app.post("/x")\n` +
+      `@verify_token\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
   });
 
   it("does NOT bless @job.before_request def check_auth() (receiver gate: job is not a router)", async () => {
@@ -1014,7 +1316,7 @@ describe("receiver-scoped middleware inheritance (via extractPythonRoutesAst)", 
     const f = await py("mixed.py",
       `@admin_bp.before_request\n` +
       `def require_login():\n` +
-      `    return None\n\n` +
+      `    abort(401)\n\n` +
       `@admin_bp.route("/users", methods=["POST"])\n` +
       `def create_user():\n` +
       `    return {}\n\n` +
@@ -1051,7 +1353,7 @@ describe("receiver-scoped middleware inheritance (via extractPythonRoutesAst)", 
     const f = await py("appwide.py",
       `@app.before_request\n` +
       `def require_login():\n` +
-      `    return None\n\n` +
+      `    abort(401)\n\n` +
       `@orders_bp.route("/x", methods=["POST"])\n` +
       `def x():\n` +
       `    return {}\n`);
@@ -1063,7 +1365,7 @@ describe("receiver-scoped middleware inheritance (via extractPythonRoutesAst)", 
     const f = await py("beforeapp.py",
       `@bp.before_app_request\n` +
       `def require_login():\n` +
-      `    return None\n\n` +
+      `    abort(401)\n\n` +
       `@app.post("/x")\n` +
       `def x():\n` +
       `    return {}\n`);
@@ -1141,6 +1443,23 @@ describe("extractPythonRoutesAst: Django REST function views", () => {
       `    return Response({})\n`);
     const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
     expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=false"]);
+  });
+
+  // The highest-risk permission-class negative: IsAuthenticatedOrReadOnly is a
+  // string PREFIX of the blessed IsAuthenticated. Recognition is EXACT Set
+  // membership (PERMISSION_AUTH.has), never a prefix/substring test, so the
+  // prefix must NOT bless even though the blessed class blesses in the same
+  // shape. Pins that the two verdicts diverge (a prefix relaxation would fail
+  // here loudly rather than silently over-bless a write-exposing route).
+  it("IsAuthenticatedOrReadOnly (a prefix of the blessed IsAuthenticated) does NOT bless: recognition is exact Set membership, not a prefix match", async () => {
+    const blessed = await py("blessed.py",
+      `@api_view(["POST"])\n@permission_classes([IsAuthenticated])\ndef a(request):\n    return Response({})\n`);
+    const prefixed = await py("prefixed.py",
+      `@api_view(["POST"])\n@permission_classes([IsAuthenticatedOrReadOnly])\ndef b(request):\n    return Response({})\n`);
+    expect(extractPythonRoutesAst(blessed.tree!, blessed.relativePath)[0].hasAuth).toBe(true);
+    const b = extractPythonRoutesAst(prefixed.tree!, prefixed.relativePath)[0];
+    expect(b.hasAuth).toBe(false);
+    expect("authUnsureHook" in b).toBe(false);
   });
 
   it("does not bless @api_view([\"POST\"]) with no permission_classes at all", async () => {
@@ -1399,11 +1718,12 @@ describe("documented trade-offs (task-review pins)", () => {
     expect(routes[0].method).toBe("GET");
   });
 
-  it("does not bless custom or non-IsAuthenticated permission classes: permission_classes([IsAdminUser]) and ([FooPermission])", async () => {
-    // Only IsAuthenticated is in PERMISSION_AUTH. IsAdminUser is a real DRF class
-    // that requires staff, but it is not in the narrow whitelist, and FooPermission
-    // is an unknown custom class; both resolve hasAuth:false per never-false-bless
-    // (an unrecognized permission class is ambiguity, which never blesses).
+  it("does not bless a custom, unrecognized permission class: permission_classes([FooPermission])", async () => {
+    // FooPermission is not in PERMISSION_AUTH (an unknown custom class is
+    // ambiguity, which never blesses per never-false-bless). IsAdminUser WAS
+    // grouped here too until Upgrade 2 (Task 3): it is now recognized (see the
+    // "IsAdminUser in PERMISSION_AUTH" describe below), so it is asserted
+    // separately as a positive alongside this negative.
     const f = await py("custcompermclass.py",
       `@api_view(["POST"])\n` +
       `@permission_classes([IsAdminUser])\n` +
@@ -1415,9 +1735,49 @@ describe("documented trade-offs (task-review pins)", () => {
       `    return Response({})\n`);
     expect(extractPythonRoutesAst(f.tree!, f.relativePath)
       .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
-      "/a auth=false",
+      "/a auth=true",
       "/b auth=false",
     ]);
+  });
+
+  it("@api_view(METHODS) with a same-file METHODS = [\"POST\"] stays ALL: Upgrade 2 names methods= only, not api_view's positional list argument (deliberate boundary)", async () => {
+    const f = await py("apiview-methodsvar.py",
+      `METHODS = ["POST"]\n\n` +
+      `@api_view(METHODS)\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+});
+
+// ─── Upgrade 2 (Task 3): IsAdminUser recognized in PERMISSION_AUTH ──────────
+//
+// IsAdminUser is unconditional auth (Django's IsAdminUser requires
+// request.user.is_staff, which implies an authenticated user; there is no
+// per-method carve-out the way IsAuthenticatedOrReadOnly has), so recognizing
+// it carries zero false-bless risk. Its neighbors (AllowAny,
+// IsAuthenticatedOrReadOnly, an unrecognized custom class) are unaffected.
+describe("IsAdminUser in PERMISSION_AUTH", () => {
+  it("blesses @permission_classes([IsAdminUser]) BELOW @api_view", async () => {
+    const f = await py("isadminuser.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([IsAdminUser])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=true"]);
+  });
+
+  it("blesses the attribute form @permission_classes([permissions.IsAdminUser])", async () => {
+    const f = await py("isadminuser-attr.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([permissions.IsAdminUser])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=true"]);
   });
 });
 
@@ -1548,51 +1908,41 @@ describe("hook-name lexicon boundary pins (Fix 4)", () => {
   });
 });
 
-// ─── KNOWN EXPOSURE pins: two-tier hook lexicon false-bless (owner decision
-// pending) ─────────────────────────────────────────────────────────────────
+// ─── EXPOSURE FIXED (was: two-tier hook lexicon false-bless) ─────────────────
 //
-// These document CURRENT behavior; they do NOT endorse it. The ENFORCE+SUBJECT
-// two-tier match (see the KNOWN FALSE-BLESS EXPOSURE comment above
-// AUTH_ENFORCE_SEGMENTS in security-ast-python.ts) blesses attributive
-// non-auth hook names whose ENFORCE verb targets an object noun that also
-// happens to be a SUBJECT segment: verify_user_email only sends an
-// email-confirmation link, and protect_user_data only scrubs/anonymizes
-// stored data, but neither hook authenticates a request. Blessing means the
-// extractor marks the receiver's routes hasAuth:true, which is the
-// false-bless direction the module exists to prevent, not a safe over-flag.
-// Pinned here so a future lexicon resolution flips these deliberately instead
-// of silently.
-describe("KNOWN EXPOSURE pins: two-tier hook lexicon false-bless (pending owner decision)", () => {
-  it("KNOWN EXPOSURE pending owner decision: verify_user_email before_request hook blesses its receiver's routes via ENFORCE+SUBJECT", async () => {
+// These fixtures used to bless on NAME alone (ENFORCE+SUBJECT: verify+user,
+// protect+user). Body-first classification fixes the exposure: a fully-visible
+// hook body that does not enforce auth resolves not-auth, so an email-confirming
+// verify_user_email and a data-scrubbing protect_user_data no longer bless their
+// receiver's routes — flat not-auth, no hedge (the body is visible, so it is not
+// even "unsure"). The name never rescues a visible non-enforcing body.
+describe("EXPOSURE FIXED: attributive non-auth hooks resolve flat not-auth (body-first)", () => {
+  it("verify_user_email that only sends a confirmation email does NOT bless (auth=false, no unsure hedge)", async () => {
     const f = await py("exposure-verify-user-email.py",
       `@app.before_request\n` +
       `def verify_user_email():\n` +
+      `    send_confirmation_email(g.user.email)\n` +
       `    return None\n\n` +
       `@app.route("/x", methods=["POST"])\n` +
       `def x():\n` +
       `    return {}\n`);
     const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
-    // CURRENT behavior, documented as exposure: ENFORCE "verify" + SUBJECT
-    // "user" both match a hook that only confirms an email address. A future
-    // lexicon fix is expected to flip this to auth=false; update this
-    // assertion deliberately when it does, not as collateral of a refactor.
-    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+    expect(routes[0].authUnsureHook).toBeUndefined();
   });
 
-  it("KNOWN EXPOSURE pending owner decision: protect_user_data before_request hook blesses its receiver's routes via ENFORCE+SUBJECT", async () => {
+  it("protect_user_data that only scrubs stored data does NOT bless (auth=false, no unsure hedge)", async () => {
     const f = await py("exposure-protect-user-data.py",
       `@app.before_request\n` +
       `def protect_user_data():\n` +
+      `    scrub_pii(record)\n` +
       `    return None\n\n` +
       `@app.route("/y", methods=["POST"])\n` +
       `def y():\n` +
       `    return {}\n`);
     const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
-    // CURRENT behavior, documented as exposure: ENFORCE "protect" + SUBJECT
-    // "user" both match a hook that only scrubs/anonymizes stored data. A
-    // future lexicon fix is expected to flip this to auth=false; update this
-    // assertion deliberately when it does, not as collateral of a refactor.
-    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/y auth=true"]);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/y auth=false"]);
+    expect(routes[0].authUnsureHook).toBeUndefined();
   });
 });
 
@@ -1766,7 +2116,7 @@ const NEVER_FALSE_BLESS_SWEEP: Array<{
   {
     name: "mixed-bp",
     source:
-      `@admin_bp.before_request\ndef require_login():\n    return None\n\n` +
+      `@admin_bp.before_request\ndef require_login():\n    abort(401)\n\n` +
       `@admin_bp.route("/users", methods=["POST"])\ndef create_user():\n    return {}\n\n` +
       `@public_bp.route("/webhook", methods=["POST"])\ndef webhook():\n    return {}\n`,
     groundTruth: [
@@ -1816,8 +2166,12 @@ const NEVER_FALSE_BLESS_SWEEP: Array<{
     source:
       `@api_view(["POST"])\n@permission_classes([IsAdminUser])\ndef a(request):\n    return Response({})\n\n` +
       `@api_view(["POST"])\n@permission_classes([FooPermission])\ndef b(request):\n    return Response({})\n`,
+    // /a is a documented POSITIVE since Upgrade 2 (Task 3): IsAdminUser is now
+    // in PERMISSION_AUTH. Sweep positives are documentation-only (the sweep
+    // assertion filters to `!authed`); /b (FooPermission, unrecognized) is the
+    // negative this entry still exercises.
     groundTruth: [
-      { path: "/a", method: "POST", authed: false },
+      { path: "/a", method: "POST", authed: true },
       { path: "/b", method: "POST", authed: false },
     ],
   },
@@ -1859,6 +2213,186 @@ const NEVER_FALSE_BLESS_SWEEP: Array<{
       { path: "/good", method: "POST", authed: false },
     ],
   },
+  // ── ADDENDUM Task 5: body-signature ambiguity fixtures ──
+  // Every new body-analysis branch, restated as a co-located mutating route with
+  // ground-truth authed:false. Visible non-enforcing bodies (email/scrub/log/
+  // header/pass/wrong-code/non-login-redirect) resolve flat not-auth; opaque and
+  // optionality bodies resolve unsure (hasAuth still false); the two Task 1
+  // tightenings (lone-403 does NOT bless, optional-veto beats a reject body) stay
+  // pinned. The single assertion below only checks the negatives never bless.
+  {
+    name: "verify-user-email-emails-only",
+    source:
+      `@app.before_request\ndef verify_user_email():\n    send_confirmation_email(g.user.email)\n    return None\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "protect-user-data-scrubs-only",
+    source:
+      `@app.before_request\ndef protect_user_data():\n    scrub_pii(record)\n    return None\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "log-only-auth-named-hook",
+    source:
+      `@app.before_request\ndef require_login():\n    logger.info("hit %s", request.path)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "header-set-only-hook",
+    source:
+      `@app.before_request\ndef verify_token():\n    response.headers["X-Frame-Options"] = "DENY"\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "pass-body-auth-named-hook",
+    source:
+      `@app.before_request\ndef require_login():\n    pass\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "abort-404-hook",
+    source:
+      `@app.before_request\ndef gate():\n    abort(404)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "abort-400-hook",
+    source:
+      `@app.before_request\ndef gate():\n    abort(400)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "abort-variable-hook", // opaque -> unsure, hasAuth still false
+    source:
+      `@app.before_request\ndef require_login():\n    abort(code_var)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "raise-valueerror-hook",
+    source:
+      `@app.before_request\ndef gate():\n    raise ValueError("bad")\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "redirect-non-login-hook",
+    source:
+      `@app.before_request\ndef gate():\n    return redirect("/checkout")\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "optional-veto-with-reject-body", // veto beats a real reject body
+    source:
+      `@app.before_request\ndef optional_authenticate():\n    token = request.headers.get("Authorization")\n    if token is None:\n        abort(401)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "opaque-auth-flavored-helper", // opaque -> unsure
+    source:
+      `@app.before_request\ndef require_login():\n    check_session()\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "call-form-imported-hook", // imported target -> unsure
+    source:
+      `from .auth import verify_session\napp.before_request(verify_session)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "attribute-target-hook", // Cls.method target -> unsure
+    source:
+      `app.before_request(AuthGate.check)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "attributive-collision-unresolvable", // verify_user_email + opaque call -> unsure
+    source:
+      `@app.before_request\ndef verify_user_email():\n    confirm(user)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "hook-helper-cycle", // a()->b()->a() terminates as none
+    source:
+      `def b():\n    a()\n\n\n@app.before_request\ndef a():\n    b()\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "errored-hook-dd", // the hook's decorated_definition errors -> invisible
+    source:
+      `@app.before_request\ndef gate():\n    x = = 1\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "csrf-protect-lone-403-hook", // lone abort(403), no credential read: never blesses
+    source:
+      `@app.before_request\ndef csrf_protect():\n    abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "maintenance-gate-lone-403-hook", // same 403-corroboration rule, feature gate shape
+    source:
+      `@app.before_request\ndef maintenance_gate():\n    abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "verify-jwt-optional-true-hook", // non-empty arg admits anonymous -> opaque/unsure
+    source:
+      `@app.before_request\ndef before():\n    verify_jwt_in_request(optional=True)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  // CRITICAL 1: guarded-403 over-match. A 403 gated by a bare credential-ish name
+  // against a non-credential container (`"login" in request.path`) or an
+  // is-None on an attribute that merely contains the "user" segment
+  // (`request.user_agent`) is NOT a credential guard and must never bless.
+  {
+    name: "path-filter-403", // "login" in request.path is a path filter, not an auth guard
+    source:
+      `@app.before_request\ndef path_filter():\n    if "login" in request.path:\n        abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "user-agent-403", // request.user_agent is None reads no credential surface
+    source:
+      `@app.before_request\ndef user_agent_gate():\n    if request.user_agent is None:\n        abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  // ACCEPTED OVER-BLESS (documented, NOT asserted authed:false): a boring `gate`
+  // hook that early-returns for public paths then abort(401)s reads as a verified
+  // reject and blesses its receiver's routes at RECEIVER granularity — including
+  // the path it actually exempts. The per-path exemption is invisible to a
+  // receiver-scoped analyzer; this is a known, accepted over-bless (route marked
+  // authed:true so the never-false-bless assertion below does NOT flag it), the
+  // one deliberate over-bless the body path carries. Recorded here so it is an
+  // explicit verdict, not a silent pass.
+  {
+    name: "partial-guard-public-exempt",
+    source:
+      `@app.before_request\ndef gate():\n    if request.path in PUBLIC:\n        return\n    abort(401)\n\n` +
+      `@app.route("/public", methods=["POST"])\ndef public():\n    return {}\n`,
+    groundTruth: [{ path: "/public", method: "POST", authed: true }],
+  },
 ];
 
 describe("never-false-bless sweep", () => {
@@ -1871,5 +2405,941 @@ describe("never-false-bless sweep", () => {
         expect(emitted?.hasAuth ?? false, `${entry.name}: ${gt.method} ${gt.path}`).toBe(false);
       }
     }
+  });
+});
+
+// ─── ADDENDUM Task 5: the unsure-state sweep + structural invariants ─────────
+//
+// The machine statement of the THIRD output state. Every fixture whose ground
+// truth is "auth-flavored but statically unverifiable" must emit its route with
+// hasAuth false AND authUnsureHook === the exact hook name (deterministic
+// attribution: a fixture that stops being unsure fails loudly here instead of
+// silently degrading to flat copy). The cross-registry law then pins the whole
+// third state: unsure never blesses, blessed never hedges.
+interface UnsureEntry {
+  name: string;
+  source: string;
+  hook: string; // exact expected authUnsureHook
+  path: string;
+  method: string;
+}
+const UNSURE_ROUTE = `\n@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`;
+const UNSURE_SWEEP: UnsureEntry[] = [
+  {
+    name: "opaque-auth-flavored-helper",
+    source: `@app.before_request\ndef require_login():\n    check_session()\n` + UNSURE_ROUTE,
+    hook: "require_login", path: "/x", method: "POST",
+  },
+  {
+    name: "call-form-imported-hook",
+    source: `from .auth import verify_session\napp.before_request(verify_session)\n` + UNSURE_ROUTE,
+    hook: "verify_session", path: "/x", method: "POST",
+  },
+  {
+    name: "attribute-target-hook",
+    source: `app.before_request(AuthGate.check)\n` + UNSURE_ROUTE,
+    hook: "AuthGate.check", path: "/x", method: "POST",
+  },
+  {
+    name: "attributive-collision-unresolvable",
+    source: `@app.before_request\ndef verify_user_email():\n    confirm(user)\n` + UNSURE_ROUTE,
+    hook: "verify_user_email", path: "/x", method: "POST",
+  },
+  {
+    name: "verify-jwt-optional-true-hook",
+    source: `@app.before_request\ndef before():\n    verify_jwt_in_request(optional=True)\n` + UNSURE_ROUTE,
+    hook: "before", path: "/x", method: "POST",
+  },
+  {
+    name: "before-app-request-unsure",
+    source: `@bp.before_app_request\ndef require_login():\n    check_session()\n` + UNSURE_ROUTE,
+    hook: "require_login", path: "/x", method: "POST",
+  },
+  {
+    name: "abort-variable-hook",
+    source: `@app.before_request\ndef require_login():\n    abort(code_var)\n` + UNSURE_ROUTE,
+    hook: "require_login", path: "/x", method: "POST",
+  },
+  {
+    // ITEM 5: mixed scope. Both an app-scoped unsure hook AND a receiver-scoped
+    // unsure hook are present; the route on the named receiver must attribute the
+    // RECEIVER hook (verify_local), NOT the app-scoped one (verify_global). Pins
+    // the shipped receiver-first precedence.
+    name: "mixed-scope-receiver-first",
+    source:
+      `@app.before_request\ndef verify_global():\n    check_session()\n\n` +
+      `@orders_bp.before_request\ndef verify_local():\n    check_session()\n\n` +
+      `@orders_bp.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    hook: "verify_local", path: "/x", method: "POST",
+  },
+];
+
+describe("unsure-state sweep + structural invariants (addendum Task 5)", () => {
+  it("every unsure fixture emits its route hasAuth false AND authUnsureHook equal to the expected hook", async () => {
+    for (const e of UNSURE_SWEEP) {
+      const f = await py(`unsuresweep/${e.name}.py`, e.source);
+      const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+      const r = routes.find((x) => x.path === e.path && x.method === e.method);
+      expect(r, e.name).toBeDefined();
+      expect(r!.hasAuth, e.name).toBe(false);
+      expect(r!.authUnsureHook, e.name).toBe(e.hook);
+    }
+  });
+
+  it("FileMiddleware honesty: no unsure fixture ever sets FileMiddleware.hasAuth", async () => {
+    for (const e of UNSURE_SWEEP) {
+      const f = await py(`unsuresweep/${e.name}.py`, e.source);
+      expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth, e.name).toBe(false);
+    }
+  });
+
+  it("third-state law over BOTH registries: authUnsureHook implies hasAuth false, hasAuth true implies the key is absent", async () => {
+    const sources = [
+      ...NEVER_FALSE_BLESS_SWEEP.map((e) => ({ name: e.name, source: e.source })),
+      ...UNSURE_SWEEP.map((e) => ({ name: e.name, source: e.source })),
+    ];
+    for (const s of sources) {
+      const f = await py(`law/${s.name}.py`, s.source);
+      for (const r of extractPythonRoutesAst(f.tree!, f.relativePath)) {
+        if (r.authUnsureHook !== undefined) {
+          expect(r.hasAuth, `${s.name} ${r.method} ${r.path}`).toBe(false);
+        }
+        if (r.hasAuth === true) {
+          expect("authUnsureHook" in r, `${s.name} ${r.method} ${r.path}`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("ambiguous-body generator sweep: every opaque/ambiguous body under an auth-named hook resolves not-auth or unsure, never a bless", async () => {
+    const bodies = [
+      "    abort(code_var)",
+      "    abort(404)",
+      "    abort(500)",
+      "    raise HTTPException(status_code=CODE)",
+      "    return redirect(url_for(page_var))",
+      "    raise SomeException()",
+      "    opaque_boring_call()",
+    ];
+    for (const body of bodies) {
+      const src =
+        `@app.before_request\ndef require_login():\n${body}\n\n` +
+        `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`;
+      const f = await py("ambig.py", src);
+      const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+      expect(routes[0]?.hasAuth ?? false, body).toBe(false);
+    }
+  });
+
+  it("methods=variable never GET-defaults: every statically unresolvable form resolves ALL, specifically never GET", async () => {
+    const FORMS: Array<[string, string]> = [
+      ["computed binary", `@app.route("/x", methods=BASE + EXTRA)\ndef h():\n    return {}\n`],
+      ["imported (no same-file assignment)", `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["call rhs", `ALLOWED = get_methods()\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["identifier alias chain", `ALLOWED = OTHER\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["twice reassigned", `ALLOWED = ["GET"]\nALLOWED = ["POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["conditional reassign (nested second write)", `ALLOWED = ["GET"]\nif F:\n    ALLOWED = ["GET", "POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["try-block reassign (nested second write)", `ALLOWED = ["GET"]\ntry:\n    ALLOWED = load()\nexcept Exception:\n    pass\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["augmented", `ALLOWED = ["GET"]\nALLOWED += ["POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["conditional (not top-level)", `if PROD:\n    ALLOWED = ["POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["subscript element write", `ALLOWED = ["GET"]\nALLOWED[0] = "POST"\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["slice replacement", `ALLOWED = ["GET"]\nALLOWED[:] = ["POST"]\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["with-as binding", `ALLOWED = ["GET"]\nwith open("m") as ALLOWED:\n    pass\n@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`],
+      ["inline splat [*BASE]", `@app.route("/x", methods=[*BASE])\ndef h():\n    return {}\n`],
+      ["non-string element", `@app.route("/x", methods=[SOME_VERB])\ndef h():\n    return {}\n`],
+    ];
+    for (const [label, src] of FORMS) {
+      const f = await py("mvar.py", src);
+      const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+      expect(routes[0], label).toBeDefined();
+      expect(routes[0].method, label).toBe("ALL");
+      expect(routes[0].method, label).not.toBe("GET");
+    }
+  });
+
+  it("hasError gate: broken-parse and errored-hook fixtures emit nothing bless-able and nothing hedged", async () => {
+    const broken = [
+      `@app.post("/bad")\n@login_required\ndef bad()\n    return 1\n@app.post("/good")\ndef good():\n    return 2\n`,
+      `@app.post("/bad")\ndef bad():\n    x = = 1\n\n@app.post("/good")\ndef good():\n    return 2\n`,
+      `@app.before_request\ndef gate():\n    x = = 1\n\n@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    ];
+    for (const src of broken) {
+      const f = await py("broken.py", src);
+      for (const r of extractPythonRoutesAst(f.tree!, f.relativePath)) {
+        expect(r.hasAuth).toBe(false);
+        expect(r.authUnsureHook).toBeUndefined();
+      }
+    }
+  });
+
+  it("byte-identity: JS AST routes and Go regex routes never carry the Python-only authUnsureHook", async () => {
+    const jf = await fileWithTree(
+      "src/routes/x.ts",
+      `const router = express.Router();\nrouter.post("/x", requireAuth, (req, res) => res.json({}));\n`,
+      "typescript",
+    );
+    const jsRoute = extractJsRoutesAst(jf.tree!, jf.relativePath, undefined)[0];
+    expect("authUnsureHook" in jsRoute).toBe(false);
+    // Serialized shape unchanged (no stray hedge key leaks into the JS RouteInfo).
+    expect(JSON.stringify(jsRoute)).toBe(
+      `{"method":"POST","path":"/x","file":"src/routes/x.ts","line":2,"hasAuth":true,"hasValidation":false,"hasRateLimit":false,"hasErrorHandler":false}`,
+    );
+    // Go regex path (no tree): a fired auth finding renders the flat deviator
+    // copy, never the hedge — proving Go RouteInfos carry no authUnsureHook.
+    const goFile = (n: string, auth: boolean) => ({
+      relativePath: `gosrv/routes/${n}.go`,
+      language: "go" as const,
+      content:
+        `package routes\n${auth ? "// authMiddleware\n" : ""}func R${n}(e *echo.Echo) {\n${auth ? "\te.Use(authMiddleware)\n" : ""}\te.POST("/${n}", c${n})\n}\n`,
+      lineCount: 6,
+      tree: undefined,
+    });
+    const goCtx = {
+      files: [goFile("a", true), goFile("b", true), goFile("c", true), goFile("d", true), goFile("e", false)],
+      totalLines: 30,
+      dominantLanguage: "go",
+    };
+    const goAuth = securityConsistency
+      .detect(goCtx as any)
+      .filter((f) => f.subCategory === SECURITY_SUBCATEGORIES.auth);
+    expect(goAuth.length).toBeGreaterThan(0);
+    for (const a of goAuth) {
+      const rendered = (a.recommendation + JSON.stringify(a.deviatingFiles)).toLowerCase();
+      expect(rendered).not.toContain("double check");
+    }
+  });
+});
+
+// ─── ADDENDUM Task 1: body-signature analyzer (pure helpers) ────────────────
+//
+// These test the pure, exported helpers directly: a hook body node in ->
+// "reject" | "none" | "opaque" (bodyAuthSignature), and the precedence layer
+// classifyHookAuth -> "auth" | "not-auth" | "unsure". The governing invariant
+// (NEVER-FALSE-BLESS) means "auth"/"reject" only ever fires on a verified
+// rejection signature; every ambiguity resolves away from a bless.
+
+// Select the body + defs of a named function ("hook" by default). Selecting by
+// name (not descendantsOfType[0]) keeps one-hop fixtures — where a same-file
+// helper is defined before the hook — unambiguous.
+async function hookBody(src: string, fnName = "hook") {
+  const f = await py("body.py", src);
+  const root = f.tree!.rootNode;
+  const defs = collectFunctionDefs(root);
+  const named = root
+    .descendantsOfType("function_definition")
+    .filter((d): d is SyntaxNode => d !== null);
+  const def = named.find((d) => d.childForFieldName("name")?.text === fnName) ?? named[0]!;
+  return { body: def.childForFieldName("body")!, defs };
+}
+const sig = async (src: string, fnName = "hook") => {
+  const { body, defs } = await hookBody(src, fnName);
+  return bodyAuthSignature(body, defs);
+};
+
+describe("body-signature grammar prerequisites", () => {
+  const rootOf = async (src: string) => (await py("g.py", src)).tree!.rootNode;
+  const noError = (n: SyntaxNode) => expect(n.hasError).toBe(false);
+
+  it("abort(401): call > identifier + argument_list > integer", async () => {
+    const root = await rootOf(`def f():\n    abort(401)\n`);
+    noError(root);
+    const call = root.descendantsOfType("call")[0]!;
+    expect(call.childForFieldName("function")!.type).toBe("identifier");
+    expect(call.childForFieldName("function")!.text).toBe("abort");
+    const args = call.childForFieldName("arguments")!;
+    expect(args.type).toBe("argument_list");
+    expect(args.namedChild(0)!.type).toBe("integer");
+    expect(args.namedChild(0)!.text).toBe("401");
+  });
+
+  it("raise HTTPException(...): raise_statement > namedChild(0) call with keyword_argument", async () => {
+    const root = await rootOf(`def f():\n    raise HTTPException(status_code=401)\n`);
+    noError(root);
+    const rs = root.descendantsOfType("raise_statement")[0]!;
+    const call = rs.namedChild(0)!;
+    expect(call.type).toBe("call");
+    expect(call.childForFieldName("function")!.text).toBe("HTTPException");
+    const kw = call.childForFieldName("arguments")!.namedChild(0)!;
+    expect(kw.type).toBe("keyword_argument");
+    expect(kw.childForFieldName("name")!.text).toBe("status_code");
+  });
+
+  it("bare raise PermissionDenied: raise_statement > identifier, NOT a call", async () => {
+    const root = await rootOf(`def f():\n    raise PermissionDenied\n`);
+    noError(root);
+    const raised = root.descendantsOfType("raise_statement")[0]!.namedChild(0)!;
+    expect(raised.type).toBe("identifier");
+    expect(raised.text).toBe("PermissionDenied");
+  });
+
+  it("return redirect(url_for('auth.login')): return_statement > call > call", async () => {
+    const root = await rootOf(`def f():\n    return redirect(url_for('auth.login'))\n`);
+    noError(root);
+    const val = root.descendantsOfType("return_statement")[0]!.namedChild(0)!;
+    expect(val.type).toBe("call");
+    expect(val.childForFieldName("function")!.text).toBe("redirect");
+    const inner = val.childForFieldName("arguments")!.namedChild(0)!;
+    expect(inner.type).toBe("call");
+    expect(inner.childForFieldName("function")!.text).toBe("url_for");
+  });
+
+  it("return jsonify({}), 401: return_statement > expression_list ending in integer", async () => {
+    const root = await rootOf(`def f():\n    return jsonify({}), 401\n`);
+    noError(root);
+    const val = root.descendantsOfType("return_statement")[0]!.namedChild(0)!;
+    expect(val.type).toBe("expression_list");
+    const kids = val.namedChildren.filter((n): n is SyntaxNode => n !== null);
+    const last = kids[kids.length - 1]!;
+    expect(last.type).toBe("integer");
+    expect(last.text).toBe("401");
+  });
+
+  it("'user_id' not in session: comparison_operator with an unnamed 'not in' child", async () => {
+    const root = await rootOf(`def f():\n    if 'user_id' not in session:\n        pass\n`);
+    noError(root);
+    const cmp = root.descendantsOfType("comparison_operator")[0]!;
+    const ops = cmp.children
+      .filter((c): c is SyntaxNode => c !== null && !c.isNamed)
+      .map((c) => c.type);
+    expect(ops).toContain("not in");
+  });
+
+  it("session.get('user'): call on an attribute callee", async () => {
+    const root = await rootOf(`def f():\n    session.get('user')\n`);
+    noError(root);
+    const fn = root.descendantsOfType("call")[0]!.childForFieldName("function")!;
+    expect(fn.type).toBe("attribute");
+    expect(fn.childForFieldName("attribute")!.text).toBe("get");
+    expect(fn.childForFieldName("object")!.text).toBe("session");
+  });
+
+  it("pass body is a block > pass_statement", async () => {
+    const root = await rootOf(`def f():\n    pass\n`);
+    noError(root);
+    const body = root.descendantsOfType("function_definition")[0]!.childForFieldName("body")!;
+    expect(body.type).toBe("block");
+    expect(body.namedChild(0)!.type).toBe("pass_statement");
+  });
+
+  it("async def is a function_definition with intact name/body fields", async () => {
+    const root = await rootOf(`async def f():\n    abort(401)\n`);
+    noError(root);
+    const def = root.descendantsOfType("function_definition")[0]!;
+    expect(def.type).toBe("function_definition");
+    expect(def.childForFieldName("name")!.text).toBe("f");
+    expect(def.childForFieldName("body")!.type).toBe("block");
+  });
+
+  it("a @lru_cache-decorated def still surfaces in descendantsOfType('function_definition')", async () => {
+    const root = await rootOf(`@functools.lru_cache\ndef helper():\n    abort(401)\n`);
+    noError(root);
+    const defs = root
+      .descendantsOfType("function_definition")
+      .filter((d): d is SyntaxNode => d !== null);
+    expect(defs).toHaveLength(1);
+    expect(defs[0].childForFieldName("name")!.text).toBe("helper");
+  });
+});
+
+describe("bodyAuthSignature: reject signatures", () => {
+  const REJECTS: Array<[string, string]> = [
+    ["abort(401) alone", `def hook():\n    abort(401)\n`],
+    ["flask.abort(401) attribute callee", `def hook():\n    flask.abort(401)\n`],
+    ["return abort(401)", `def hook():\n    return abort(401)\n`],
+    [
+      "abort(401) nested in try/if/for",
+      `def hook():\n    for x in items:\n        try:\n            if bad:\n                abort(401)\n        except Exception:\n            pass\n`,
+    ],
+    [
+      "raise HTTPException(status_code=401, detail='no')",
+      `def hook():\n    raise HTTPException(status_code=401, detail="no")\n`,
+    ],
+    ["raise HTTPException(401) positional", `def hook():\n    raise HTTPException(401)\n`],
+    [
+      "raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)",
+      `def hook():\n    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)\n`,
+    ],
+    [
+      "corroborated 403: session read + abort(403)",
+      `def hook():\n    user = session.get("user_id")\n    if user is None:\n        abort(403)\n`,
+    ],
+    ["raise AuthenticationError('nope')", `def hook():\n    raise AuthenticationError("nope")\n`],
+    ["raise Unauthorized()", `def hook():\n    raise Unauthorized()\n`],
+    [
+      "raise werkzeug.exceptions.Unauthorized()",
+      `def hook():\n    raise werkzeug.exceptions.Unauthorized()\n`,
+    ],
+    ["bare raise PermissionDenied", `def hook():\n    raise PermissionDenied\n`],
+    [
+      "return redirect(url_for('auth.login'))",
+      `def hook():\n    return redirect(url_for("auth.login"))\n`,
+    ],
+    ["return redirect('/login')", `def hook():\n    return redirect("/login")\n`],
+    ["return RedirectResponse('/login')", `def hook():\n    return RedirectResponse("/login")\n`],
+    [
+      "session guard then redirect to login",
+      `def hook():\n    if not session.get("user_id"):\n        return redirect(url_for("auth.login"))\n`,
+    ],
+    [
+      "pyAuthFile wrapper: header read + jsonify tuple 401",
+      `def hook():\n    token = request.headers.get("Authorization")\n    if not token:\n        return jsonify({"error": "unauthorized"}), 401\n`,
+    ],
+    [
+      "current_user guard then abort(401)",
+      `def hook():\n    if not current_user.is_authenticated:\n        abort(401)\n`,
+    ],
+    ["verify_jwt_in_request() alone", `def hook():\n    verify_jwt_in_request()\n`],
+    [
+      "one-hop helper: _reject_anon() aborts 401",
+      `def _reject_anon():\n    if not g.user:\n        abort(401)\n\n\ndef hook():\n    _reject_anon()\n`,
+    ],
+    [
+      "one-hop helper decorated with @functools.lru_cache",
+      `@functools.lru_cache\ndef _reject_anon():\n    if not g.user:\n        abort(401)\n\n\ndef hook():\n    _reject_anon()\n`,
+    ],
+    [
+      "one-hop async helper",
+      `async def _reject_anon():\n    if not g.user:\n        abort(401)\n\n\ndef hook():\n    _reject_anon()\n`,
+    ],
+  ];
+  it.each(REJECTS)('"%s" -> reject', async (_name, src) => {
+    expect(await sig(src)).toBe("reject");
+  });
+});
+
+describe("bodyAuthSignature: none (visible body, no rejection)", () => {
+  const NONES: Array<[string, string]> = [
+    [
+      "verify_user_email body: email + return None",
+      `def hook():\n    send_confirmation_email(g.user.email)\n    return None\n`,
+    ],
+    ["scrub_pii(record)", `def hook():\n    scrub_pii(record)\n`],
+    ["anonymize(record)", `def hook():\n    anonymize(record)\n`],
+    ["logger.info(...)", `def hook():\n    logger.info("hit %s", request.path)\n`],
+    ["g.request_id = uuid4().hex", `def hook():\n    g.request_id = uuid4().hex\n`],
+    [
+      "header setter (subscript assignment)",
+      `def hook():\n    response.headers["X-Frame-Options"] = "DENY"\n`,
+    ],
+    ["pass", `def hook():\n    pass\n`],
+    ["docstring only", `def hook():\n    """just docs"""\n`],
+    ["abort(400)", `def hook():\n    abort(400)\n`],
+    ["abort(404)", `def hook():\n    abort(404)\n`],
+    ["abort(500)", `def hook():\n    abort(500)\n`],
+    ["raise HTTPException(status_code=404)", `def hook():\n    raise HTTPException(status_code=404)\n`],
+    ["lone uncorroborated abort(403)", `def hook():\n    abort(403)\n`],
+    [
+      "lone uncorroborated raise HTTPException(status_code=403)",
+      `def hook():\n    raise HTTPException(status_code=403)\n`,
+    ],
+    [
+      "lone uncorroborated raise HTTPException(status_code=HTTP_403_FORBIDDEN)",
+      `def hook():\n    raise HTTPException(status_code=HTTP_403_FORBIDDEN)\n`,
+    ],
+    ["raise ValueError('bad')", `def hook():\n    raise ValueError("bad")\n`],
+    ["raise KeyError", `def hook():\n    raise KeyError\n`],
+    ["raise NotFound", `def hook():\n    raise NotFound\n`],
+    [
+      "return redirect(url_for('maintenance.notice'))",
+      `def hook():\n    return redirect(url_for("maintenance.notice"))\n`,
+    ],
+    ["return redirect('/checkout')", `def hook():\n    return redirect("/checkout")\n`],
+    ["session.get('locale') (not a credential key)", `def hook():\n    session.get("locale")\n`],
+  ];
+  it.each(NONES)('"%s" -> none', async (_name, src) => {
+    expect(await sig(src)).toBe("none");
+  });
+});
+
+describe("bodyAuthSignature: opaque (auth-flavored but unverifiable)", () => {
+  const OPAQUES: Array<[string, string]> = [
+    ["check_session() undefined helper", `def hook():\n    check_session()\n`],
+    ["confirm(user) undefined helper", `def hook():\n    confirm(user)\n`],
+    ["_do_auth() undefined helper", `def hook():\n    _do_auth()\n`],
+    ["abort(code_var) unreadable status", `def hook():\n    abort(code_var)\n`],
+    [
+      "raise HTTPException(status_code=CODE) unreadable status",
+      `def hook():\n    raise HTTPException(status_code=CODE)\n`,
+    ],
+    [
+      "verify_jwt_in_request(optional=True) non-empty args",
+      `def hook():\n    verify_jwt_in_request(optional=True)\n`,
+    ],
+    ["redirect(page_var) unreadable target", `def hook():\n    return redirect(page_var)\n`],
+    [
+      "credential read + opaque validate_or_die",
+      `def hook():\n    token = request.headers.get("Authorization")\n    validate_or_die(token)\n`,
+    ],
+    [
+      "duplicate same-file def: check_session unresolvable + hint",
+      `def check_session():\n    pass\n\n\ndef check_session():\n    pass\n\n\ndef hook():\n    check_session()\n`,
+    ],
+    ["get_jwt_identity() analytics: jwt hint, never reject", `def hook():\n    get_jwt_identity()\n`],
+  ];
+  it.each(OPAQUES)('"%s" -> opaque', async (_name, src) => {
+    expect(await sig(src)).toBe("opaque");
+  });
+
+  it("cycle a()->b()->a() terminates and returns none (no reject, no hint)", async () => {
+    const src = `def a():\n    b()\n\n\ndef b():\n    a()\n`;
+    expect(await sig(src, "a")).toBe("none");
+  });
+});
+
+describe("classifyHookAuth: precedence", () => {
+  const cls = async (name: string, src: string, simple: boolean, fnName = "hook") => {
+    const { body, defs } = await hookBody(src, fnName);
+    return classifyHookAuth(name, body, defs, simple);
+  };
+
+  it("veto beats a body-positive: optional_authenticate + abort(401) body -> not-auth", async () => {
+    const body =
+      `def hook():\n    token = request.headers.get("Authorization")\n    if token is None:\n        abort(401)\n`;
+    expect(await cls("optional_authenticate", body, true)).toBe("not-auth");
+  });
+
+  it("body beats name (bless): boring gate() with session+abort(401) -> auth", async () => {
+    const body = `def hook():\n    if not session.get("user_id"):\n        abort(401)\n`;
+    expect(await cls("gate", body, true)).toBe("auth");
+  });
+
+  it("body beats name (deny): verify_user_email emailing body -> not-auth", async () => {
+    const body = `def hook():\n    send_confirmation_email(g.user.email)\n    return None\n`;
+    expect(await cls("verify_user_email", body, true)).toBe("not-auth");
+  });
+
+  it("visible pass stub never rescued: require_login/pass -> not-auth", async () => {
+    expect(await cls("require_login", `def hook():\n    pass\n`, true)).toBe("not-auth");
+  });
+
+  it("tier-1 CORE does not rescue a visible stub: check_auth/pass -> not-auth", async () => {
+    expect(await cls("check_auth", `def hook():\n    pass\n`, true)).toBe("not-auth");
+  });
+
+  it("wrong reject code: require_login/abort(404) -> not-auth", async () => {
+    expect(await cls("require_login", `def hook():\n    abort(404)\n`, true)).toBe("not-auth");
+  });
+
+  it("opaque + CORE carve-out: authenticate_request delegating to _do_auth() -> auth", async () => {
+    expect(await cls("authenticate_request", `def hook():\n    _do_auth()\n`, true)).toBe("auth");
+  });
+
+  it("opaque + tier-2 name: require_login -> check_session() -> unsure", async () => {
+    expect(await cls("require_login", `def hook():\n    check_session()\n`, true)).toBe("unsure");
+  });
+
+  it("opaque + attributive name: verify_user_email -> confirm(user) -> unsure", async () => {
+    expect(await cls("verify_user_email", `def hook():\n    confirm(user)\n`, true)).toBe("unsure");
+  });
+
+  it("opaque under a boring name: setup -> check_session() -> unsure (flavored delegation is evidence)", async () => {
+    expect(await cls("setup", `def hook():\n    check_session()\n`, true)).toBe("unsure");
+  });
+
+  it("body null + CORE simple: authenticate -> auth", () => {
+    expect(classifyHookAuth("authenticate", null, new Map(), true)).toBe("auth");
+  });
+
+  it("body null + tier-2 simple: verify_session -> unsure", () => {
+    expect(classifyHookAuth("verify_session", null, new Map(), true)).toBe("unsure");
+  });
+
+  it("body null + attributive simple: verify_user_email -> unsure", () => {
+    expect(classifyHookAuth("verify_user_email", null, new Map(), true)).toBe("unsure");
+  });
+
+  it("body null + auth segment on a non-simple target: AuthGate.check -> unsure (never blesses)", () => {
+    expect(classifyHookAuth("AuthGate.check", null, new Map(), false)).toBe("unsure");
+  });
+
+  it("body null + zero flavor: add_request_id -> not-auth (no hedge)", () => {
+    expect(classifyHookAuth("add_request_id", null, new Map(), true)).toBe("not-auth");
+  });
+
+  it("body null + optional veto: optional_auth_hook -> not-auth", () => {
+    expect(classifyHookAuth("optional_auth_hook", null, new Map(), true)).toBe("not-auth");
+  });
+});
+
+describe("SECURITY_AST_PY export bag: body-signature lexicons", () => {
+  it("includes each new body-signature lexicon name", () => {
+    const keys = Object.keys(SECURITY_AST_PY);
+    for (const name of [
+      "REJECT_STATUSES",
+      "AUTH_EXCEPTION_ALONE",
+      "AUTH_EXCEPTION_TOPIC",
+      "AUTH_EXCEPTION_KIND",
+      "LOGIN_REDIRECT_SEGMENTS",
+      "KNOWN_AUTH_PRIMITIVES",
+      "OPAQUE_AUTH_HINT_SEGMENTS",
+      "CREDENTIAL_KEY_SEGMENTS",
+    ]) {
+      expect(keys).toContain(name);
+    }
+  });
+});
+
+// ─── ADDENDUM Task 2: safe-direction tightening 1 — prune nested def subtrees ──
+//
+// A reject signature inside a nested `function_definition` in the hook body is
+// NOT executed inline, so it must not count as the hook rejecting. The body scan
+// prunes nested def/lambda subtrees (the hook's own try/if/for branches still
+// count). Moves strictly toward NEVER-FALSE-BLESS.
+describe("tightening 1: nested def subtrees are pruned from the body scan", () => {
+  it("bodyAuthSignature: an abort(401) inside a nested def + a logging body -> none (not reject)", async () => {
+    const src = `def hook():\n    def _never():\n        abort(401)\n    logger.info("hi")\n`;
+    expect(await sig(src)).toBe("none");
+  });
+
+  it("classifyHookAuth: add_request_id whose only 401 sits in a nested def -> not-auth", async () => {
+    const { body, defs } = await hookBody(
+      `def hook():\n    def _never():\n        abort(401)\n    logger.info("hi")\n`,
+    );
+    expect(classifyHookAuth("add_request_id", body, defs, true)).toBe("not-auth");
+  });
+
+  it("extractor: an add_request_id hook whose 401 is only in a nested def does NOT bless its routes", async () => {
+    const f = await py("nesteddef.py",
+      `@app.before_request\n` +
+      `def add_request_id():\n` +
+      `    def _never():\n` +
+      `        abort(401)\n` +
+      `    logger.info("hi")\n\n` +
+      `@app.route("/x", methods=["POST"])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+
+  it("the hook's OWN try/if/for branches still count (a real inline 401 blesses)", async () => {
+    const src = `def hook():\n    for x in items:\n        if bad:\n            abort(401)\n`;
+    expect(await sig(src)).toBe("reject");
+  });
+});
+
+// ─── ADDENDUM Task 2: safe-direction tightening 2 — guard-condition-then-403 ───
+//
+// A lone 403 anywhere + a credential read anywhere used to bless (a body-wide
+// co-occurrence). That false-blessed a CSRF gate that merely reads the session.
+// Now a 403 blesses ONLY when it sits in a reject driven by an `if` whose
+// CONDITION references a credential/session/auth value. 401 blessing alone is
+// unchanged. Moves strictly toward NEVER-FALSE-BLESS.
+describe("tightening 2: a 403 blesses only inside a credential-guarded reject", () => {
+  it("bodyAuthSignature: session read + a CSRF-guarded abort(403) -> NOT reject (opaque)", async () => {
+    const src = `def hook():\n    user = session.get("user")\n    if not csrf_valid(request):\n        abort(403)\n`;
+    const s = await sig(src);
+    expect(s).not.toBe("reject");
+    expect(s).toBe("opaque");
+  });
+
+  it("bodyAuthSignature: a credential-guarded abort(403) stays reject", async () => {
+    const src = `def hook():\n    if "user_id" not in session:\n        abort(403)\n`;
+    expect(await sig(src)).toBe("reject");
+  });
+
+  it("bodyAuthSignature: a bare truthiness guard on a user_agent-style attribute + abort(403) does NOT bless (no new false-bless from a substring 'user')", async () => {
+    // The guard reads no credential SHAPE (no .get / is-None / in-string /
+    // session-subscript), only a bare attribute whose name happens to contain the
+    // 'user' segment. It must resolve away from reject, exactly as before the
+    // tightening — the guarded-403 set is a strict subset of the old set.
+    const src = `def hook():\n    if request.user_agent:\n        abort(403)\n`;
+    expect(await sig(src)).not.toBe("reject");
+    expect(await sig(src)).toBe("none");
+  });
+
+  // CRITICAL 1 (false-bless): the guarded-403 bless gate must read a STRUCTURAL
+  // credential surface (a session/request .get call, a session/g subscript, a
+  // credential membership against session/request.session/request.headers, or an
+  // is-None test on a known credential surface), never a bare credential-ish name
+  // against ANY container. A path filter that 403s and a user-agent null-check
+  // that 403s must NOT drive a bless.
+  it("bodyAuthSignature: `if \"login\" in request.path: abort(403)` does NOT bless (string-in-ANY-container over-match closed)", async () => {
+    const src = `def hook():\n    if "login" in request.path:\n        abort(403)\n`;
+    expect(await sig(src)).not.toBe("reject");
+    expect(await sig(src)).toBe("opaque");
+  });
+
+  it("bodyAuthSignature: `if request.user_agent is None: abort(403)` does NOT bless (bare credential-segment name over-match closed)", async () => {
+    const src = `def hook():\n    if request.user_agent is None:\n        abort(403)\n`;
+    expect(await sig(src)).not.toBe("reject");
+    expect(await sig(src)).toBe("opaque");
+  });
+
+  it("bodyAuthSignature: `if not session.get(\"user\"): abort(403)` stays reject (structural .get guard on session)", async () => {
+    const src = `def hook():\n    if not session.get("user"):\n        abort(403)\n`;
+    expect(await sig(src)).toBe("reject");
+  });
+
+  it("bodyAuthSignature: `if request.headers.get(\"Authorization\") is None: abort(403)` stays reject (structural header .get guard)", async () => {
+    const src = `def hook():\n    if request.headers.get("Authorization") is None:\n        abort(403)\n`;
+    expect(await sig(src)).toBe("reject");
+  });
+
+  it("extractor: a CSRF gate that reads the session but 403s on csrf failure does NOT bless", async () => {
+    const f = await py("csrfgate.py",
+      `@app.before_request\n` +
+      `def csrf_gate():\n` +
+      `    user = session.get("user")\n` +
+      `    if not csrf_valid(request):\n` +
+      `        abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes[0].hasAuth).toBe(false);
+  });
+
+  it("extractor: a credential-guarded 403 hook under a boring name blesses its routes", async () => {
+    const f = await py("credgate.py",
+      `@app.before_request\n` +
+      `def gate():\n` +
+      `    if "user_id" not in session:\n` +
+      `        abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+  });
+});
+
+// ─── ADDENDUM Task 2: hook body signatures wired into the extractor ───────────
+//
+// The decorator/call-form hook path now classifies by BODY behavior. A verified
+// reject body blesses the receiver's routes even under a boring name; a fully
+// visible non-enforcing body never blesses, whatever the name (the
+// verify_user_email fix, exercised end-to-end above).
+describe("hook body signatures (extractor level)", () => {
+  const hookRoute = (hook: string, body: string[]) =>
+    [`@app.before_request`, `def ${hook}():`, ...body, ``,
+     `@app.route("/x", methods=["POST"])`, `def x():`, `    return {}`, ``].join("\n");
+  const firstRoute = async (src: string) => {
+    const f = await py("hookext.py", src);
+    return { routes: extractPythonRoutesAst(f.tree!, f.relativePath), tree: f.tree! };
+  };
+
+  const BODY_BLESS: Array<[string, string[]]> = [
+    ["abort(401), boring name", ["    if not g.user:", "        abort(401)"]],
+    ["flask.abort(401) attribute callee", ["    if not g.user:", "        flask.abort(401)"]],
+    ["credential-guarded abort(403)", ['    if "user_id" not in session:', "        abort(403)"]],
+    ["raise HTTPException(status_code=401)", ["    raise HTTPException(status_code=401)"]],
+    ["redirect to login", ['    if not session.get("user_id"):', '        return redirect(url_for("auth.login"))']],
+    ["header read then 401 tuple", ['    token = request.headers.get("Authorization")', "    if not token:", '        return jsonify({"error": "no"}), 401']],
+    ["current_user guard then abort(401)", ["    if not current_user.is_authenticated:", "        abort(401)"]],
+    ["verify_jwt_in_request()", ["    verify_jwt_in_request()"]],
+  ];
+  it.each(BODY_BLESS)('body reject "%s" blesses /x under the boring name gate', async (_n, body) => {
+    const { routes, tree } = await firstRoute(hookRoute("gate", body));
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+    expect(extractPythonFileMiddlewareAst(tree).hasAuth).toBe(true);
+  });
+
+  it("one-hop same-file helper that aborts 401 blesses under a boring hook name", async () => {
+    const { routes } = await firstRoute(
+      `def _reject_anon():\n    if not g.user:\n        abort(401)\n\n\n` +
+      `@app.before_request\ndef gate():\n    _reject_anon()\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  const BODY_NONE_NEG: Array<[string, string, string[]]> = [
+    ["verify_user_email emailing", "verify_user_email", ["    send_confirmation_email(g.user.email)", "    return None"]],
+    ["protect_user_data scrubbing", "protect_user_data", ["    scrub_pii(record)", "    return None"]],
+    ["log-only require_login", "require_login", ['    logger.info("hit %s", request.path)']],
+    ["header-set-only verify_token", "verify_token", ['    response.headers["X-Frame-Options"] = "DENY"']],
+    ["pass under require_login", "require_login", ["    pass"]],
+    ["docstring under check_auth", "check_auth", ['    """docs"""']],
+    ["abort(400)", "gate", ["    abort(400)"]],
+    ["abort(404)", "gate", ["    abort(404)"]],
+    ["raise ValueError", "gate", ['    raise ValueError("bad")']],
+    ["non-login redirect", "gate", ['    return redirect("/checkout")']],
+    ["lone abort(403) under csrf_protect", "csrf_protect", ["    abort(403)"]],
+    ["lone abort(403) under maintenance_gate", "maintenance_gate", ["    abort(403)"]],
+  ];
+  it.each(BODY_NONE_NEG)('visible non-enforcing body "%s" -> flat not-auth (key absent)', async (_n, hook, body) => {
+    const { routes, tree } = await firstRoute(hookRoute(hook, body));
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+    expect(extractPythonFileMiddlewareAst(tree).hasAuth).toBe(false);
+  });
+
+  it("require_admin whose only reject is a LONE abort(403) -> not-auth, key absent (forced by the visible-none rule that also fixes verify_user_email)", async () => {
+    // NOTE: the brief's parenthetical expected `unsure` here, but a lone abort(403)
+    // resolves the body to `none` (Task 1's frozen catalog), and a visible `none`
+    // body is flat not-auth regardless of name — the exact rule the
+    // verify_user_email fix depends on. Both outcomes are hasAuth:false; not-auth
+    // is the more conservative, design-consistent one.
+    const { routes } = await firstRoute(hookRoute("require_admin", ["    abort(403)"]));
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("a boring `before` hook calling only verify_jwt_in_request(optional=True) -> unsure, never a bless", async () => {
+    const { routes } = await firstRoute(hookRoute("before", ["    verify_jwt_in_request(optional=True)"]));
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBe("before");
+  });
+
+  it("lanes untouched: a validate_payload/pass hook sets validation, never auth (route level)", async () => {
+    const { routes } = await firstRoute(hookRoute("validate_payload", ["    pass"]));
+    expect(routes[0].hasValidation).toBe(true);
+    expect(routes[0].hasAuth).toBe(false);
+  });
+
+  it("receiver scoping preserved: a body-blessed admin_bp hook blesses only admin_bp routes", async () => {
+    const f = await py("scoped.py",
+      `@admin_bp.before_request\ndef gate():\n    abort(401)\n\n` +
+      `@admin_bp.route("/users", methods=["POST"])\ndef create_user():\n    return {}\n\n` +
+      `@public_bp.route("/webhook", methods=["POST"])\ndef webhook():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/users auth=true",
+      "/webhook auth=false",
+    ]);
+  });
+});
+
+// ─── ADDENDUM Task 2: unsure hooks surface the exact hook name ────────────────
+//
+// An auth-flavored but statically unverifiable hook resolves `unsure`: hasAuth
+// stays false (never blesses) and route.authUnsureHook carries the REGISTERED
+// hook's name so a renderer can hedge the copy. Covers decorator + call-form
+// registration.
+describe("unsure hooks (extractor level)", () => {
+  const routesOf = async (src: string) => {
+    const f = await py("unsure.py", src);
+    return { routes: extractPythonRoutesAst(f.tree!, f.relativePath), tree: f.tree! };
+  };
+  const ROUTE = `\n@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`;
+
+  it("opaque auth-flavored helper: @app.before_request require_login -> check_session() -> authUnsureHook 'require_login'", async () => {
+    const { routes, tree } = await routesOf(
+      `@app.before_request\ndef require_login():\n    check_session()\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBe("require_login");
+    expect(extractPythonFileMiddlewareAst(tree).hasAuth).toBe(false);
+  });
+
+  it("call-form imported hook: app.before_request(verify_session) -> authUnsureHook 'verify_session'", async () => {
+    const { routes } = await routesOf(
+      `from .auth import verify_session\napp.before_request(verify_session)\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBe("verify_session");
+  });
+
+  it("call-form CORE name blesses: app.before_request(authenticate) -> auth=true, key absent", async () => {
+    const { routes } = await routesOf(`app.before_request(authenticate)\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(true);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("call-form lambda: app.before_request(lambda: abort(401)) -> auth=true", async () => {
+    const { routes } = await routesOf(`app.before_request(lambda: abort(401))\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(true);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("call-form attribute target: app.before_request(AuthGate.check) -> unsure, hook name 'AuthGate.check'", async () => {
+    const { routes } = await routesOf(`app.before_request(AuthGate.check)\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBe("AuthGate.check");
+  });
+
+  it("attributive-collision unresolvable: verify_user_email -> confirm(user) -> unsure, never blessed on name", async () => {
+    const { routes } = await routesOf(
+      `@app.before_request\ndef verify_user_email():\n    confirm(user)\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBe("verify_user_email");
+  });
+
+  it("@bp.before_app_request unsure hook marks authUnsureHook app-wide", async () => {
+    const { routes } = await routesOf(
+      `@bp.before_app_request\ndef require_login():\n    check_session()\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBe("require_login");
+  });
+
+  it("per-route auth clears unsure: unsure hook + @login_required below the route -> auth=true, key absent", async () => {
+    const { routes } = await routesOf(
+      `@app.before_request\ndef require_login():\n    check_session()\n\n` +
+      `@app.route("/x", methods=["POST"])\n@login_required\ndef x():\n    return {}\n`);
+    expect(routes[0].hasAuth).toBe(true);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("global real auth clears receiver unsure: app-scoped abort(401) hook + an unsure receiver hook -> auth=true, key absent", async () => {
+    const { routes } = await routesOf(
+      `@app.before_request\ndef gate():\n    abort(401)\n\n` +
+      `@orders_bp.before_request\ndef require_login():\n    check_session()\n\n` +
+      `@orders_bp.route("/x", methods=["POST"])\ndef x():\n    return {}\n`);
+    expect(routes[0].hasAuth).toBe(true);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("deterministic attribution: two unsure hooks on one receiver -> the FIRST in document order", async () => {
+    const { routes } = await routesOf(
+      `@app.before_request\ndef require_login():\n    check_session()\n\n` +
+      `@app.before_request\ndef verify_user_email():\n    confirm(user)\n` + ROUTE);
+    expect(routes[0].authUnsureHook).toBe("require_login");
+  });
+
+  it("errored hook dd is invisible: no throw, no bless, no unsure on any emitted route", async () => {
+    const f = await py("errdd.py",
+      `@app.before_request\ndef gate():\n    x = = 1\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`);
+    expect(() => extractPythonRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    for (const r of extractPythonRoutesAst(f.tree!, f.relativePath)) {
+      expect(r.hasAuth).toBe(false);
+      expect(r.authUnsureHook).toBeUndefined();
+    }
+  });
+
+  it("cycle-safe hook a()->b()->a() -> not blessed, not unsure (boring name resolves none)", async () => {
+    const { routes } = await routesOf(
+      `def b():\n    a()\n\n\n@app.before_request\ndef a():\n    b()\n` + ROUTE);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+});
+
+// ─── ADDENDUM Task 2: Depends additive-only same-file body bless ──────────────
+//
+// A boring-named FastAPI dependency whose VISIBLE same-file body raises a
+// verified 401 IS auth enforcement. Order is veto first, name-segment hit
+// second, same-file body reject third. Imported-target verdicts are unchanged
+// (no same-file def to resolve).
+describe("Depends additive-only body bless", () => {
+  it("Depends(load_actor) whose same-file body raises HTTPException(401) blesses", async () => {
+    const f = await py("depbody.py",
+      `@router.post("/x")\ndef h(actor=Depends(load_actor)):\n    return {}\n\n\n` +
+      `def load_actor(request):\n    token = request.headers.get("Authorization")\n` +
+      `    if not token:\n        raise HTTPException(status_code=401)\n    return token\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+  });
+
+  it("Depends(get_current_user_optional) whose body raises 401 -> auth=false (veto beats body)", async () => {
+    const f = await py("depveto.py",
+      `@router.post("/x")\ndef h(user=Depends(get_current_user_optional)):\n    return {}\n\n\n` +
+      `def get_current_user_optional(request):\n    token = request.headers.get("Authorization")\n` +
+      `    if not token:\n        raise HTTPException(status_code=401)\n    return token\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("imported Depends verdicts unchanged: oauth2_scheme blesses, get_author_stats does not", async () => {
+    const f = await py("depimported.py",
+      `@router.post("/x1")\ndef h1(x=Depends(oauth2_scheme)):\n    return {}\n\n` +
+      `@router.post("/x2")\ndef h2(x=Depends(get_author_stats)):\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/x1 auth=true",
+      "/x2 auth=false",
+    ]);
   });
 });
