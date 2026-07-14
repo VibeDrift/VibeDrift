@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
+import {
+  extractPythonRoutesAst,
+  extractPythonFileMiddlewareAst,
+} from "../../../src/drift/security-ast-python.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 
 const py = (path: string, src: string) => fileWithTree(path, src, "python");
@@ -884,5 +887,187 @@ describe("per-route validation and rate-limit lanes", () => {
     expect(routes[0].hasAuth).toBe(false);
     expect(routes[0].hasValidation).toBe(false);
     expect(routes[0].hasRateLimit).toBe(false);
+  });
+});
+
+describe("extractPythonFileMiddlewareAst", () => {
+  const NONE = { hasAuth: false, hasValidation: false, hasRateLimit: false };
+
+  it("blesses @app.before_request def require_login() (auth hook, tier 2)", async () => {
+    const f = await py("mw.py", `@app.before_request\ndef require_login():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual({
+      hasAuth: true, hasValidation: false, hasRateLimit: false,
+    });
+  });
+
+  it("blesses @bp.before_request def check_auth() (auth CORE segment, tier 1)", async () => {
+    const f = await py("mw.py", `@bp.before_request\ndef check_auth():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(true);
+  });
+
+  it("does NOT bless @app.before_request def log_request() (a real hook, not authn)", async () => {
+    const f = await py("mw.py", `@app.before_request\ndef log_request():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual(NONE);
+  });
+
+  it("does NOT bless ambiguous hooks that lack a CORE segment or an ENFORCE+SUBJECT pair", async () => {
+    // metrics hook (SUBJECT login, no ENFORCE), content negotiation (ENFORCE
+    // verify, no SUBJECT), cookie setter (SUBJECT token, no ENFORCE; CSRF is not
+    // authN).
+    const metrics = await py("m1.py", `@app.before_request\ndef track_login_metrics():\n    pass\n`);
+    const content = await py("m2.py", `@app.before_request\ndef verify_content_type():\n    pass\n`);
+    const csrf = await py("m3.py", `@app.before_request\ndef set_csrf_token():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(metrics.tree!).hasAuth).toBe(false);
+    expect(extractPythonFileMiddlewareAst(content.tree!).hasAuth).toBe(false);
+    expect(extractPythonFileMiddlewareAst(csrf.tree!).hasAuth).toBe(false);
+  });
+
+  it("blesses @app.before_request def verify_token() (ENFORCE verify + SUBJECT token)", async () => {
+    const f = await py("mw.py", `@app.before_request\ndef verify_token():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(true);
+  });
+
+  it("does NOT bless @job.before_request def check_auth() (receiver gate: job is not a router)", async () => {
+    const f = await py("mw.py", `@job.before_request\ndef check_auth():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual(NONE);
+  });
+
+  it("blesses add_middleware with an auth-segment class name (AuthMiddleware, AuthenticationMiddleware)", async () => {
+    const a = await py("mw.py", `app.add_middleware(AuthMiddleware)\n`);
+    const b = await py("mw.py", `app.add_middleware(AuthenticationMiddleware, backend=JWTBackend())\n`);
+    expect(extractPythonFileMiddlewareAst(a.tree!).hasAuth).toBe(true);
+    expect(extractPythonFileMiddlewareAst(b.tree!).hasAuth).toBe(true);
+  });
+
+  it("does NOT bless add_middleware with a non-auth class (CORSMiddleware, GZipMiddleware)", async () => {
+    const cors = await py("mw.py", `app.add_middleware(CORSMiddleware, allow_origins=["*"])\n`);
+    const gzip = await py("mw.py", `app.add_middleware(GZipMiddleware)\n`);
+    expect(extractPythonFileMiddlewareAst(cors.tree!).hasAuth).toBe(false);
+    expect(extractPythonFileMiddlewareAst(gzip.tree!).hasAuth).toBe(false);
+  });
+
+  it("does NOT bless add_middleware(AuthorTrackingMiddleware) / (AuthorNotesMiddleware): 'Author' is a segment, not 'Auth'", async () => {
+    const track = await py("mw.py", `app.add_middleware(AuthorTrackingMiddleware)\n`);
+    const notes = await py("mw.py", `app.add_middleware(AuthorNotesMiddleware)\n`);
+    expect(extractPythonFileMiddlewareAst(track.tree!).hasAuth).toBe(false);
+    expect(extractPythonFileMiddlewareAst(notes.tree!).hasAuth).toBe(false);
+  });
+
+  it("blesses a router/app constructor dependencies=[Depends(auth)] kwarg", async () => {
+    const router = await py("mw.py", `router = APIRouter(dependencies=[Depends(get_current_user)])\n`);
+    const app = await py("mw.py", `app = FastAPI(dependencies=[Depends(verify_token)])\n`);
+    expect(extractPythonFileMiddlewareAst(router.tree!).hasAuth).toBe(true);
+    expect(extractPythonFileMiddlewareAst(app.tree!).hasAuth).toBe(true);
+  });
+
+  it("does NOT bless a constructor with no auth dependency (prefix-only, get_db)", async () => {
+    const prefix = await py("mw.py", `router = APIRouter(prefix="/admin")\n`);
+    const db = await py("mw.py", `router = APIRouter(dependencies=[Depends(get_db)])\n`);
+    expect(extractPythonFileMiddlewareAst(prefix.tree!)).toEqual(NONE);
+    expect(extractPythonFileMiddlewareAst(db.tree!)).toEqual(NONE);
+  });
+
+  it("does NOT bless a bare unassigned APIRouter(dependencies=[Depends(auth)]) (no resolvable scope, never-false-bless)", async () => {
+    const f = await py("mw.py", `APIRouter(dependencies=[Depends(verify_token)])\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual(NONE);
+  });
+
+  it("lanes: SlowAPIMiddleware -> rateLimit, ValidationMiddleware -> validation, none -> all false", async () => {
+    const rate = await py("mw.py", `app.add_middleware(SlowAPIMiddleware)\n`);
+    const val = await py("mw.py", `app.add_middleware(ValidationMiddleware)\n`);
+    const none = await py("mw.py", `app.add_middleware(GZipMiddleware)\n`);
+    expect(extractPythonFileMiddlewareAst(rate.tree!)).toEqual({
+      hasAuth: false, hasValidation: false, hasRateLimit: true,
+    });
+    expect(extractPythonFileMiddlewareAst(val.tree!)).toEqual({
+      hasAuth: false, hasValidation: true, hasRateLimit: false,
+    });
+    expect(extractPythonFileMiddlewareAst(none.tree!)).toEqual(NONE);
+  });
+
+  it("a validation-only before_request hook sets validation, never auth (lanes independent)", async () => {
+    const f = await py("mw.py", `@app.before_request\ndef validate_payload():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual({
+      hasAuth: false, hasValidation: true, hasRateLimit: false,
+    });
+  });
+
+  it("empty and comments-only files are all false", async () => {
+    const empty = await py("mw.py", ``);
+    const comments = await py("mw.py", `# just a comment\n# another\n`);
+    expect(extractPythonFileMiddlewareAst(empty.tree!)).toEqual(NONE);
+    expect(extractPythonFileMiddlewareAst(comments.tree!)).toEqual(NONE);
+  });
+
+  it("CRITICAL: a per-route @login_required is NOT a file-level auth bless (the regex over-bless the AST kills)", async () => {
+    const f = await py("mw.py",
+      `@app.post("/x")\n` +
+      `@login_required\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual(NONE);
+  });
+});
+
+describe("receiver-scoped middleware inheritance (via extractPythonRoutesAst)", () => {
+  it("a before_request on admin_bp blesses the admin route but NOT a co-located public_bp route", async () => {
+    const f = await py("mixed.py",
+      `@admin_bp.before_request\n` +
+      `def require_login():\n` +
+      `    return None\n\n` +
+      `@admin_bp.route("/users", methods=["POST"])\n` +
+      `def create_user():\n` +
+      `    return {}\n\n` +
+      `@public_bp.route("/webhook", methods=["POST"])\n` +
+      `def webhook():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/users auth=true",
+      "/webhook auth=false",
+    ]);
+    // File-level OR is unchanged public shape: the file DOES have auth middleware.
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(true);
+  });
+
+  it("a FastAPI constructor dependency on admin_router blesses only its routes, not public_router's", async () => {
+    const f = await py("routers.py",
+      `admin_router = APIRouter(dependencies=[Depends(get_current_user)])\n` +
+      `public_router = APIRouter()\n\n` +
+      `@admin_router.post("/admin")\n` +
+      `def admin_op():\n` +
+      `    return {}\n\n` +
+      `@public_router.post("/public")\n` +
+      `def public_op():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/admin auth=true",
+      "/public auth=false",
+    ]);
+  });
+
+  it("an @app.before_request hook is file-wide: a blueprint route inherits it", async () => {
+    const f = await py("appwide.py",
+      `@app.before_request\n` +
+      `def require_login():\n` +
+      `    return None\n\n` +
+      `@orders_bp.route("/x", methods=["POST"])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+  });
+
+  it("a @bp.before_app_request hook is app-wide: an app route inherits it", async () => {
+    const f = await py("beforeapp.py",
+      `@bp.before_app_request\n` +
+      `def require_login():\n` +
+      `    return None\n\n` +
+      `@app.post("/x")\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
   });
 });

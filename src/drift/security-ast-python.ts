@@ -35,7 +35,7 @@
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
-import type { RouteInfo } from "./security-consistency.js";
+import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
 
 // Route-registration attribute names on a router-like receiver.
 const ROUTE_METHODS = new Set(["route", "get", "post", "put", "patch", "delete", "api_route"]);
@@ -101,10 +101,37 @@ const DEPENDS_VETO_SEGMENTS = new Set([
 const VAL_NAMES = /(?:pydantic|validate|validator|schema|serializer|marshmallow)/i;
 const RATE_NAMES = /(?:rate_?limit|throttle|limiter|slowapi|slowdown)/i;
 
+// Two-tier segment lexicon for before_request / before_app_request HOOK HANDLER
+// names (see nameHasAuthToken). Deliberately stricter than the file-level regex,
+// which blesses ANY before_request. tier 1: a CORE segment alone (an unambiguous
+// authn word). tier 2: an ENFORCEMENT verb segment AND a SUBJECT segment anywhere
+// in the name. A lone SUBJECT (login / token / user) or a lone ENFORCE verb never
+// blesses: track_login_metrics, verify_content_type, and set_csrf_token are real
+// hooks that do not authenticate. Whole-segment matching makes substring blessing
+// structurally impossible.
+const AUTH_CORE_SEGMENTS = new Set(["auth", "authenticate", "authenticated"]);
+const AUTH_ENFORCE_SEGMENTS = new Set([
+  "require", "required", "requires", "verify", "verified", "ensure",
+  "protect", "protected", "restrict", "restricted",
+]);
+const AUTH_SUBJECT_SEGMENTS = new Set([
+  "login", "token", "user", "users", "session", "jwt", "permission",
+  "permissions", "role", "roles", "admin", "credentials",
+]);
+// Middleware CLASS-NAME auth segments for app.add_middleware(X). Matched by WHOLE
+// CamelCase/underscore segment on the class name ONLY (never the whole arg text):
+// AuthMiddleware and AuthenticationMiddleware bless, AuthorTrackingMiddleware does
+// not (the segment "author" is not "auth"). Same discipline as the decorators and
+// Depends targets.
+const MIDDLEWARE_AUTH_SEGMENTS = new Set([
+  "auth", "authentication", "authenticate", "authenticated", "jwt", "oauth", "oauth2", "bearer",
+]);
+
 export const SECURITY_AST_PY = {
   ROUTE_METHODS, HTTP_VERBS, MUTATING_VERBS, ROUTER_RECEIVER, ROUTER_CONSTRUCTORS,
   AUTH_DECORATORS, DEPENDS_AUTH_SEGMENTS, DEPENDS_AUTH_PAIRS, DEPENDS_VETO_SEGMENTS,
-  VAL_NAMES, RATE_NAMES,
+  VAL_NAMES, RATE_NAMES, AUTH_CORE_SEGMENTS, AUTH_ENFORCE_SEGMENTS,
+  AUTH_SUBJECT_SEGMENTS, MIDDLEWARE_AUTH_SEGMENTS,
 };
 
 /** Value of a Python string-ish path argument with quotes AND prefixes stripped.
@@ -263,6 +290,22 @@ function nameSegments(name: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+/** Two-tier segment auth check for hook handler names (see the constants block):
+ *  tier 1 = a CORE segment alone (check_auth, authenticate); tier 2 = an
+ *  ENFORCEMENT verb segment plus a SUBJECT segment anywhere in the name
+ *  (require_login, login_required, verify_token, ensure_user). Standalone
+ *  login/token/verify segments stay FALSE: track_login_metrics,
+ *  verify_content_type, and set_csrf_token are real hooks that do not
+ *  authenticate. Substring blessing is structurally impossible (segments). */
+function nameHasAuthToken(name: string): boolean {
+  const segs = nameSegments(name);
+  if (segs.some((s) => AUTH_CORE_SEGMENTS.has(s))) return true;
+  return (
+    segs.some((s) => AUTH_ENFORCE_SEGMENTS.has(s)) &&
+    segs.some((s) => AUTH_SUBJECT_SEGMENTS.has(s))
+  );
+}
+
 /** Segment-matched auth verdict for a resolved dependency name (see the constants
  *  block): hit on a single DEPENDS_AUTH_SEGMENTS segment or an adjacent
  *  DEPENDS_AUTH_PAIRS pair; ANY DEPENDS_VETO_SEGMENTS segment cancels the hit
@@ -375,9 +418,129 @@ function routeCallHasAuthDependency(call: SyntaxNode): boolean {
   return value ? callsWithAuthDependency(value) : false;
 }
 
+/** Middleware scopes for one python file. Python file-level middleware attaches
+ *  to a RECEIVER (an app/blueprint/router variable), so inheritance must be
+ *  receiver-scoped: `global` holds app-scoped middleware (receivers named
+ *  app/application, plus before_app_request hooks, which Flask runs app-wide);
+ *  `byReceiver` holds named blueprint/router scopes keyed by the exact
+ *  receiver/variable name. A file-granular OR would bless a public blueprint
+ *  co-located with a guarded admin blueprint: a false bless that also silences
+ *  both vote layers for the file. */
+interface PyMiddlewareScopes {
+  global: FileMiddleware;
+  byReceiver: Map<string, FileMiddleware>;
+}
+
+const APP_SCOPED_RECEIVER = /^(?:app|application)$/;
+
+function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
+  const scopes: PyMiddlewareScopes = {
+    global: { hasAuth: false, hasValidation: false, hasRateLimit: false },
+    byReceiver: new Map(),
+  };
+  const mark = (receiver: string, appWide: boolean, lane: keyof FileMiddleware) => {
+    if (appWide || APP_SCOPED_RECEIVER.test(receiver)) {
+      scopes.global[lane] = true;
+      return;
+    }
+    const entry =
+      scopes.byReceiver.get(receiver) ??
+      { hasAuth: false, hasValidation: false, hasRateLimit: false };
+    entry[lane] = true;
+    scopes.byReceiver.set(receiver, entry);
+  };
+  const routerNames = collectRouterNames(tree.rootNode);
+  const gated = (r: string | null): r is string =>
+    r !== null && (routerNames.has(r) || ROUTER_RECEIVER.test(r));
+
+  for (const dd of tree.rootNode.descendantsOfType("decorated_definition")) {
+    if (!dd || dd.hasError) continue;
+    const definition = dd.childForFieldName("definition");
+    if (!definition || definition.type !== "function_definition") continue;
+    const fnName = definition.childForFieldName("name")?.text ?? "";
+    for (const dec of dd.namedChildren) {
+      if (!dec || dec.type !== "decorator") continue;
+      const expr = dec.namedChild(0);
+      // @app.before_request is a bare attribute decorator; @app.before_request()
+      // with parens is a call whose function is the attribute. Handle both.
+      const attr =
+        expr?.type === "attribute"
+          ? expr
+          : expr?.type === "call" && expr.childForFieldName("function")?.type === "attribute"
+            ? expr.childForFieldName("function")
+            : null;
+      if (!attr) continue;
+      const hook = attr.childForFieldName("attribute")?.text ?? "";
+      if (hook !== "before_request" && hook !== "before_app_request") continue;
+      const receiver = receiverName(attr.childForFieldName("object"));
+      if (!gated(receiver)) continue;
+      const appWide = hook === "before_app_request";
+      if (nameHasAuthToken(fnName)) mark(receiver, appWide, "hasAuth");
+      if (RATE_NAMES.test(fnName)) mark(receiver, appWide, "hasRateLimit");
+      if (VAL_NAMES.test(fnName)) mark(receiver, appWide, "hasValidation");
+    }
+  }
+
+  for (const call of tree.rootNode.descendantsOfType("call")) {
+    if (!call || call.hasError) continue;
+    const fn = call.childForFieldName("function");
+    if (!fn) continue;
+    if (fn.type === "attribute" && fn.childForFieldName("attribute")?.text === "add_middleware") {
+      const receiver = receiverName(fn.childForFieldName("object"));
+      if (!gated(receiver)) continue;
+      const first = call.childForFieldName("arguments")?.namedChild(0);
+      const mwName =
+        first && (first.type === "identifier" || first.type === "attribute") ? first.text : "";
+      // Middleware CLASS NAME only (never the whole arg text), matched by WHOLE
+      // CamelCase/underscore segment: AuthMiddleware and AuthenticationMiddleware
+      // bless, AuthorTrackingMiddleware does not (the segment "author" is not
+      // "auth"; same discipline as decorators and Depends targets).
+      if (nameSegments(mwName).some((s) => MIDDLEWARE_AUTH_SEGMENTS.has(s))) {
+        mark(receiver, false, "hasAuth");
+      }
+      if (/[Ll]imit/.test(mwName) || RATE_NAMES.test(mwName)) mark(receiver, false, "hasRateLimit");
+      if (/[Vv]alid/.test(mwName)) mark(receiver, false, "hasValidation");
+    }
+  }
+
+  // Constructor dependencies scope to the ASSIGNED variable name
+  // (admin_router = APIRouter(dependencies=[...])). An unassigned or destructured
+  // constructor has no resolvable scope and blesses NOTHING (never-false-bless: a
+  // miss is safe). app = FastAPI(dependencies=[...]) lands in the global scope via
+  // APP_SCOPED_RECEIVER. Cross-receiver app.include_router() inheritance is a
+  // documented recall gap (over-flag, never a bless).
+  for (const asn of tree.rootNode.descendantsOfType("assignment")) {
+    if (!asn || asn.hasError) continue;
+    const left = asn.childForFieldName("left");
+    const right = asn.childForFieldName("right");
+    if (!left || left.type !== "identifier" || !right || right.type !== "call") continue;
+    const fn = right.childForFieldName("function");
+    if (!fn || fn.type !== "identifier") continue;
+    if (fn.text !== "APIRouter" && fn.text !== "FastAPI") continue;
+    const value = kwargValue(right, "dependencies");
+    if (value && callsWithAuthDependency(value)) mark(left.text, false, "hasAuth");
+  }
+  return scopes;
+}
+
+/** File-level OR of every scope: the seam-2 index entry (public FileMiddleware
+ *  shape, unchanged) and the regex fallback's inheritance input. Route-level
+ *  inheritance on the AST path does NOT read this OR; extractPythonRoutesAst
+ *  consumes collectPyMiddleware directly (receiver-scoped). */
+export function extractPythonFileMiddlewareAst(tree: Tree): FileMiddleware {
+  const scopes = collectPyMiddleware(tree);
+  const all = [scopes.global, ...scopes.byReceiver.values()];
+  return {
+    hasAuth: all.some((s) => s.hasAuth),
+    hasValidation: all.some((s) => s.hasValidation),
+    hasRateLimit: all.some((s) => s.hasRateLimit),
+  };
+}
+
 export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const routerNames = collectRouterNames(tree.rootNode);
+  const scopes = collectPyMiddleware(tree);
   for (const dd of tree.rootNode.descendantsOfType("decorated_definition")) {
     // Error recovery can merge adjacent handlers' decorators into one dd;
     // blessing (or even extracting) across that boundary is forbidden.
@@ -426,9 +589,17 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
         hasAuth:
           authDecoratorRows.some((row) => row > dec.startPosition.row) ||
           paramAuth ||
-          routeCallHasAuthDependency(route.call),
-        hasValidation: perVal,
-        hasRateLimit: perRate,
+          routeCallHasAuthDependency(route.call) ||
+          scopes.global.hasAuth ||
+          (scopes.byReceiver.get(route.receiver)?.hasAuth ?? false),
+        hasValidation:
+          perVal ||
+          scopes.global.hasValidation ||
+          (scopes.byReceiver.get(route.receiver)?.hasValidation ?? false),
+        hasRateLimit:
+          perRate ||
+          scopes.global.hasRateLimit ||
+          (scopes.byReceiver.get(route.receiver)?.hasRateLimit ?? false),
         hasErrorHandler: false, // write-only field; JS AST extractor hard-codes false too
       });
     }
