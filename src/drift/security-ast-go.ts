@@ -56,24 +56,22 @@
  * INVARIANT SCOPE: the never-false-bless guarantee (never mark an unauthed
  * route as authed) holds on THIS AST path only. A file with a parse error
  * anywhere (`tree.rootNode.hasError`) is routed whole to the existing regex
- * extractor, which keeps its own legacy behavior unchanged. Even on a clean
- * tree, this module never emits `hasAuth: true` in this task: auth
- * recognition is Task 3, so every route below carries `hasAuth: false`
- * unconditionally, which can only under-report auth, never over-report it.
+ * extractor, which keeps its own legacy behavior unchanged. Per-route auth
+ * recognition (Task 3) now emits `hasAuth: true` ONLY when a middleware-position
+ * argument resolves to an in-file body that VERIFIABLY rejects (401-family, or a
+ * credential-guarded 403); every opaque, imported, unreadable, or veto case
+ * resolves `hasAuth: false` (plus `authUnsureHook` when auth-flavored-opaque), so
+ * a wrong answer can only under-report auth, never over-report it. Scope
+ * inheritance from Use/group middleware is Task 4 (still unwired).
  *
- * KNOWN FALSE-BLESS EXPOSURE (carried forward from the Integration contract,
- * not yet reachable from this module since `hasAuth` is hard-coded false
- * here): once Task 3 lands per-route auth recognition, a handful of
- * recognized-but-non-enforcing names are expected to remain a residual
- * exposure by design (matching the Python module's own documented
- * exposures): a custom type or middleware literally named `AuthContext`
- * that carries identity without enforcing it, an `apiKeyRotator` helper
- * that manages keys without gating a request, and single-argument DI
- * constructors whose one parameter happens to read as auth-flavored
- * without the constructor itself checking anything. None of these can
- * fire in Task 1: they are named here so the eventual auth pass documents
- * the same exposure the Python module already accepted, rather than
- * silently reintroducing it.
+ * RESIDUAL EXPOSURE (matching the Python module's own accepted exposures): a
+ * recognized-but-non-enforcing name whose in-file body actually rejects will
+ * bless — e.g. a middleware named to imply auth that reads a credential and 401s
+ * for an unrelated reason. The pre-LOCKED name-only plan additionally carried a
+ * chi `jwtauth.Verifier`, config-object-through-wrap, and arity-1-DI false-bless;
+ * those are CLOSED here by requiring a readable rejecting body to bless and by
+ * restricting wrap recursion to transparent/unnamed outers (see the Task 3
+ * section below).
  *
  * PINNED RECALL GAPS (measured, never a false-bless; each is a route this
  * module will not find rather than one it misclassifies):
@@ -115,19 +113,19 @@
  * excludes them: neither verb is ever mutating, so omission can only
  * under-report, never bless.
  *
- * OPEN QUESTIONS FOR SIGN-OFF (deliberate divergences the eventual full
- * module will carry; not reachable from this module's code yet, since Tasks
- * 1-2 only recognize routes and resolve methods, never auth or middleware
- * scope; named here as a preview so each lands as an explicit, reviewed
- * decision rather than an implicit one when its owning task ships):
- *   - Dropped in-body validation scanning, position-aware `Use` resolution,
- *     conditional-`Use` skip, config-not-vetoed, and an extended veto set
- *     (Task 4 middleware scope): none of this module's code reads middleware
- *     at all yet.
- *   - Arity-1 wrap recursion and pure-selector name resolution for auth
- *     helpers (Task 3): out of scope; `hasAuth` is unconditionally false.
- *   - Segment-matched validation/rate-limit lanes (Task 4): out of scope;
- *     `hasValidation`/`hasRateLimit` are unconditionally false.
+ * OPEN QUESTIONS FOR SIGN-OFF (deliberate divergences named so each lands as an
+ * explicit, reviewed decision):
+ *   - Position-aware `Use` / group-scope resolution, conditional-`Use` skip, and
+ *     scope inheritance onto routes (Task 4 middleware scope): this module reads
+ *     only PER-ROUTE middleware positions today, never file/group scope.
+ *   - Arity-1 wrap recursion and pure-selector name resolution for auth helpers
+ *     (Task 3): IMPLEMENTED below. Recursion descends single-argument calls only,
+ *     through a transparent/unnamed outer, and a bare handler position is never
+ *     read (body-first is middleware-position-only).
+ *   - Validation/rate-limit lanes (Task 3) are per-route, whole-segment,
+ *     NAME-based (body analysis is auth-lane only); file/group-scoped lanes are
+ *     Task 4. A handler body calling `c.ShouldBindJSON` does NOT set
+ *     `hasValidation` (the regex path's text window is dropped on the AST path).
  *
  * Route-registration scope covered so far: Gin/Echo/chi verb-selector calls
  * (`GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`Any`) on a structurally- or
@@ -142,6 +140,17 @@
 
 import type { Tree, SyntaxNode } from "../core/types.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
+
+/** A middleware body's three-way behavioral signal. 401-family blesses alone; a
+ *  403 blesses only inside a credential-guarded reject; a bare/uncorroborated 403,
+ *  a 404/500, or a 200 write is neither reject nor opaque (keeps the hedge
+ *  meaningful). Mirrors the Python `BodySignal`. */
+export type GoBodySignal = "reject" | "none" | "opaque";
+/** Precedence outcome over `GoBodySignal`. `unsure` is not-authed INTERNALLY (it
+ *  never sets hasAuth) — it only records the middleware name so a renderer can
+ *  hedge. NEVER-FALSE-BLESS: every ambiguous/opaque/unreadable branch resolves to
+ *  `not-auth` or `unsure`, never `auth`. */
+export type GoAuthOutcome = "auth" | "not-auth" | "unsure";
 
 // Verbs a Gin/Echo/chi verb-selector call may register, keyed by the exact
 // field-name spelling each framework uses: Gin and Echo use ALL-CAPS
@@ -483,13 +492,601 @@ function splitServeMuxPattern(raw: string): { method: string | null; path: strin
   return { method: m[1], path: m[2] };
 }
 
+// ─── Body-first auth classification (Task 3) ─────────────────────────────────
+//
+// Classifies a MIDDLEWARE/wrapper argument by what its BODY does, not what its
+// name suggests. `bodyAuthSignatureGo` walks the effective body (plus ONE hop
+// into a same-file helper) and returns "reject" | "none" | "opaque";
+// `classifyGoMiddlewareAuth` layers the LOCKED five-rule precedence on top and
+// produces the THREE-WAY "auth" | "not-auth" | "unsure".
+//
+// LOCKED OWNER DECISION: blessing REQUIRES a verifiable reject in a READABLE
+// in-file body (rule 2). There is NO name-only bless — an opaque body (rule 4)
+// and an unreadable/imported body (rule 5) resolve `goNameIsFlavored ? "unsure"
+// : "not-auth"`, NEVER "auth". A veto segment (rule 1) beats even a real body
+// reject. So a package-qualified selector (middleware.AuthMiddleware) is used
+// ONLY to RESOLVE an in-file def's body; unresolved -> opaque/name-tier.
+//
+// NEVER-FALSE-BLESS: every ambiguous/opaque/unreadable case resolves to
+// not-auth or unsure. Scope of body-first: it upgrades MIDDLEWARE positions
+// (per-route middle args, With links, wrap callees) — never a route's own
+// handler target. Wrap recursion is single-argument only (arity >= 2 is Go DI,
+// never classified), depth-capped, and descends ONLY through a
+// recursion-transparent observability outer (logRequests / metricsWrap) or an
+// UNNAMED outer; a SUBSUMING-veto outer (optionalAuth / SkipAuth /
+// DisableAuthInDev / parseJWT) HALTS recursion so it cannot bless an inner CORE
+// name. This restriction closes the chi jwtauth.Verifier / config-object /
+// arity-1-DI false-bless exposures the pre-LOCKED name-only plan carried.
+
+const GO_STATUS_CONSTS = new Map<string, "401" | "403" | "404" | "500">([
+  ["StatusUnauthorized", "401"], ["StatusForbidden", "403"],
+  ["StatusNotFound", "404"], ["StatusInternalServerError", "500"],
+]);
+// Auth-DISABLING / non-enforcing name segments that CANCEL a flavor and, at
+// rule 1, resolve not-auth even over a real body reject (blessing a disabler
+// inverts reality). Whole-segment matched. "logged" is NOT "log" (EnsureLoggedIn
+// stays flavored). "login" vetoes the login-endpoint handler idiom (authLogin).
+const GO_AUTH_VETO_SEGMENTS = new Set([
+  "skip", "bypass", "mock", "disable", "disabled", "optional", "noop", "fake",
+  "stub", "dummy", "test", "dev", "insecure", "parse", "handler", "login",
+  "log", "logger", "logging", "metrics", "stats",
+]);
+// The subset of vetoes that INVERT the auth they wrap: they HALT wrap recursion
+// (optionalAuth(requireAuth) must not bless on the inner name).
+const GO_SUBSUMING_VETO_SEGMENTS = new Set([
+  "skip", "bypass", "mock", "disable", "disabled", "optional", "noop", "fake",
+  "stub", "dummy", "insecure", "parse",
+]);
+// Observability wrappers we recurse THROUGH to find a real inner auth wrap
+// (logRequests(requireAuth(h)) — observability does not subsume auth).
+const GO_TRANSPARENT_WRAP_SEGMENTS = new Set([
+  "log", "logger", "logging", "metrics", "stats", "audit", "trace", "timing", "recover",
+]);
+// Flavored segments: drive UNSURE-vs-NOT-AUTH for opaque/unreadable bodies (never
+// a bless). "auth2" catches OAuth2 (which segments to [o, auth2, ...]).
+const GO_AUTH_SEGMENTS = new Set([
+  "auth", "auth2", "authenticate", "authenticated", "authentication",
+  "authorize", "authorization", "jwt", "oauth", "oauth2", "bearer",
+  "session", "token", "user", "users", "credential", "credentials",
+  "principal", "identity",
+]);
+// Adjacent-segment flavored pairs (enforce verb + subject), for names whose
+// individual segments are boring but whose pair reads as auth.
+const GO_AUTH_PAIRS = new Set([
+  "logged in", "require auth", "require login", "require user", "require role",
+  "require session", "ensure user", "ensure auth", "ensure session",
+  "verify token", "verify user", "verify session", "token required",
+  "check auth", "check session", "is authenticated", "validate token",
+]);
+// Segments that make an UNRESOLVABLE callee opaque-hint (auth-flavored enough
+// that "we cannot see what it does" resolves opaque, never a bless).
+const GO_OPAQUE_HINT_SEGMENTS = new Set([
+  ...GO_AUTH_SEGMENTS, "check", "confirm", "guard", "verify", "require",
+  "ensure", "protect", "restrict",
+]);
+// Credential-surface read shapes. GetHeader/Cookie match on ANY receiver; a bare
+// `Get` only when its operand is one of these receivers (excludes Query().Get,
+// cache.Get, store.Get). The string key must hit GO_CREDENTIAL_KEY_SEGMENTS and
+// NOT GO_CREDENTIAL_KEY_VETO (csrf/xsrf/agent — X-CSRF-Token contains "token").
+const GO_CRED_READ_FIELDS = new Set(["GetHeader", "Cookie"]);
+const GO_CRED_GET_RECEIVERS = new Set(["session", "ctx", "c", "g"]);
+const GO_CREDENTIAL_KEY_SEGMENTS = new Set([
+  "user", "uid", "token", "jwt", "auth", "authorization", "login",
+  "credentials", "session", "bearer", "cookie", "sid",
+]);
+const GO_CREDENTIAL_KEY_VETO = new Set(["csrf", "xsrf", "agent"]);
+// Gin write methods whose arg0 is a status code (bless only WITH corroboration).
+const GO_WRITE_STATUS_FIELDS = new Set([
+  "JSON", "String", "XML", "Data", "IndentedJSON", "HTML", "YAML", "ProtoBuf",
+  "SecureJSON", "AsciiJSON", "PureJSON",
+]);
+// Validation / rate-limit lane segments (whole-segment; no veto set — the
+// discipline exists to stop substring smuggling, not optionality).
+const GO_VAL_SEGMENTS = new Set(["validate", "validator", "validation", "sanitize", "schema"]);
+const GO_RATE_SEGMENTS = new Set(["ratelimit", "ratelimiter", "limiter", "throttle", "throttler"]);
+const GO_RATE_PAIRS = new Set(["rate limit", "rate limiter", "rate limiting"]);
+
+const CALL_EXPR_T = new Set(["call_expression"]);
+const RETURN_T = new Set(["return_statement"]);
+const IF_T = new Set(["if_statement"]);
+
+/** Non-null named children of a node. */
+function goNamed(n: SyntaxNode | null | undefined): SyntaxNode[] {
+  return n ? n.namedChildren.filter((c): c is SyntaxNode => c !== null) : [];
+}
+
+/** Lowercase segments of an identifier, split on non-alphanumeric AND CamelCase
+ *  boundaries. Copied VERBATIM from security-ast-python.ts:628 (whole-segment
+ *  matching makes substring blessing structurally impossible). */
+function nameSegments(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((s) => s.length > 0);
+}
+
+/** "401"|"403"|"404"|"500"|"other"|null. An int_literal OR the http.StatusXxx
+ *  selector; NEVER guesses a bare local const (returns null so the caller treats
+ *  it as unreadable/opaque). */
+function goRejectStatus(n: SyntaxNode | null): "401" | "403" | "404" | "500" | "other" | null {
+  if (!n) return null;
+  if (n.type === "int_literal") {
+    const t = n.text;
+    return t === "401" || t === "403" || t === "404" || t === "500" ? t : "other";
+  }
+  if (n.type === "selector_expression") {
+    const op = n.childForFieldName("operand");
+    const field = n.childForFieldName("field")?.text;
+    if (op?.type === "identifier" && op.text === "http" && field) {
+      return GO_STATUS_CONSTS.get(field) ?? "other";
+    }
+  }
+  return null;
+}
+
+/** Descendants of `node` of one of `types`, NOT descending into nested
+ *  `func_literal` subtrees (a reject in a goroutine/defer/callback closure is not
+ *  executed inline). Pre-order; the root is never yielded. Mirror of
+ *  security-ast-python.ts:813 prunedDescendants. */
+function goPrunedDescendants(node: SyntaxNode, types: Set<string>): SyntaxNode[] {
+  const out: SyntaxNode[] = [];
+  const visit = (n: SyntaxNode) => {
+    for (const child of n.namedChildren) {
+      if (!child || child.type === "func_literal") continue;
+      if (types.has(child.type)) out.push(child);
+      visit(child);
+    }
+  };
+  visit(node);
+  return out;
+}
+
+/** True when a string key reads as a credential (segment hit, veto cancels). */
+function goCredKeyIsCredential(key: string): boolean {
+  const segs = nameSegments(key);
+  if (segs.some((s) => GO_CREDENTIAL_KEY_VETO.has(s))) return false;
+  return segs.some((s) => GO_CREDENTIAL_KEY_SEGMENTS.has(s));
+}
+
+/** True when a call structurally reads a credential surface: a GetHeader/Cookie
+ *  call (any receiver) or a bare `Get` on a session/ctx/c/g receiver, whose arg0
+ *  string key is credential-flavored and NOT csrf/xsrf/agent. */
+function goIsCredentialReadCall(call: SyntaxNode): boolean {
+  const fn = call.childForFieldName("function");
+  if (!fn || fn.type !== "selector_expression") return false;
+  const field = fn.childForFieldName("field")?.text ?? "";
+  const arg0 = call.childForFieldName("arguments")?.namedChild(0) ?? null;
+  const key = arg0 ? goStringText(arg0) : null;
+  if (key === null) return false;
+  if (GO_CRED_READ_FIELDS.has(field)) return goCredKeyIsCredential(key);
+  if (field === "Get") {
+    const op = fn.childForFieldName("operand");
+    if (op?.type === "identifier" && GO_CRED_GET_RECEIVERS.has(op.text)) {
+      return goCredKeyIsCredential(key);
+    }
+  }
+  return false;
+}
+
+/** True when an unresolvable callee name is auth-flavored enough to be opaque. */
+function goNameHasHint(name: string): boolean {
+  return nameSegments(name).some((s) => GO_OPAQUE_HINT_SEGMENTS.has(s));
+}
+
+/** True when a write-status call (c.JSON(401,...), http.Error(...,401),
+ *  w.WriteHeader(401)) is corroborated by a following return / Abort sibling in
+ *  the same block — a non-self-aborting 401 write that keeps calling next is NOT
+ *  a reject (never-false-bless). */
+function goCallCorroborated(call: SyntaxNode): boolean {
+  let stmt: SyntaxNode = call;
+  while (stmt.parent && stmt.parent.type !== "block") stmt = stmt.parent;
+  const block = stmt.parent;
+  if (!block) return false;
+  const sibs = goNamed(block);
+  const idx = sibs.findIndex((s) => s.equals(stmt));
+  if (idx < 0) return false;
+  for (let i = idx + 1; i < sibs.length; i++) {
+    const s = sibs[i];
+    if (s.type === "return_statement") return true;
+    if (s.type === "expression_statement") {
+      const inner = s.namedChild(0);
+      const f = inner?.type === "call_expression" ? inner.childForFieldName("function") : null;
+      if (f?.type === "selector_expression" && (f.childForFieldName("field")?.text ?? "").startsWith("Abort")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** True when a composite_literal is an echo.HTTPError{Code: 401}. */
+function goCompositeIs401Error(composite: SyntaxNode): boolean {
+  let typeText = "";
+  let lv: SyntaxNode | null = null;
+  for (const c of composite.namedChildren) {
+    if (!c) continue;
+    if (c.type === "literal_value") lv = c;
+    else typeText = c.text;
+  }
+  if (!/HTTPError$/.test(typeText) || !lv) return false;
+  for (const ke of goNamed(lv)) {
+    if (ke.type !== "keyed_element") continue;
+    const key = ke.namedChild(0);
+    const valEl = ke.namedChild(1);
+    if ((key?.text ?? "") === "Code" && goRejectStatus(valEl?.namedChild(0) ?? valEl ?? null) === "401") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True when a subtree contains a 403 self-aborting reject. */
+function goSubtreeHas403Reject(node: SyntaxNode): boolean {
+  for (const call of goPrunedDescendants(node, CALL_EXPR_T)) {
+    if (call.hasError) continue;
+    const fn = call.childForFieldName("function");
+    if (fn?.type !== "selector_expression") continue;
+    const field = fn.childForFieldName("field")?.text ?? "";
+    if (field === "AbortWithStatus" || field === "AbortWithStatusJSON") {
+      if (goRejectStatus(call.childForFieldName("arguments")?.namedChild(0) ?? null) === "403") return true;
+    }
+  }
+  return false;
+}
+
+/** Local names bound to a structural credential read (`tok := c.GetHeader(...)`),
+ *  pruned of nested closures. Lets `tok == ""` count as a credential guard. */
+function goCredentialBoundLocals(body: SyntaxNode): Set<string> {
+  const bound = new Set<string>();
+  for (const decl of goPrunedDescendants(body, new Set(["short_var_declaration", "assignment_statement"]))) {
+    if (decl.hasError) continue;
+    const left = decl.childForFieldName("left");
+    const right = decl.childForFieldName("right");
+    if (left?.type !== "expression_list" || right?.type !== "expression_list") continue;
+    const lc = goNamed(left);
+    const rc = goNamed(right);
+    for (let i = 0; i < lc.length && i < rc.length; i++) {
+      if (lc[i].type === "identifier" && rc[i].type === "call_expression" && goIsCredentialReadCall(rc[i])) {
+        bound.add(lc[i].text);
+      }
+    }
+  }
+  return bound;
+}
+
+/** STRICT credential read for the guarded-403 BLESS gate: the if-INITIALIZER (Go
+ *  `if _, err := v(c.GetHeader(...)); ...` idiom) or CONDITION must structurally
+ *  read a credential surface, or reference a credential-bound local. A vetoed key
+ *  (X-CSRF-Token) never qualifies. */
+function goGuardHasCredentialRead(
+  init: SyntaxNode | null, cond: SyntaxNode | null, boundLocals: Set<string>,
+): boolean {
+  for (const root of [init, cond]) {
+    if (!root) continue;
+    const calls = goPrunedDescendants(root, CALL_EXPR_T);
+    if (root.type === "call_expression") calls.unshift(root);
+    if (calls.some((c) => !c.hasError && goIsCredentialReadCall(c))) return true;
+    if (boundLocals.size > 0) {
+      const ids = goPrunedDescendants(root, new Set(["identifier"]));
+      if (root.type === "identifier") ids.unshift(root);
+      if (ids.some((id) => boundLocals.has(id.text))) return true;
+    }
+  }
+  return false;
+}
+
+interface GoBodySignals {
+  reject401: boolean;
+  reject403Guarded: boolean;
+  opaqueHint: boolean;
+  credentialRead: boolean;
+}
+
+/** One EFFECTIVE body's direct signals; `hop` = whether a same-file bare-callee
+ *  helper may be followed once. reject401 blesses ALONE; reject403Guarded blesses
+ *  only WITH a credential-guarded 403. Nested func_literals are pruned throughout
+ *  (a reject in a non-returned closure never blesses). */
+function scanGoBody(body: SyntaxNode, defs: Map<string, SyntaxNode | null>, hop: boolean): GoBodySignals {
+  const out: GoBodySignals = { reject401: false, reject403Guarded: false, opaqueHint: false, credentialRead: false };
+  const merge = (s: GoBodySignals) => {
+    out.reject401 ||= s.reject401;
+    out.reject403Guarded ||= s.reject403Guarded;
+    out.opaqueHint ||= s.opaqueHint;
+    out.credentialRead ||= s.credentialRead;
+  };
+
+  for (const call of goPrunedDescendants(body, CALL_EXPR_T)) {
+    if (call.hasError) continue;
+    const fn = call.childForFieldName("function");
+    const args = call.childForFieldName("arguments");
+    if (!out.credentialRead && goIsCredentialReadCall(call)) out.credentialRead = true;
+    if (fn?.type === "selector_expression") {
+      const field = fn.childForFieldName("field")?.text ?? "";
+      if (field === "AbortWithStatus" || field === "AbortWithStatusJSON") {
+        const st = goRejectStatus(args?.namedChild(0) ?? null);
+        if (st === "401") out.reject401 = true;
+        else if (st === null || st === "other") out.opaqueHint = true; // variable / unknown status
+        continue; // 403 via the guarded-if walk; 404/500 contribute nothing
+      }
+      if (GO_WRITE_STATUS_FIELDS.has(field)) {
+        if (goRejectStatus(args?.namedChild(0) ?? null) === "401" && goCallCorroborated(call)) out.reject401 = true;
+        continue;
+      }
+      if (field === "Error" && fn.childForFieldName("operand")?.text === "http") {
+        const named = goNamed(args);
+        if (goRejectStatus(named[named.length - 1] ?? null) === "401" && goCallCorroborated(call)) out.reject401 = true;
+        continue;
+      }
+      if (field === "WriteHeader") {
+        if (goRejectStatus(args?.namedChild(0) ?? null) === "401" && goCallCorroborated(call)) out.reject401 = true;
+        continue;
+      }
+      continue; // GetHeader/Cookie handled above; Next/ServeHTTP = pass path
+    }
+    if (fn?.type === "identifier") {
+      const name = fn.text;
+      if (defs.has(name)) {
+        const def = defs.get(name) ?? null;
+        if (def && hop) {
+          const hopBody = resolveEffectiveBody(def, defs);
+          if (hopBody) merge(scanGoBody(hopBody, defs, false));
+        } else if (!def && goNameHasHint(name)) {
+          out.opaqueHint = true; // duplicate same-name def: unresolvable + flavored
+        }
+        continue; // resolvable at hop=false = cycle guard, contribute nothing
+      }
+      if (goNameHasHint(name)) out.opaqueHint = true; // unresolvable flavored callee
+    }
+  }
+
+  // Returned rejects: return echo.NewHTTPError(401) / c.NoContent(401) /
+  // &echo.HTTPError{Code:401} / echo.HTTPError{Code:401}.
+  for (const ret of goPrunedDescendants(body, RETURN_T)) {
+    if (ret.hasError) continue;
+    const exprList = ret.namedChild(0);
+    if (exprList?.type !== "expression_list") continue;
+    const val = exprList.namedChild(0);
+    if (!val) continue;
+    if (val.type === "call_expression") {
+      if (goRejectStatus(val.childForFieldName("arguments")?.namedChild(0) ?? null) === "401") out.reject401 = true;
+      continue;
+    }
+    const composite = val.type === "unary_expression" ? val.namedChild(0) : val;
+    if (composite?.type === "composite_literal" && goCompositeIs401Error(composite)) out.reject401 = true;
+  }
+
+  // Guarded 403: an `if <credential-condition>: ... <403 reject> ...`.
+  const boundLocals = goCredentialBoundLocals(body);
+  for (const ifs of goPrunedDescendants(body, IF_T)) {
+    if (ifs.hasError) continue;
+    const init = ifs.childForFieldName("initializer");
+    const cond = ifs.childForFieldName("condition");
+    const cons = ifs.childForFieldName("consequence");
+    if (cons && (init || cond) && goGuardHasCredentialRead(init, cond, boundLocals) && goSubtreeHas403Reject(cons)) {
+      out.reject403Guarded = true;
+    }
+  }
+
+  return out;
+}
+
+/** A middleware body's three-way behavioral signal. */
+export function bodyAuthSignatureGo(body: SyntaxNode, defs: Map<string, SyntaxNode | null>): GoBodySignal {
+  const s = scanGoBody(body, defs, true);
+  if (s.reject401 || s.reject403Guarded) return "reject";
+  if (s.opaqueHint || s.credentialRead) return "opaque";
+  return "none";
+}
+
+/** File-wide map of top-level function/method definitions by name; a name seen
+ *  more than once maps to null (duplicate: follow NEITHER). */
+export function collectGoFunctionDefs(root: SyntaxNode): Map<string, SyntaxNode | null> {
+  const defs = new Map<string, SyntaxNode | null>();
+  for (const def of root.descendantsOfType(["function_declaration", "method_declaration"])) {
+    if (!def || def.hasError) continue;
+    const name = def.childForFieldName("name")?.text; // identifier OR field_identifier
+    if (!name) continue;
+    defs.set(name, defs.has(name) ? null : def);
+  }
+  return defs;
+}
+
+/** The RESOLVED EFFECTIVE body of a function/method: through a single
+ *  return-of-closure (factory `func F() gin.HandlerFunc { return func(c){...} }`,
+ *  `return http.HandlerFunc(func(w,r){...})`) or a one-hop returned bare
+ *  identifier. NEVER prunes the returned handler closure (else mass false
+ *  not-auth); scanGoBody prunes FURTHER-nested closures inside it. */
+function resolveEffectiveBody(fnNode: SyntaxNode, defs: Map<string, SyntaxNode | null>): SyntaxNode | null {
+  const body = fnNode.childForFieldName("body");
+  if (!body) return null;
+  const stmts = goNamed(body);
+  if (stmts.length === 1 && stmts[0].type === "return_statement") {
+    const exprList = stmts[0].namedChild(0);
+    const val = exprList?.type === "expression_list" ? exprList.namedChild(0) : null;
+    if (val) {
+      if (val.type === "func_literal") return val.childForFieldName("body") ?? body;
+      if (val.type === "call_expression") {
+        const cargs = goNamed(val.childForFieldName("arguments"));
+        if (cargs.length === 1 && cargs[0].type === "func_literal") {
+          return cargs[0].childForFieldName("body") ?? body;
+        }
+      }
+      if (val.type === "identifier") {
+        const def = defs.get(val.text) ?? null;
+        if (def) return def.childForFieldName("body") ?? body; // one-hop
+      }
+    }
+  }
+  return body;
+}
+
+/** True when a name is auth-FLAVORED (drives unsure-vs-not-auth for opaque /
+ *  unreadable bodies — NEVER a bless). A veto segment cancels. */
+function goNameIsFlavored(name: string): boolean {
+  const segs = nameSegments(name);
+  if (segs.some((s) => GO_AUTH_VETO_SEGMENTS.has(s))) return false;
+  if (segs.some((s) => GO_AUTH_SEGMENTS.has(s))) return true;
+  for (let i = 0; i < segs.length - 1; i++) {
+    if (GO_AUTH_PAIRS.has(`${segs[i]} ${segs[i + 1]}`)) return true;
+  }
+  return false;
+}
+
+/** The LOCKED five-rule precedence. `body` is the RESOLVED EFFECTIVE body (or
+ *  null when imported/unresolvable). Rules 4/5 NEVER return "auth". */
+export function classifyGoMiddlewareAuth(
+  name: string, body: SyntaxNode | null, defs: Map<string, SyntaxNode | null>,
+): GoAuthOutcome {
+  const segs = nameSegments(name);
+  if (segs.some((s) => GO_AUTH_VETO_SEGMENTS.has(s))) return "not-auth"; // rule 1
+  if (body) {
+    const sig = bodyAuthSignatureGo(body, defs);
+    if (sig === "reject") return "auth"; // rule 2: a verified reject blesses even a boring name
+    if (sig === "none") return "not-auth"; // rule 3: a visible non-enforcing body, name never rescues
+    return goNameIsFlavored(name) ? "unsure" : "not-auth"; // rule 4: opaque never blesses on name
+  }
+  return goNameIsFlavored(name) ? "unsure" : "not-auth"; // rule 5: unreadable never blesses on name
+}
+
+/** True when a node is a PURE selector chain (identifiers + field selections
+ *  only, no call/index anywhere in the operand chain). Only a pure chain's .text
+ *  is a NAME — an impure chain would smuggle ARGUMENT text into the resolved
+ *  name. Mirror of the shipped Python discipline. */
+function isPureSelectorChain(node: SyntaxNode): boolean {
+  if (node.type === "identifier") return true;
+  if (node.type !== "selector_expression") return false;
+  const op = node.childForFieldName("operand");
+  return op !== null && isPureSelectorChain(op);
+}
+
+/** The NAME a middleware-position argument resolves to: identifier text, a PURE
+ *  dotted-selector text, or a call's OWN callee text when that callee is an
+ *  identifier or pure selector chain. Never its arguments, never an impure chain.
+ *  Unresolvable -> null (never a bless). */
+function goMiddlewareName(arg: SyntaxNode): string | null {
+  if (arg.type === "identifier") return arg.text;
+  if (arg.type === "selector_expression") return isPureSelectorChain(arg) ? arg.text : null;
+  if (arg.type === "call_expression") {
+    const fn = arg.childForFieldName("function");
+    if (fn && isPureSelectorChain(fn)) return fn.text;
+  }
+  return null;
+}
+
+function goNameHasSubsumingVeto(name: string): boolean {
+  return nameSegments(name).some((s) => GO_SUBSUMING_VETO_SEGMENTS.has(s));
+}
+function goNameIsTransparentWrap(name: string): boolean {
+  return nameSegments(name).some((s) => GO_TRANSPARENT_WRAP_SEGMENTS.has(s));
+}
+/** Whole-segment lane verdict (validation / rate-limit). */
+function goNameHasSegment(name: string, segments: Set<string>, pairs?: Set<string>): boolean {
+  const segs = nameSegments(name);
+  if (segs.some((s) => segments.has(s))) return true;
+  if (pairs) {
+    for (let i = 0; i < segs.length - 1; i++) {
+      if (pairs.has(`${segs[i]} ${segs[i + 1]}`)) return true;
+    }
+  }
+  return false;
+}
+const goNameIsVal = (n: string) => goNameHasSegment(n, GO_VAL_SEGMENTS);
+const goNameIsRate = (n: string) => goNameHasSegment(n, GO_RATE_SEGMENTS, GO_RATE_PAIRS);
+
+/** BODY-FIRST classification of a middleware-position argument: resolve the NAME,
+ *  resolve its in-file EFFECTIVE body (null when imported/opaque), classify via
+ *  classifyGoMiddlewareAuth. Wrap recursion is single-argument only (arity >= 2 is
+ *  Go DI, never classified), depth-capped, and only THROUGH a
+ *  recursion-transparent observability outer or an UNNAMED outer; a subsuming-veto
+ *  outer HALTS. Returns the outcome + the resolved name (for authUnsureHook). */
+function classifyGoMiddlewareArg(
+  arg: SyntaxNode, defs: Map<string, SyntaxNode | null>, depth = 0,
+): { outcome: GoAuthOutcome; name: string | null } {
+  if (depth > 5) return { outcome: "not-auth", name: null };
+  const name = goMiddlewareName(arg);
+  if (name !== null) {
+    // v1 resolves only a BARE-IDENTIFIER target to an in-file def (r.Use(mw) or
+    // r.Use(mwFactory())); a selector/method target stays null -> name-tier.
+    const calleeId =
+      arg.type === "identifier"
+        ? arg
+        : arg.type === "call_expression" && arg.childForFieldName("function")?.type === "identifier"
+          ? arg.childForFieldName("function")
+          : null;
+    const def = calleeId ? defs.get(calleeId.text) ?? null : null;
+    const body = def ? resolveEffectiveBody(def, defs) : null;
+    const outcome = classifyGoMiddlewareAuth(name, body, defs);
+    if (outcome !== "not-auth") return { outcome, name };
+    if (goNameHasSubsumingVeto(name)) return { outcome: "not-auth", name };
+  }
+  // Wrap recursion: single-arg call, through a transparent/unnamed outer only.
+  if (arg.type === "call_expression" && (name === null || goNameIsTransparentWrap(name))) {
+    const inner = goNamed(arg.childForFieldName("arguments"));
+    if (inner.length === 1) return classifyGoMiddlewareArg(inner[0], defs, depth + 1);
+  }
+  return { outcome: "not-auth", name };
+}
+
+/** Every argument of every `With(...)` link while unwinding a chi route's operand
+ *  chain (`r.With(a).With(b).Post(...)` harvests BOTH links). */
+function collectWithArgs(operand: SyntaxNode | null): SyntaxNode[] {
+  const args: SyntaxNode[] = [];
+  let cur: SyntaxNode | null = operand;
+  for (let hops = 0; cur && cur.type === "call_expression" && hops < 16; hops++) {
+    const fn = cur.childForFieldName("function");
+    if (fn?.type !== "selector_expression") break;
+    if (fn.childForFieldName("field")?.text === "With") args.push(...goNamed(cur.childForFieldName("arguments")));
+    cur = fn.childForFieldName("operand");
+  }
+  return args;
+}
+
+/** Per-route auth / validation / rate-limit verdicts + the unsure-hook name, from
+ *  the middleware-position args (With links + strictly-between-path-and-handler
+ *  args) plus, for Handle/HandleFunc forms, the wrap-callee handler arg. */
+function goRouteMiddleware(
+  named: SyntaxNode[], pathIdx: number, wrapCallee: SyntaxNode | null,
+  fnOperand: SyntaxNode | null, defs: Map<string, SyntaxNode | null>,
+): { hasAuth: boolean; hasValidation: boolean; hasRateLimit: boolean; unsureHook: string | undefined } {
+  const withArgs = fnOperand ? collectWithArgs(fnOperand) : [];
+  const middleArgs: SyntaxNode[] = [];
+  for (let i = pathIdx + 1; i < named.length - 1; i++) middleArgs.push(named[i]);
+  const mwArgs = [...withArgs, ...middleArgs];
+
+  let hasAuth = false;
+  let unsureHook: string | undefined;
+  const consider = (a: SyntaxNode) => {
+    const { outcome, name } = classifyGoMiddlewareArg(a, defs);
+    if (outcome === "auth") hasAuth = true;
+    else if (outcome === "unsure" && unsureHook === undefined && name !== null) unsureHook = name;
+  };
+  for (const a of mwArgs) consider(a);
+  if (wrapCallee && wrapCallee.type === "call_expression") consider(wrapCallee);
+  if (hasAuth) unsureHook = undefined; // a blessed route never hedges
+
+  // Lanes stay NAME-based and middleware-arg-scoped (auth-lane only reads bodies).
+  const laneNames = mwArgs.map(goMiddlewareName).filter((n): n is string => n !== null);
+  return {
+    hasAuth,
+    hasValidation: laneNames.some(goNameIsVal),
+    hasRateLimit: laneNames.some(goNameIsRate),
+    unsureHook,
+  };
+}
+
 export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const routerNames = collectGoRouterNames(tree.rootNode);
+  const defs = collectGoFunctionDefs(tree.rootNode);
   const gated = (r: string | null): r is string =>
     r !== null && (routerNames.has(r) || GO_ROUTER_RECEIVER.test(r));
 
-  const emit = (method: string, path: string, call: SyntaxNode) => {
+  const emit = (
+    method: string, path: string, call: SyntaxNode,
+    mw: { hasAuth: boolean; hasValidation: boolean; hasRateLimit: boolean; unsureHook: string | undefined },
+  ) => {
     routes.push({
       method,
       path,
@@ -498,10 +1095,14 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       // fluent forms, i.e. the anchor, never a chained .Methods() call's own
       // row): the @vibedrift-public suppression binding depends on it.
       line: call.startPosition.row + 1,
-      hasAuth: false,        // Task 3 (per-route) + Task 4 (scope inheritance)
-      hasValidation: false,
-      hasRateLimit: false,
+      // Per-route body-first auth (Task 3); scope inheritance is Task 4.
+      hasAuth: mw.hasAuth,
+      hasValidation: mw.hasValidation,
+      hasRateLimit: mw.hasRateLimit,
       hasErrorHandler: false, // write-only field; JS and Python AST hard-code false
+      // authUnsureHook only on a NON-blessed, auth-flavored-opaque route; the key
+      // is ABSENT otherwise so every other Go route serializes byte-identically.
+      ...(mw.unsureHook !== undefined ? { authUnsureHook: mw.unsureHook } : {}),
     });
   };
 
@@ -510,7 +1111,8 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
     const fn = call.childForFieldName("function");
     if (!fn || fn.type !== "selector_expression") continue;
     const field = fn.childForFieldName("field")?.text ?? "";
-    const receiver = goReceiverName(fn.childForFieldName("operand"));
+    const fnOperand = fn.childForFieldName("operand");
+    const receiver = goReceiverName(fnOperand);
     const args = call.childForFieldName("arguments");
     const named = args?.namedChildren.filter((n): n is SyntaxNode => n !== null) ?? [];
     const arg0Raw = named.length > 0 ? goStringText(named[0]) : null;
@@ -521,7 +1123,9 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
     if (directVerb !== undefined) {
       if (!gated(receiver)) continue;
       if (arg0Raw === null || !arg0Raw.startsWith("/")) continue; // leading-slash gate
-      emit(directVerb, arg0Raw, call);
+      // Middleware are the args strictly between the path (arg0) and the handler
+      // (last); the last arg is the handler and is NEVER classified.
+      emit(directVerb, arg0Raw, call, goRouteMiddleware(named, 0, null, fnOperand, defs));
       continue;
     }
 
@@ -530,7 +1134,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
     if (ANY_FIELDS.has(field)) {
       if (!gated(receiver)) continue;
       if (arg0Raw === null || !arg0Raw.startsWith("/")) continue;
-      emit("ALL", arg0Raw, call);
+      emit("ALL", arg0Raw, call, goRouteMiddleware(named, 0, null, fnOperand, defs));
       continue;
     }
 
@@ -552,7 +1156,9 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       if (method === null) continue; // literal HEAD/OPTIONS
       const path = goStringText(named[1]);
       if (path === null || !path.startsWith("/")) continue;
-      emit(method, path, call);
+      // Verb-first: verb=arg0, path=arg1, so the middleware window starts after
+      // arg1; the handler (last arg) is never classified.
+      emit(method, path, call, goRouteMiddleware(named, 1, null, fnOperand, defs));
       continue;
     }
 
@@ -565,7 +1171,10 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       if (split === null) continue; // host pattern / lowercase verb / verb-alone / HEAD|OPTIONS embedded
       const method = split.method ?? resolveAnyFieldMethod(call); // embedded verb wins over the chain
       if (method === null) continue; // chain narrowed to HEAD/OPTIONS only
-      emit(method, split.path, call);
+      // The handler is the arg right after the path (arg1); for these forms it
+      // may be a WRAP callee (auth(handler)) — the only body-first position here.
+      const wrapCallee = named.length > 1 ? named[1] : null;
+      emit(method, split.path, call, goRouteMiddleware(named, 0, wrapCallee, fnOperand, defs));
       continue;
     }
   }

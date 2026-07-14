@@ -1,9 +1,42 @@
 import { describe, it, expect } from "vitest";
-import { extractGoRoutesAst, SECURITY_AST_GO } from "../../../src/drift/security-ast-go.js";
+import {
+  extractGoRoutesAst, SECURITY_AST_GO,
+  bodyAuthSignatureGo, classifyGoMiddlewareAuth, collectGoFunctionDefs,
+} from "../../../src/drift/security-ast-go.js";
 import { SECURITY_AST } from "../../../src/drift/security-ast.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
+import type { SyntaxNode } from "../../../src/core/types.js";
 
 const go = (path: string, src: string) => fileWithTree(path, src, "go");
+
+const PKG = "package main\n\n";
+
+/** Body node + file-wide defs for a named function/method (mirrors the Python
+ *  addendum's hookBody util). resolveEffectiveBody is exercised THROUGH the
+ *  classifier; direct bodyAuthSignatureGo fixtures put the reject in the DIRECT
+ *  body. */
+async function mwBody(src: string, fnName: string): Promise<{ body: SyntaxNode; defs: Map<string, SyntaxNode | null> }> {
+  const f = await go("mw.go", src);
+  const root = f.tree!.rootNode;
+  expect(root.hasError).toBe(false);
+  const defs = collectGoFunctionDefs(root);
+  const def = root.descendantsOfType(["function_declaration", "method_declaration"])
+    .find((d) => d?.childForFieldName("name")?.text === fnName)!;
+  return { body: def.childForFieldName("body")!, defs };
+}
+
+/** bodyAuthSignatureGo of a single-function fixture's DIRECT body. */
+async function sig(src: string, fnName = "f") {
+  const { body, defs } = await mwBody(src, fnName);
+  return bodyAuthSignatureGo(body, defs);
+}
+
+/** extractGoRoutesAst over a full go source. */
+async function routesOf(src: string) {
+  const f = await go("routes.go", PKG + src);
+  expect(f.tree!.rootNode.hasError).toBe(false);
+  return extractGoRoutesAst(f.tree!, f.relativePath);
+}
 
 describe("go tree harness prerequisites", () => {
   it("parses a trivial go file to a clean tree", async () => {
@@ -748,5 +781,452 @@ describe("method resolution", () => {
       // fixtures contributed nothing (non-vacuous skip).
       expect(collected.length).toBe(6);
     });
+  });
+});
+
+// ─── Task 3: body-first auth classification ──────────────────────────────────
+
+describe("Task 3 Step 1: grammar prerequisites for body-signature shapes", () => {
+  it("pins the reject / credential / effective-body node shapes", async () => {
+    // A tree-sitter-go bump that renames any of these fails HERE with a named
+    // shape, not deep in a bless assertion.
+    const abortSel = (await mwBody(
+      PKG + `func f(c *gin.Context) { c.AbortWithStatus(http.StatusUnauthorized) }\n`, "f")).body
+      .descendantsOfType("call_expression")[0]!;
+    expect(abortSel.childForFieldName("function")?.type).toBe("selector_expression");
+    const st = abortSel.childForFieldName("arguments")!.namedChildren[0]!;
+    expect(st.type).toBe("selector_expression");
+    expect(st.childForFieldName("field")?.text).toBe("StatusUnauthorized");
+
+    const abortInt = (await mwBody(PKG + `func f(c *gin.Context) { c.AbortWithStatus(401) }\n`, "f")).body
+      .descendantsOfType("int_literal")[0]!;
+    expect(abortInt.type).toBe("int_literal"); // NOT "integer"
+    expect(abortInt.text).toBe("401");
+
+    const echoErr = (await mwBody(PKG + `func f(c echo.Context) error { return &echo.HTTPError{Code: 401} }\n`, "f")).body;
+    const unary = echoErr.descendantsOfType("unary_expression")[0]!;
+    const comp = unary.namedChildren[0]!;
+    expect(comp.type).toBe("composite_literal");
+    const lv = comp.descendantsOfType("literal_value")[0]!;
+    const ke = lv.namedChildren.find((n) => n?.type === "keyed_element")!;
+    expect(ke.namedChildren[0]!.text).toBe("Code");
+
+    const httpErr = (await mwBody(PKG + `func f(w http.ResponseWriter) { http.Error(w, "no", http.StatusUnauthorized) }\n`, "f")).body
+      .descendantsOfType("call_expression")[0]!;
+    const hargs = httpErr.childForFieldName("arguments")!.namedChildren.filter((n): n is SyntaxNode => n !== null);
+    expect(hargs[hargs.length - 1].childForFieldName("field")?.text).toBe("StatusUnauthorized"); // status LAST
+
+    const factory = (await mwBody(PKG + `func F() gin.HandlerFunc { return func(c *gin.Context) { c.Next() } }\n`, "F")).body;
+    const ret = factory.descendantsOfType("return_statement")[0]!;
+    expect(ret.namedChild(0)!.type).toBe("expression_list");
+    expect(ret.namedChild(0)!.namedChild(0)!.type).toBe("func_literal");
+
+    const httpHandler = (await mwBody(
+      PKG + `func F(next http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { next.ServeHTTP(w, r) }) }\n`, "F")).body;
+    const retCall = httpHandler.descendantsOfType("return_statement")[0]!.namedChild(0)!.namedChild(0)!;
+    expect(retCall.type).toBe("call_expression");
+    expect(retCall.childForFieldName("arguments")!.namedChild(0)!.type).toBe("func_literal");
+
+    // if-init idiom: read lives in the initializer field
+    const ifInit = (await mwBody(
+      PKG + `func f(c *gin.Context) { if _, err := v(c.GetHeader("Authorization")); err != nil { c.AbortWithStatus(401) } }\n`, "f")).body
+      .descendantsOfType("if_statement")[0]!;
+    expect(ifInit.childForFieldName("initializer")?.type).toBe("short_var_declaration");
+    expect(ifInit.childForFieldName("condition")?.type).toBe("binary_expression");
+
+    // function vs method name field kinds
+    const fnDecl = (await go("g.go", PKG + `func plain() {}\n`)).tree!.rootNode
+      .descendantsOfType("function_declaration")[0]!;
+    expect(fnDecl.childForFieldName("name")?.type).toBe("identifier");
+    const mDecl = (await go("g.go", PKG + `func (s *S) M() {}\n`)).tree!.rootNode
+      .descendantsOfType("method_declaration")[0]!;
+    expect(mDecl.childForFieldName("name")?.type).toBe("field_identifier");
+  });
+});
+
+describe("Task 3: bodyAuthSignatureGo — reject", () => {
+  it("gin self-aborting 401 blesses alone (constant and bare-integer parity)", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() }\n`)).toBe("reject");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.AbortWithStatus(401) }\n`)).toBe("reject");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"e": "no"}) }\n`)).toBe("reject");
+  });
+  it("write-then-stop forms bless only WITH a following return / Abort", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { c.JSON(http.StatusUnauthorized, gin.H{"e": "no"}); c.Abort() }\n`)).toBe("reject");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.String(401, "no"); return }\n`)).toBe("reject");
+  });
+  it("echo returned-reject forms bless", async () => {
+    expect(await sig(PKG + `func f(c echo.Context) error { return echo.NewHTTPError(http.StatusUnauthorized) }\n`)).toBe("reject");
+    expect(await sig(PKG + `func f(c echo.Context) error { return &echo.HTTPError{Code: 401} }\n`)).toBe("reject");
+    expect(await sig(PKG + `func f(c echo.Context) error { return c.NoContent(401) }\n`)).toBe("reject");
+  });
+  it("stdlib write+return and http.Error(401) bless", async () => {
+    expect(await sig(PKG + `func f(w http.ResponseWriter, r *http.Request) { if r.Header.Get("Authorization") == "" { w.WriteHeader(http.StatusUnauthorized); return }; next.ServeHTTP(w, r) }\n`)).toBe("reject");
+    expect(await sig(PKG + `func f(w http.ResponseWriter, r *http.Request) { if r.Header.Get("Authorization") == "" { http.Error(w, "unauthorized", http.StatusUnauthorized); return }; next.ServeHTTP(w, r) }\n`)).toBe("reject");
+  });
+  it("credential-guarded 403 blesses (bound local read from Authorization gates it)", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { tok := c.GetHeader("Authorization"); if tok == "" { c.AbortWithStatus(http.StatusForbidden); return } }\n`)).toBe("reject");
+  });
+  it("depth-agnostic: a reject in a for/switch/if branch counts", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { for _, x := range items { if !x { c.AbortWithStatus(401); return } } }\n`)).toBe("reject");
+    expect(await sig(PKG + `func f(c *gin.Context) { switch x { case 1: c.AbortWithStatus(401) } }\n`)).toBe("reject");
+  });
+  it("one-hop: a same-file helper that holds the reject blesses the caller", async () => {
+    const src = PKG +
+      `func check(c *gin.Context) { if !ok(c) { c.AbortWithStatus(401) } }\n` +
+      `func requireLogin(c *gin.Context) { check(c) }\n`;
+    expect(await sig(src, "requireLogin")).toBe("reject");
+  });
+});
+
+describe("Task 3: bodyAuthSignatureGo — none (never-false-bless)", () => {
+  it("visible non-enforcing bodies are none", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { log.Printf("auth %s", c.Request.URL.Path); c.Next() }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(w http.ResponseWriter, r *http.Request) { log.Println(r.Method); next.ServeHTTP(w, r) }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c *gin.Context) { metrics.Inc("req"); c.Next() }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.Header("X-Frame-Options", "DENY"); c.Next() }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.Next() }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(next echo.HandlerFunc) echo.HandlerFunc { return next }\n`)).toBe("none");
+  });
+  it("404 / 500 / lone-403 are NOT rejects", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { c.AbortWithStatus(http.StatusNotFound) }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.AbortWithStatus(http.StatusInternalServerError) }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.AbortWithStatus(http.StatusForbidden) }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c echo.Context) error { return echo.NewHTTPError(http.StatusNotFound) }\n`)).toBe("none");
+  });
+  it("200 writes are not rejects", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { c.JSON(http.StatusOK, gin.H{}); c.Next() }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.JSON(200, gin.H{}); c.Next() }\n`)).toBe("none");
+  });
+  it("CSRF 403 gate is none (X-CSRF-Token key vetoed -> guard not credential)", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { if c.GetHeader("X-CSRF-Token") != valid { c.AbortWithStatus(http.StatusForbidden) } }\n`)).toBe("none");
+  });
+  it("a reject inside a never-called nested closure (goroutine) does NOT count", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { go func() { c.AbortWithStatus(401) }(); c.Next() }\n`)).toBe("none");
+  });
+  it("NEVER-FALSE-BLESS: a 401 write that keeps calling next (no return/Abort) is none", async () => {
+    // write-then-continue is a bug, not a reject: the request still reaches next.
+    expect(await sig(PKG + `func f(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized); next.ServeHTTP(w, r) }\n`)).toBe("none");
+    expect(await sig(PKG + `func f(c *gin.Context) { c.JSON(http.StatusUnauthorized, gin.H{}); c.Next() }\n`)).toBe("none");
+  });
+});
+
+describe("Task 3: bodyAuthSignatureGo — opaque", () => {
+  it("unresolvable auth-flavored callees are opaque", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { checkSession(c) }\n`)).toBe("opaque");
+    expect(await sig(PKG + `func f(user User) { confirm(user) }\n`)).toBe("opaque");
+    expect(await sig(PKG + `func f(c *gin.Context) { doAuth(c) }\n`)).toBe("opaque");
+  });
+  it("variable / credential-read-without-reject bodies are opaque", async () => {
+    expect(await sig(PKG + `func f(c *gin.Context) { c.AbortWithStatus(code) }\n`)).toBe("opaque");
+    expect(await sig(PKG + `func f(c *gin.Context) { token := c.GetHeader("Authorization"); validateOrDie(token) }\n`)).toBe("opaque");
+  });
+  it("a duplicate same-file def (follow neither) is opaque under a flavored callee", async () => {
+    const src = PKG +
+      `func checkAuth(c *gin.Context) { a(c) }\n` +
+      `func checkAuth(c *gin.Context) { b(c) }\n` +
+      `func f(c *gin.Context) { checkAuth(c) }\n`;
+    expect(await sig(src, "f")).toBe("opaque");
+  });
+  it("a mutual-recursion cycle terminates and never false-blesses", async () => {
+    const src = PKG + `func a(c *gin.Context) { b(c) }\nfunc b(c *gin.Context) { a(c) }\n`;
+    expect(await sig(src, "a")).not.toBe("reject");
+  });
+});
+
+describe("Task 3: classifyGoMiddlewareAuth precedence (LOCKED)", () => {
+  it("rule 1 — veto beats a real body reject", async () => {
+    const src = PKG + `func mw(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() }\n`;
+    const { body, defs } = await mwBody(src, "mw");
+    for (const name of ["OptionalAuth", "SkipAuth", "DisableAuth", "InsecureSkipAuth", "MockAuth"]) {
+      expect(classifyGoMiddlewareAuth(name, body, defs)).toBe("not-auth");
+    }
+  });
+  it("rule 2 — a visible reject body blesses even a boring name", async () => {
+    const { body, defs } = await mwBody(
+      PKG + `func buildGuard(c *gin.Context) { if session.Get("user") == nil { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() }\n`, "buildGuard");
+    expect(classifyGoMiddlewareAuth("buildGuard", body, defs)).toBe("auth");
+  });
+  it("rule 3 — a visible non-enforcing body is not-auth whatever the name", async () => {
+    const none = await mwBody(PKG + `func authCheck(c *gin.Context) { log.Printf("auth %s", c.Request.URL.Path); c.Next() }\n`, "authCheck");
+    expect(classifyGoMiddlewareAuth("authCheck", none.body, none.defs)).toBe("not-auth");
+    const notFound = await mwBody(PKG + `func authCheck(c *gin.Context) { c.AbortWithStatus(http.StatusNotFound) }\n`, "authCheck");
+    expect(classifyGoMiddlewareAuth("authCheck", notFound.body, notFound.defs)).toBe("not-auth");
+  });
+  it("rule 4 — an opaque body NEVER blesses on name (flavored -> unsure, boring -> not-auth)", async () => {
+    const flavored = await mwBody(PKG + `func authenticate(c *gin.Context) { doAuth(c) }\n`, "authenticate");
+    expect(classifyGoMiddlewareAuth("authenticate", flavored.body, flavored.defs)).toBe("unsure");
+    const boring = await mwBody(PKG + `func setup(c *gin.Context) { doStuff(c) }\n`, "setup");
+    expect(bodyAuthSignatureGo(boring.body, boring.defs)).toBe("none"); // doStuff not flavored -> none, not opaque
+    expect(classifyGoMiddlewareAuth("setup", boring.body, boring.defs)).toBe("not-auth");
+    // an opaque body under a boring name is still not-auth (no name bless on opaque)
+    const boringOpaque = await mwBody(PKG + `func setup(c *gin.Context) { c.AbortWithStatus(code) }\n`, "setup");
+    expect(bodyAuthSignatureGo(boringOpaque.body, boringOpaque.defs)).toBe("opaque");
+    expect(classifyGoMiddlewareAuth("setup", boringOpaque.body, boringOpaque.defs)).toBe("not-auth");
+  });
+  it("rule 5 — an unreadable (null) body NEVER blesses on name", async () => {
+    const defs = new Map<string, SyntaxNode | null>();
+    for (const name of ["AuthMiddleware", "middleware.AuthMiddleware", "JWTMiddleware", "EnsureLoggedIn", "middleware.VerifyToken", "OAuth2Middleware", "BasicAuth", "TokenRequired"]) {
+      expect(classifyGoMiddlewareAuth(name, null, defs)).toBe("unsure");
+    }
+    for (const name of ["middleware.RequestID", "authLogger", "parseJWT", "newAuthHandler", "AuthMetrics"]) {
+      expect(classifyGoMiddlewareAuth(name, null, defs)).toBe("not-auth");
+    }
+  });
+});
+
+describe("Task 3: body-first per-route middleware args (LOCKED)", () => {
+  const auth1 = (name: string) =>
+    `func ${name}(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() }\n`;
+
+  it("IMPORTED/opaque auth-flavored middleware HEDGES (rule 5) — hasAuth false + key", async () => {
+    const cases: Array<[string, string]> = [
+      [`r.POST("/x", middleware.AuthMiddleware(), createX)`, "middleware.AuthMiddleware"],
+      [`r.POST("/x", requireAuth, h)`, "requireAuth"],
+      [`r.POST("/x", middleware.RequireAuth, h)`, "middleware.RequireAuth"],
+      [`r.POST("/x", JWTMiddleware, h)`, "JWTMiddleware"],
+      [`r.POST("/x", BasicAuth(), h)`, "BasicAuth"],
+      [`r.POST("/x", OAuth2Middleware, h)`, "OAuth2Middleware"],
+      [`r.POST("/x", JWTBearer, h)`, "JWTBearer"],
+    ];
+    for (const [reg, key] of cases) {
+      const [rt] = await routesOf(`func routes() {\n\t${reg}\n}\n`);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBe(key);
+    }
+  });
+
+  it("MIGRATION FLIP — pair-only imported names hedge (were name-only true)", async () => {
+    for (const [reg, key] of [
+      [`r.POST("/x", EnsureLoggedIn, h)`, "EnsureLoggedIn"],
+      [`r.POST("/x", TokenRequired, h)`, "TokenRequired"],
+      [`r.POST("/x", requireRole("admin"), h)`, "requireRole"],
+      [`r.POST("/x", middleware.VerifyToken(), h)`, "middleware.VerifyToken"],
+    ] as Array<[string, string]>) {
+      const [rt] = await routesOf(`func routes() {\n\t${reg}\n}\n`);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBe(key);
+    }
+  });
+
+  it("BODY-FIRST TWIN — an in-file rejecting body blesses (rule 2), key absent", async () => {
+    const flavored = await routesOf(auth1("EnsureLoggedIn") + `func routes() {\n\tr.POST("/x", EnsureLoggedIn, h)\n}\n`);
+    expect(flavored[0].hasAuth).toBe(true);
+    expect(flavored[0].authUnsureHook).toBeUndefined();
+    const boring = await routesOf(auth1("gate") + `func routes() {\n\tr.POST("/x", gate, h)\n}\n`);
+    expect(boring[0].hasAuth).toBe(true); // body-only bless under a boring name
+    expect(boring[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("VISIBLE non-enforcing in-file body never blesses despite auth name (rule 3), key absent", async () => {
+    const src = `func authCheck(c *gin.Context) { log.Printf("auth %s", c.Request.URL.Path); c.Next() }\n` +
+      `func routes() {\n\tr.POST("/x", authCheck, h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("CREDENTIAL-READ-NO-REJECT in-file body is opaque -> rule 4 hedge (never bless)", async () => {
+    const jwt = `func jwtMiddleware(c *gin.Context) { token := c.GetHeader("Authorization"); c.Set("user", token); c.Next() }\n`;
+    const load = `func loadUser(c *gin.Context) { token := c.GetHeader("Authorization"); c.Set("user", token); c.Next() }\n`;
+    const a = await routesOf(jwt + `func routes() {\n\tr.POST("/x", jwtMiddleware, h)\n}\n`);
+    expect(a[0].hasAuth).toBe(false);
+    expect(a[0].authUnsureHook).toBe("jwtMiddleware");
+    const b = await routesOf(load + `func routes() {\n\tr.POST("/y", loadUser, h)\n}\n`);
+    expect(b[0].hasAuth).toBe(false);
+    expect(b[0].authUnsureHook).toBe("loadUser");
+  });
+
+  it("nameSegments parity — 'author' is not 'auth'", async () => {
+    const [rt] = await routesOf(`func routes() {\n\tr.POST("/x", AuthorTracking(), h)\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("impure-chain callees never smuggle argument text (false, key absent)", async () => {
+    const a = await routesOf(`func routes() {\n\tr.POST("/x", factory.Make(authCfg).Logger(), h)\n}\n`);
+    expect(a[0].hasAuth).toBe(false);
+    expect(a[0].authUnsureHook).toBeUndefined();
+    const b = await routesOf(`func routes() {\n\tr.POST("/y", registry.get("authCfg").Logger, h)\n}\n`);
+    expect(b[0].hasAuth).toBe(false);
+    expect(b[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("rule 1 veto wins even over a REAL in-file reject body (false, key absent)", async () => {
+    for (const name of ["MockAuth", "SkipAuth", "DisableAuth"]) {
+      const src = auth1(name) + `func routes() {\n\tr.POST("/x", ${name}, h)\n}\n`;
+      const [rt] = await routesOf(src);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBeUndefined();
+    }
+  });
+
+  it("veto negatives — imported, one route each, all false + key absent", async () => {
+    for (const reg of [
+      `r.POST("/x", OptionalAuth(), h)`, `r.POST("/x", SkipAuth, h)`, `r.POST("/x", BypassAuth(), h)`,
+      `r.POST("/x", MockAuth(), h)`, `r.POST("/x", FakeAuthMiddleware, h)`, `r.POST("/x", AuthMetrics(), h)`,
+      `r.POST("/x", authStats, h)`, `r.POST("/x", NoopAuth, h)`, `r.POST("/x", testAuth, h)`,
+      `r.POST("/x", devAuth, h)`, `r.POST("/x", DummyAuth(), h)`, `r.POST("/x", InsecureSkipAuth(), h)`,
+      `r.POST("/x", authLogger, h)`, `r.POST("/x", parseJWT(secret), h)`, `r.POST("/x", newAuthHandler(deps), h)`,
+      `r.POST("/x", authLogin, mainHandler)`,
+    ]) {
+      const [rt] = await routesOf(`func routes() {\n\t${reg}\n}\n`);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBeUndefined();
+    }
+  });
+
+  it("veto boundary — EnsureLoggedIn is NOT vetoed ('logged' != 'log') so it reaches unsure", async () => {
+    const [rt] = await routesOf(`func routes() {\n\tr.POST("/x", EnsureLoggedIn, h)\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBe("EnsureLoggedIn");
+  });
+
+  it("verb-first middleware window starts AFTER the path arg (arg1)", async () => {
+    const factory = `func RequireAuth() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(401); return }; c.Next() } }\n`;
+    const [rt] = await routesOf(factory + `func routes() {\n\tr.Handle("POST", "/x", RequireAuth(), h)\n}\n`);
+    expect(rt.method).toBe("POST");
+    expect(rt.hasAuth).toBe(true); // in-file factory rejects; window includes arg2
+  });
+
+  it("chi With harvests every link (multi-link)", async () => {
+    const withAuth = await routesOf(`func routes() {\n\tr.With(RequireAuth).With(paginate).Post("/orders", h)\n}\n`);
+    expect(withAuth[0].hasAuth).toBe(false);
+    expect(withAuth[0].authUnsureHook).toBe("RequireAuth"); // inner link harvested
+    const noAuth = await routesOf(`func routes() {\n\tr.With(paginate).With(audit).Post("/x", h)\n}\n`);
+    expect(noAuth[0].hasAuth).toBe(false);
+    expect(noAuth[0].authUnsureHook).toBeUndefined();
+    const single = await routesOf(`func routes() {\n\tr.With(paginate, RequireAuth).Get("/orders", h)\n}\n`);
+    expect(single[0].authUnsureHook).toBe("RequireAuth"); // any With arg
+  });
+
+  it("handler-position identifier/selector is NEVER read, blessed, or hedged", async () => {
+    const login = await routesOf(`func routes() {\n\tr.POST("/login", authLogin)\n}\n`);
+    expect(login[0].hasAuth).toBe(false);
+    expect(login[0].authUnsureHook).toBeUndefined();
+    // handler body that reads Authorization + writes 401 is NOT read (body-first is middleware-only)
+    const src = `func h(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(401); return }; c.JSON(200, nil) }\n` +
+      `func routes() {\n\tr.POST("/x", h)\n}\n`;
+    const [rt] = await routesOf(src);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+});
+
+describe("Task 3: body-first wrapped handlers (LOCKED)", () => {
+  it("BODY-FIRST wrap disambiguation via the RETURNED closure", async () => {
+    const rej = `func requireAuth(next http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { if r.Header.Get("Authorization") == "" { w.WriteHeader(http.StatusUnauthorized); return }; next.ServeHTTP(w, r) }) }\n`;
+    const yes = await routesOf(rej + `func routes() {\n\thttp.HandleFunc("/orders", requireAuth(createOrder))\n}\n`);
+    expect(yes[0].hasAuth).toBe(true);
+    const pass = `func logWrap(next http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { log.Println(r.URL.Path); next.ServeHTTP(w, r) }) }\n`;
+    const no = await routesOf(pass + `func routes() {\n\thttp.HandleFunc("/orders", logWrap(createOrder))\n}\n`);
+    expect(no[0].hasAuth).toBe(false);
+  });
+
+  it("nested transparent wrap recurses to the inner in-file auth wrap (blesses)", async () => {
+    const rej = `func requireAuth(next http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { if r.Header.Get("Authorization") == "" { w.WriteHeader(http.StatusUnauthorized); return }; next.ServeHTTP(w, r) }) }\n`;
+    for (const outer of ["logRequests", "metricsWrap"]) {
+      const src = rej + `func routes() {\n\tmux.Handle("/x", ${outer}(requireAuth(h)))\n}\n`;
+      const [rt] = await routesOf(src);
+      expect(rt.hasAuth).toBe(true);
+    }
+  });
+
+  it("SUBSUMING-veto wrap HALTS recursion even over a REAL inner reject (false, key absent)", async () => {
+    const rej = `func realGate(next http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { if r.Header.Get("Authorization") == "" { w.WriteHeader(http.StatusUnauthorized); return }; next.ServeHTTP(w, r) }) }\n`;
+    for (const reg of [
+      `mux.Handle("/x", optionalAuth(realGate))`,
+      `mux.Handle("/x", SkipAuth(realGate))`,
+      `mux.Handle("/x", DisableAuthInDev(realGate))`,
+      `mux.Handle("/x", parseJWT(realGate))`,
+    ]) {
+      const [rt] = await routesOf(rej + `func routes() {\n\t${reg}\n}\n`);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBeUndefined();
+    }
+  });
+
+  it("constructor-injection (DI) never classifies the injected arg (false, key absent)", async () => {
+    for (const reg of [
+      `mux.Handle("/webhook", NewWebhookHandler(cfg, auth.NewService(key)))`,
+      `mux.Handle("/orders", NewOrdersHandler(db, jwtVerifier()))`,
+      `mux.Handle("/di", NewHandler(auth.NewService(key)))`,
+    ]) {
+      const [rt] = await routesOf(`func routes() {\n\t${reg}\n}\n`);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBeUndefined();
+    }
+  });
+
+  it("boring / composed / builder wrap negatives (false, key absent)", async () => {
+    for (const reg of [
+      `mux.Handle("/x", wrap(h))`,
+      `mux.Handle("/x", timing(h))`,
+      `mux.Handle("/x", makeHandler(authService))`,
+      `mux.Handle("/x", chain(logger, auth)(h))`,
+      `mux.Handle("/x", handlers.For(authConfig).Build(h))`,
+    ]) {
+      const [rt] = await routesOf(`func routes() {\n\t${reg}\n}\n`);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBeUndefined();
+    }
+  });
+
+  it("UNSURE wrap — imported pair-name wrap hedges", async () => {
+    const [rt] = await routesOf(`func routes() {\n\tmux.Handle("/x", TokenRequired(handler))\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBe("TokenRequired");
+  });
+
+  it("NEVER-FALSE-BLESS: a transparent wrap around an IMPORTED auth inner never blesses", async () => {
+    // requireAuth has no in-file body -> rule 5 unsure; recursion propagates the
+    // hedge, it does NOT fabricate a bless on the name alone.
+    const [rt] = await routesOf(`func routes() {\n\tmux.Handle("/x", logRequests(requireAuth(h)))\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBe("requireAuth");
+  });
+
+  it("20-deep nested wrap: no throw, no bless", async () => {
+    let expr = "h";
+    for (let i = 0; i < 20; i++) expr = `logWrap(${expr})`;
+    const [rt] = await routesOf(`func routes() {\n\tmux.Handle("/x", ${expr})\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+  });
+});
+
+describe("Task 3: per-route validation and rate-limit lanes", () => {
+  it("rate-limit lane (segment + pair)", async () => {
+    const a = await routesOf(`func routes() {\n\tr.POST("/x", middleware.RateLimit(), h)\n}\n`);
+    expect(a[0].hasRateLimit).toBe(true);
+    expect(a[0].hasAuth).toBe(false);
+    const b = await routesOf(`func routes() {\n\tr.POST("/y", RateLimiter(rate), h)\n}\n`);
+    expect(b[0].hasRateLimit).toBe(true);
+  });
+  it("validation lane", async () => {
+    const [rt] = await routesOf(`func routes() {\n\tr.POST("/x", validateBody(schema), h)\n}\n`);
+    expect(rt.hasValidation).toBe(true);
+  });
+  it("segment discipline — substrings never match the lane", async () => {
+    const v1 = await routesOf(`func routes() {\n\tr.POST("/x", cacheInvalidator, h)\n}\n`);
+    expect(v1[0].hasValidation).toBe(false);
+    const v2 = await routesOf(`func routes() {\n\tr.POST("/y", InvalidateCache(), h)\n}\n`);
+    expect(v2[0].hasValidation).toBe(false);
+    const r1 = await routesOf(`func routes() {\n\tr.POST("/z", csvDelimiter, h)\n}\n`);
+    expect(r1[0].hasRateLimit).toBe(false);
+  });
+  it("a route path never blesses its lane (names come from args only)", async () => {
+    const v = await routesOf(`func routes() {\n\tr.POST("/validate", h)\n}\n`);
+    expect(v[0].hasValidation).toBe(false);
+    const r = await routesOf(`func routes() {\n\tr.POST("/ratelimit", h)\n}\n`);
+    expect(r[0].hasRateLimit).toBe(false);
+  });
+  it("a bare route keeps all three lanes false and independent", async () => {
+    const [rt] = await routesOf(`func routes() {\n\tr.POST("/x", h)\n}\n`);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.hasValidation).toBe(false);
+    expect(rt.hasRateLimit).toBe(false);
+    // DELIBERATE DIVERGENCE (pinned): a handler body calling c.ShouldBindJSON does
+    // NOT set hasValidation on the AST path — lanes come from structural middleware
+    // names only, and hasErrorHandler is hard-coded false.
+    expect(rt.hasErrorHandler).toBe(false);
   });
 });
