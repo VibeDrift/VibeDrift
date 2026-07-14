@@ -22,10 +22,20 @@
  * anywhere (`tree.rootNode.hasError`) is routed whole to the existing regex
  * extractor, which keeps its legacy over-blesses (the 30-line token/
  * permission window and the file-level login_required bless) unchanged.
+ *
+ * OPEN QUESTION FOR SIGN-OFF: `resolveMethod`'s handling of a Flask `methods=`
+ * kwarg that is not a statically readable list/tuple/set of string literals
+ * (a variable, `**kwargs`, or a `*splat` with no visible literal verb)
+ * deliberately diverges from the regex extractor. The regex silently defaults
+ * such a route to GET, which excludes it from the mutating vote. This AST
+ * path instead resolves it to "ALL", which keeps the route IN the mutating
+ * vote (matching how an Express `.all()` route is treated). This is a real,
+ * user-visible behavior change from today's regex path, not a bug fix; it is
+ * called out here for explicit sign-off rather than shipped silently.
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
-import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
+import type { RouteInfo } from "./security-consistency.js";
 
 // Route-registration attribute names on a router-like receiver.
 const ROUTE_METHODS = new Set(["route", "get", "post", "put", "patch", "delete", "api_route"]);
@@ -142,9 +152,49 @@ function asRouteDecorator(dec: SyntaxNode, routerNames: Set<string>): PyRoute | 
   return { method: resolveMethod(attr, args), path, call: expr, receiver };
 }
 
-function resolveMethod(attr: string, _args: SyntaxNode): string {
+/** Resolves the HTTP method(s) a route decorator registers.
+ *
+ *  Verb-shorthand decorators (`@app.post`, `@app.delete`, ...) are unambiguous:
+ *  the attribute name IS the method. Only `route`/`api_route` need a `methods=`
+ *  kwarg read.
+ *
+ *  DELIBERATE DIVERGENCE from the regex extractor: the regex silently defaults
+ *  to GET whenever `methods=` isn't a literal list it can pattern-match (a
+ *  variable, a set, a splat), which quietly excludes that route from the
+ *  mutating vote. This AST path instead emits "ALL" for every statically
+ *  unresolvable form (variable value, **kwargs splat, a *splat with no visible
+ *  literal verb), so the route STAYS in the mutating vote ("ALL" is a member of
+ *  both MUTATION_METHODS and BODY_METHODS), the same way Express's `.all()` is
+ *  treated. This is a real behavior change from the regex path and is flagged
+ *  as an open question for sign-off, not a silent fix.
+ *
+ *  A fully visible, empty `methods=[]` is NOT ambiguous: Flask's own default is
+ *  GET, so an empty literal resolves to GET rather than ALL. */
+function resolveMethod(attr: string, args: SyntaxNode): string {
   if (attr !== "route" && attr !== "api_route") return attr.toUpperCase();
-  return "GET"; // Flask default; the methods= kwarg lands in Task 2
+  const named = args.namedChildren.filter((n): n is SyntaxNode => n !== null);
+  const kw = named.find(
+    (n) => n.type === "keyword_argument" && n.childForFieldName("name")?.text === "methods",
+  );
+  if (!kw) {
+    // No methods kwarg. A **splat may hide one: statically unresolvable, so the
+    // route must STAY in the mutating vote ("ALL" is in MUTATION_METHODS and
+    // BODY_METHODS). Silently defaulting GET would drop an unknown-verb route
+    // out of the auth vote, which is the bless-adjacent direction the
+    // never-false-bless invariant forbids.
+    const hasSplat = named.some((n) => n.type.endsWith("splat"));
+    return hasSplat ? "ALL" : "GET";
+  }
+  const value = kw.childForFieldName("value");
+  if (!value || !["list", "tuple", "set"].includes(value.type)) return "ALL"; // methods=VARIABLE
+  const children = value.namedChildren.filter((n): n is SyntaxNode => n !== null);
+  const verbs = children
+    .filter((n) => n.type === "string")
+    .map((s) => (pyStringText(s) ?? "").toUpperCase())
+    .filter((v) => HTTP_VERBS.has(v));
+  const hidden = children.some((n) => n.type !== "string");
+  if (verbs.length === 0) return hidden ? "ALL" : "GET"; // [*BASE] vs literal []
+  return verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0];
 }
 
 export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[] {

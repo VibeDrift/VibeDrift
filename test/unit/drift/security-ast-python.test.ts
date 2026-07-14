@@ -350,3 +350,127 @@ describe("extractPythonRoutesAst: path-string forms", () => {
       .map((r) => `${r.method} ${r.path}`)).toEqual(["GET /café"]);
   });
 });
+
+describe("extractPythonRoutesAst: method resolution", () => {
+  it("defaults to GET when no methods kwarg is present", async () => {
+    const f = await py("nokw.py", `@app.route("/x")\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=[\"POST\"] to POST", async () => {
+    const f = await py("post.py", `@app.route("/x", methods=["POST"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=[\"DELETE\"] to DELETE", async () => {
+    const f = await py("delete.py", `@app.route("/x", methods=["DELETE"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("DELETE");
+  });
+
+  it("resolves methods=[\"GET\", \"POST\"] to POST (mutating verb wins, regex parity)", async () => {
+    const f = await py("getpost.py",
+      `@app.route("/x", methods=["GET", "POST"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=[\"DELETE\", \"POST\"] to DELETE (first mutating verb in list order)", async () => {
+    const f = await py("deletepost.py",
+      `@app.route("/x", methods=["DELETE", "POST"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("DELETE");
+  });
+
+  it("uppercases a lowercase methods=[\"post\"] entry (Werkzeug uppercases at runtime)", async () => {
+    const f = await py("lower.py", `@app.route("/x", methods=["post"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves a tuple methods=(\"POST\",) to POST", async () => {
+    const f = await py("tuple.py", `@app.route("/x", methods=("POST",))\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves a set methods={\"POST\"} to POST", async () => {
+    const f = await py("set.py", `@app.route("/x", methods={"POST"})\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=ALLOWED (a variable) to ALL: statically unresolvable stays in the mutating vote", async () => {
+    const f = await py("var.py", `@app.route("/x", methods=ALLOWED)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves methods=[*BASE, \"POST\"] to POST: the visible literal resolves it", async () => {
+    const f = await py("splatpost.py",
+      `@app.route("/x", methods=[*BASE, "POST"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves methods=[*BASE] to ALL: no visible literal, statically unresolvable", async () => {
+    const f = await py("splatonly.py", `@app.route("/x", methods=[*BASE])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves @app.route(\"/x\", **opts) to ALL: methods may hide in opts", async () => {
+    const f = await py("kwsplat.py", `@app.route("/x", **opts)\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves a literal empty methods=[] to GET: fully visible and empty is the Flask default, not ambiguity", async () => {
+    const f = await py("empty.py", `@app.route("/x", methods=[])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves methods=[\"GET\"] to GET: emitted, simply outside the mutating vote", async () => {
+    const f = await py("getonly.py", `@app.route("/x", methods=["GET"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("GET");
+  });
+
+  it("resolves @router.api_route(\"/x\", methods=[\"POST\"]) to POST", async () => {
+    const f = await py("apiroute.py",
+      `@router.api_route("/x", methods=["POST"])\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+
+  it("resolves a multiline decorator with a trailing-comma methods=[\"POST\",\"GET\"] to POST", async () => {
+    const f = await py("multiline.py",
+      `@app.route(\n` +
+      `    "/x",\n` +
+      `    methods=["POST", "GET"],\n` +
+      `)\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+});
