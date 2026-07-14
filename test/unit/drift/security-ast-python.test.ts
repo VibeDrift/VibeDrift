@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   extractPythonRoutesAst,
   extractPythonFileMiddlewareAst,
+  bodyAuthSignature,
+  classifyHookAuth,
+  collectFunctionDefs,
+  SECURITY_AST_PY,
 } from "../../../src/drift/security-ast-python.js";
+import type { SyntaxNode } from "../../../src/core/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 
 const py = (path: string, src: string) => fileWithTree(path, src, "python");
@@ -1870,6 +1875,376 @@ describe("never-false-bless sweep", () => {
         const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
         expect(emitted?.hasAuth ?? false, `${entry.name}: ${gt.method} ${gt.path}`).toBe(false);
       }
+    }
+  });
+});
+
+// ─── ADDENDUM Task 1: body-signature analyzer (pure helpers) ────────────────
+//
+// These test the pure, exported helpers directly: a hook body node in ->
+// "reject" | "none" | "opaque" (bodyAuthSignature), and the precedence layer
+// classifyHookAuth -> "auth" | "not-auth" | "unsure". The governing invariant
+// (NEVER-FALSE-BLESS) means "auth"/"reject" only ever fires on a verified
+// rejection signature; every ambiguity resolves away from a bless.
+
+// Select the body + defs of a named function ("hook" by default). Selecting by
+// name (not descendantsOfType[0]) keeps one-hop fixtures — where a same-file
+// helper is defined before the hook — unambiguous.
+async function hookBody(src: string, fnName = "hook") {
+  const f = await py("body.py", src);
+  const root = f.tree!.rootNode;
+  const defs = collectFunctionDefs(root);
+  const named = root
+    .descendantsOfType("function_definition")
+    .filter((d): d is SyntaxNode => d !== null);
+  const def = named.find((d) => d.childForFieldName("name")?.text === fnName) ?? named[0]!;
+  return { body: def.childForFieldName("body")!, defs };
+}
+const sig = async (src: string, fnName = "hook") => {
+  const { body, defs } = await hookBody(src, fnName);
+  return bodyAuthSignature(body, defs);
+};
+
+describe("body-signature grammar prerequisites", () => {
+  const rootOf = async (src: string) => (await py("g.py", src)).tree!.rootNode;
+  const noError = (n: SyntaxNode) => expect(n.hasError).toBe(false);
+
+  it("abort(401): call > identifier + argument_list > integer", async () => {
+    const root = await rootOf(`def f():\n    abort(401)\n`);
+    noError(root);
+    const call = root.descendantsOfType("call")[0]!;
+    expect(call.childForFieldName("function")!.type).toBe("identifier");
+    expect(call.childForFieldName("function")!.text).toBe("abort");
+    const args = call.childForFieldName("arguments")!;
+    expect(args.type).toBe("argument_list");
+    expect(args.namedChild(0)!.type).toBe("integer");
+    expect(args.namedChild(0)!.text).toBe("401");
+  });
+
+  it("raise HTTPException(...): raise_statement > namedChild(0) call with keyword_argument", async () => {
+    const root = await rootOf(`def f():\n    raise HTTPException(status_code=401)\n`);
+    noError(root);
+    const rs = root.descendantsOfType("raise_statement")[0]!;
+    const call = rs.namedChild(0)!;
+    expect(call.type).toBe("call");
+    expect(call.childForFieldName("function")!.text).toBe("HTTPException");
+    const kw = call.childForFieldName("arguments")!.namedChild(0)!;
+    expect(kw.type).toBe("keyword_argument");
+    expect(kw.childForFieldName("name")!.text).toBe("status_code");
+  });
+
+  it("bare raise PermissionDenied: raise_statement > identifier, NOT a call", async () => {
+    const root = await rootOf(`def f():\n    raise PermissionDenied\n`);
+    noError(root);
+    const raised = root.descendantsOfType("raise_statement")[0]!.namedChild(0)!;
+    expect(raised.type).toBe("identifier");
+    expect(raised.text).toBe("PermissionDenied");
+  });
+
+  it("return redirect(url_for('auth.login')): return_statement > call > call", async () => {
+    const root = await rootOf(`def f():\n    return redirect(url_for('auth.login'))\n`);
+    noError(root);
+    const val = root.descendantsOfType("return_statement")[0]!.namedChild(0)!;
+    expect(val.type).toBe("call");
+    expect(val.childForFieldName("function")!.text).toBe("redirect");
+    const inner = val.childForFieldName("arguments")!.namedChild(0)!;
+    expect(inner.type).toBe("call");
+    expect(inner.childForFieldName("function")!.text).toBe("url_for");
+  });
+
+  it("return jsonify({}), 401: return_statement > expression_list ending in integer", async () => {
+    const root = await rootOf(`def f():\n    return jsonify({}), 401\n`);
+    noError(root);
+    const val = root.descendantsOfType("return_statement")[0]!.namedChild(0)!;
+    expect(val.type).toBe("expression_list");
+    const kids = val.namedChildren.filter((n): n is SyntaxNode => n !== null);
+    const last = kids[kids.length - 1]!;
+    expect(last.type).toBe("integer");
+    expect(last.text).toBe("401");
+  });
+
+  it("'user_id' not in session: comparison_operator with an unnamed 'not in' child", async () => {
+    const root = await rootOf(`def f():\n    if 'user_id' not in session:\n        pass\n`);
+    noError(root);
+    const cmp = root.descendantsOfType("comparison_operator")[0]!;
+    const ops = cmp.children
+      .filter((c): c is SyntaxNode => c !== null && !c.isNamed)
+      .map((c) => c.type);
+    expect(ops).toContain("not in");
+  });
+
+  it("session.get('user'): call on an attribute callee", async () => {
+    const root = await rootOf(`def f():\n    session.get('user')\n`);
+    noError(root);
+    const fn = root.descendantsOfType("call")[0]!.childForFieldName("function")!;
+    expect(fn.type).toBe("attribute");
+    expect(fn.childForFieldName("attribute")!.text).toBe("get");
+    expect(fn.childForFieldName("object")!.text).toBe("session");
+  });
+
+  it("pass body is a block > pass_statement", async () => {
+    const root = await rootOf(`def f():\n    pass\n`);
+    noError(root);
+    const body = root.descendantsOfType("function_definition")[0]!.childForFieldName("body")!;
+    expect(body.type).toBe("block");
+    expect(body.namedChild(0)!.type).toBe("pass_statement");
+  });
+
+  it("async def is a function_definition with intact name/body fields", async () => {
+    const root = await rootOf(`async def f():\n    abort(401)\n`);
+    noError(root);
+    const def = root.descendantsOfType("function_definition")[0]!;
+    expect(def.type).toBe("function_definition");
+    expect(def.childForFieldName("name")!.text).toBe("f");
+    expect(def.childForFieldName("body")!.type).toBe("block");
+  });
+
+  it("a @lru_cache-decorated def still surfaces in descendantsOfType('function_definition')", async () => {
+    const root = await rootOf(`@functools.lru_cache\ndef helper():\n    abort(401)\n`);
+    noError(root);
+    const defs = root
+      .descendantsOfType("function_definition")
+      .filter((d): d is SyntaxNode => d !== null);
+    expect(defs).toHaveLength(1);
+    expect(defs[0].childForFieldName("name")!.text).toBe("helper");
+  });
+});
+
+describe("bodyAuthSignature: reject signatures", () => {
+  const REJECTS: Array<[string, string]> = [
+    ["abort(401) alone", `def hook():\n    abort(401)\n`],
+    ["flask.abort(401) attribute callee", `def hook():\n    flask.abort(401)\n`],
+    ["return abort(401)", `def hook():\n    return abort(401)\n`],
+    [
+      "abort(401) nested in try/if/for",
+      `def hook():\n    for x in items:\n        try:\n            if bad:\n                abort(401)\n        except Exception:\n            pass\n`,
+    ],
+    [
+      "raise HTTPException(status_code=401, detail='no')",
+      `def hook():\n    raise HTTPException(status_code=401, detail="no")\n`,
+    ],
+    ["raise HTTPException(401) positional", `def hook():\n    raise HTTPException(401)\n`],
+    [
+      "raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)",
+      `def hook():\n    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)\n`,
+    ],
+    [
+      "corroborated 403: session read + abort(403)",
+      `def hook():\n    user = session.get("user_id")\n    if user is None:\n        abort(403)\n`,
+    ],
+    ["raise AuthenticationError('nope')", `def hook():\n    raise AuthenticationError("nope")\n`],
+    ["raise Unauthorized()", `def hook():\n    raise Unauthorized()\n`],
+    [
+      "raise werkzeug.exceptions.Unauthorized()",
+      `def hook():\n    raise werkzeug.exceptions.Unauthorized()\n`,
+    ],
+    ["bare raise PermissionDenied", `def hook():\n    raise PermissionDenied\n`],
+    [
+      "return redirect(url_for('auth.login'))",
+      `def hook():\n    return redirect(url_for("auth.login"))\n`,
+    ],
+    ["return redirect('/login')", `def hook():\n    return redirect("/login")\n`],
+    ["return RedirectResponse('/login')", `def hook():\n    return RedirectResponse("/login")\n`],
+    [
+      "session guard then redirect to login",
+      `def hook():\n    if not session.get("user_id"):\n        return redirect(url_for("auth.login"))\n`,
+    ],
+    [
+      "pyAuthFile wrapper: header read + jsonify tuple 401",
+      `def hook():\n    token = request.headers.get("Authorization")\n    if not token:\n        return jsonify({"error": "unauthorized"}), 401\n`,
+    ],
+    [
+      "current_user guard then abort(401)",
+      `def hook():\n    if not current_user.is_authenticated:\n        abort(401)\n`,
+    ],
+    ["verify_jwt_in_request() alone", `def hook():\n    verify_jwt_in_request()\n`],
+    [
+      "one-hop helper: _reject_anon() aborts 401",
+      `def _reject_anon():\n    if not g.user:\n        abort(401)\n\n\ndef hook():\n    _reject_anon()\n`,
+    ],
+    [
+      "one-hop helper decorated with @functools.lru_cache",
+      `@functools.lru_cache\ndef _reject_anon():\n    if not g.user:\n        abort(401)\n\n\ndef hook():\n    _reject_anon()\n`,
+    ],
+    [
+      "one-hop async helper",
+      `async def _reject_anon():\n    if not g.user:\n        abort(401)\n\n\ndef hook():\n    _reject_anon()\n`,
+    ],
+  ];
+  it.each(REJECTS)('"%s" -> reject', async (_name, src) => {
+    expect(await sig(src)).toBe("reject");
+  });
+});
+
+describe("bodyAuthSignature: none (visible body, no rejection)", () => {
+  const NONES: Array<[string, string]> = [
+    [
+      "verify_user_email body: email + return None",
+      `def hook():\n    send_confirmation_email(g.user.email)\n    return None\n`,
+    ],
+    ["scrub_pii(record)", `def hook():\n    scrub_pii(record)\n`],
+    ["anonymize(record)", `def hook():\n    anonymize(record)\n`],
+    ["logger.info(...)", `def hook():\n    logger.info("hit %s", request.path)\n`],
+    ["g.request_id = uuid4().hex", `def hook():\n    g.request_id = uuid4().hex\n`],
+    [
+      "header setter (subscript assignment)",
+      `def hook():\n    response.headers["X-Frame-Options"] = "DENY"\n`,
+    ],
+    ["pass", `def hook():\n    pass\n`],
+    ["docstring only", `def hook():\n    """just docs"""\n`],
+    ["abort(400)", `def hook():\n    abort(400)\n`],
+    ["abort(404)", `def hook():\n    abort(404)\n`],
+    ["abort(500)", `def hook():\n    abort(500)\n`],
+    ["raise HTTPException(status_code=404)", `def hook():\n    raise HTTPException(status_code=404)\n`],
+    ["lone uncorroborated abort(403)", `def hook():\n    abort(403)\n`],
+    [
+      "lone uncorroborated raise HTTPException(status_code=403)",
+      `def hook():\n    raise HTTPException(status_code=403)\n`,
+    ],
+    [
+      "lone uncorroborated raise HTTPException(status_code=HTTP_403_FORBIDDEN)",
+      `def hook():\n    raise HTTPException(status_code=HTTP_403_FORBIDDEN)\n`,
+    ],
+    ["raise ValueError('bad')", `def hook():\n    raise ValueError("bad")\n`],
+    ["raise KeyError", `def hook():\n    raise KeyError\n`],
+    ["raise NotFound", `def hook():\n    raise NotFound\n`],
+    [
+      "return redirect(url_for('maintenance.notice'))",
+      `def hook():\n    return redirect(url_for("maintenance.notice"))\n`,
+    ],
+    ["return redirect('/checkout')", `def hook():\n    return redirect("/checkout")\n`],
+    ["session.get('locale') (not a credential key)", `def hook():\n    session.get("locale")\n`],
+  ];
+  it.each(NONES)('"%s" -> none', async (_name, src) => {
+    expect(await sig(src)).toBe("none");
+  });
+});
+
+describe("bodyAuthSignature: opaque (auth-flavored but unverifiable)", () => {
+  const OPAQUES: Array<[string, string]> = [
+    ["check_session() undefined helper", `def hook():\n    check_session()\n`],
+    ["confirm(user) undefined helper", `def hook():\n    confirm(user)\n`],
+    ["_do_auth() undefined helper", `def hook():\n    _do_auth()\n`],
+    ["abort(code_var) unreadable status", `def hook():\n    abort(code_var)\n`],
+    [
+      "raise HTTPException(status_code=CODE) unreadable status",
+      `def hook():\n    raise HTTPException(status_code=CODE)\n`,
+    ],
+    [
+      "verify_jwt_in_request(optional=True) non-empty args",
+      `def hook():\n    verify_jwt_in_request(optional=True)\n`,
+    ],
+    ["redirect(page_var) unreadable target", `def hook():\n    return redirect(page_var)\n`],
+    [
+      "credential read + opaque validate_or_die",
+      `def hook():\n    token = request.headers.get("Authorization")\n    validate_or_die(token)\n`,
+    ],
+    [
+      "duplicate same-file def: check_session unresolvable + hint",
+      `def check_session():\n    pass\n\n\ndef check_session():\n    pass\n\n\ndef hook():\n    check_session()\n`,
+    ],
+    ["get_jwt_identity() analytics: jwt hint, never reject", `def hook():\n    get_jwt_identity()\n`],
+  ];
+  it.each(OPAQUES)('"%s" -> opaque', async (_name, src) => {
+    expect(await sig(src)).toBe("opaque");
+  });
+
+  it("cycle a()->b()->a() terminates and returns none (no reject, no hint)", async () => {
+    const src = `def a():\n    b()\n\n\ndef b():\n    a()\n`;
+    expect(await sig(src, "a")).toBe("none");
+  });
+});
+
+describe("classifyHookAuth: precedence", () => {
+  const cls = async (name: string, src: string, simple: boolean, fnName = "hook") => {
+    const { body, defs } = await hookBody(src, fnName);
+    return classifyHookAuth(name, body, defs, simple);
+  };
+
+  it("veto beats a body-positive: optional_authenticate + abort(401) body -> not-auth", async () => {
+    const body =
+      `def hook():\n    token = request.headers.get("Authorization")\n    if token is None:\n        abort(401)\n`;
+    expect(await cls("optional_authenticate", body, true)).toBe("not-auth");
+  });
+
+  it("body beats name (bless): boring gate() with session+abort(401) -> auth", async () => {
+    const body = `def hook():\n    if not session.get("user_id"):\n        abort(401)\n`;
+    expect(await cls("gate", body, true)).toBe("auth");
+  });
+
+  it("body beats name (deny): verify_user_email emailing body -> not-auth", async () => {
+    const body = `def hook():\n    send_confirmation_email(g.user.email)\n    return None\n`;
+    expect(await cls("verify_user_email", body, true)).toBe("not-auth");
+  });
+
+  it("visible pass stub never rescued: require_login/pass -> not-auth", async () => {
+    expect(await cls("require_login", `def hook():\n    pass\n`, true)).toBe("not-auth");
+  });
+
+  it("tier-1 CORE does not rescue a visible stub: check_auth/pass -> not-auth", async () => {
+    expect(await cls("check_auth", `def hook():\n    pass\n`, true)).toBe("not-auth");
+  });
+
+  it("wrong reject code: require_login/abort(404) -> not-auth", async () => {
+    expect(await cls("require_login", `def hook():\n    abort(404)\n`, true)).toBe("not-auth");
+  });
+
+  it("opaque + CORE carve-out: authenticate_request delegating to _do_auth() -> auth", async () => {
+    expect(await cls("authenticate_request", `def hook():\n    _do_auth()\n`, true)).toBe("auth");
+  });
+
+  it("opaque + tier-2 name: require_login -> check_session() -> unsure", async () => {
+    expect(await cls("require_login", `def hook():\n    check_session()\n`, true)).toBe("unsure");
+  });
+
+  it("opaque + attributive name: verify_user_email -> confirm(user) -> unsure", async () => {
+    expect(await cls("verify_user_email", `def hook():\n    confirm(user)\n`, true)).toBe("unsure");
+  });
+
+  it("opaque under a boring name: setup -> check_session() -> unsure (flavored delegation is evidence)", async () => {
+    expect(await cls("setup", `def hook():\n    check_session()\n`, true)).toBe("unsure");
+  });
+
+  it("body null + CORE simple: authenticate -> auth", () => {
+    expect(classifyHookAuth("authenticate", null, new Map(), true)).toBe("auth");
+  });
+
+  it("body null + tier-2 simple: verify_session -> unsure", () => {
+    expect(classifyHookAuth("verify_session", null, new Map(), true)).toBe("unsure");
+  });
+
+  it("body null + attributive simple: verify_user_email -> unsure", () => {
+    expect(classifyHookAuth("verify_user_email", null, new Map(), true)).toBe("unsure");
+  });
+
+  it("body null + auth segment on a non-simple target: AuthGate.check -> unsure (never blesses)", () => {
+    expect(classifyHookAuth("AuthGate.check", null, new Map(), false)).toBe("unsure");
+  });
+
+  it("body null + zero flavor: add_request_id -> not-auth (no hedge)", () => {
+    expect(classifyHookAuth("add_request_id", null, new Map(), true)).toBe("not-auth");
+  });
+
+  it("body null + optional veto: optional_auth_hook -> not-auth", () => {
+    expect(classifyHookAuth("optional_auth_hook", null, new Map(), true)).toBe("not-auth");
+  });
+});
+
+describe("SECURITY_AST_PY export bag: body-signature lexicons", () => {
+  it("includes each new body-signature lexicon name", () => {
+    const keys = Object.keys(SECURITY_AST_PY);
+    for (const name of [
+      "REJECT_STATUSES",
+      "REJECT_STATUS_BLESSES_ALONE",
+      "AUTH_EXCEPTION_ALONE",
+      "AUTH_EXCEPTION_TOPIC",
+      "AUTH_EXCEPTION_KIND",
+      "LOGIN_REDIRECT_SEGMENTS",
+      "KNOWN_AUTH_PRIMITIVES",
+      "OPAQUE_AUTH_HINT_SEGMENTS",
+      "CREDENTIAL_KEY_SEGMENTS",
+    ]) {
+      expect(keys).toContain(name);
     }
   });
 });

@@ -48,6 +48,15 @@
 import type { Tree, SyntaxNode } from "../core/types.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
 
+/** Three-way verdict for a before_request-style hook. `unsure` never blesses
+ *  (hasAuth stays false); it only hedges the finding copy so the user is told
+ *  exactly which hook to double-check. */
+export type HookAuthOutcome = "auth" | "not-auth" | "unsure";
+/** Behavior a hook BODY exhibits: a verified auth rejection (`reject`), a fully
+ *  visible non-enforcing body (`none`), or auth-flavored behavior we cannot
+ *  statically verify (`opaque`). */
+export type BodySignal = "reject" | "none" | "opaque";
+
 // Route-registration attribute names on a router-like receiver.
 const ROUTE_METHODS = new Set(["route", "get", "post", "put", "patch", "delete", "api_route"]);
 // Verbs a methods=[...] kwarg may contribute (same set the regex extractor accepts).
@@ -171,11 +180,56 @@ const MIDDLEWARE_AUTH_SEGMENTS = new Set([
 // invariant, ambiguity and the unrecognized case both resolve to false.
 const PERMISSION_AUTH = new Set(["IsAuthenticated"]);
 
+// ─── Body-signature lexicons (addendum: hook body classification) ────────────
+// Rejection statuses that mean "request denied for identity reasons".
+// ASYMMETRIC by status (never-false-bless): 401 Unauthorized is specifically an
+// AUTHENTICATION denial and reject-blesses ALONE. 403 Forbidden is routinely
+// raised for NON-authentication reasons (CSRF token failure, IP allowlist,
+// maintenance/feature gate, generic authorization policy), so a bare
+// abort(403)/HTTPException(403) counts as a reject ONLY when a credential-surface
+// read (CREDENTIAL_KEY_SEGMENTS shapes) also occurs in the scanned bodies. An
+// uncorroborated lone 403 contributes NOTHING to the signal set (not reject, not
+// opaqueHint): the body resolves "none" -> flat not-auth for a boring name, so
+// csrf_protect / maintenance_gate neither bless (a false-bless the name-only path
+// never had) nor pollute the hedge with obvious non-auth hooks.
+const REJECT_STATUSES = new Set(["401", "403"]);
+const REJECT_STATUS_BLESSES_ALONE = new Set(["401"]); // 403 also needs a credential read
+// raise <X> auth-exception matching: an ALONE segment (unauthorized/forbidden),
+// or a TOPIC segment paired anywhere with a KIND segment (AuthenticationError,
+// PermissionDenied). raise ValueError / KeyError / NotFound never match.
+const AUTH_EXCEPTION_ALONE = new Set(["unauthorized", "forbidden"]);
+const AUTH_EXCEPTION_TOPIC = new Set(["auth", "authentication", "permission", "credentials"]);
+const AUTH_EXCEPTION_KIND = new Set(["error", "exception", "denied", "failed", "required"]);
+// Login-flavored redirect target segments; only these bless a redirect reject.
+const LOGIN_REDIRECT_SEGMENTS = new Set(["login", "signin", "signon", "auth"]);
+// Calls that enforce auth by raising internally; bless with no visible reject,
+// but ONLY with an EMPTY argument_list. A non-empty form
+// (verify_jwt_in_request(optional=True), which ADMITS anonymous requests) is
+// treated as an opaque-hint call, never a reject (mirrors the decorator twin
+// @jwt_required(optional=True)).
+const KNOWN_AUTH_PRIMITIVES = new Set(["verify_jwt_in_request"]);
+// Segments that make an UNRESOLVABLE callee auth-flavored enough that "we cannot
+// see what this call does" resolves UNSURE, not confident not-auth. CORE +
+// SUBJECT + ENFORCE, plus check/confirm/guard. Widening this set can only widen
+// UNSURE (hedged copy), never a bless.
+const OPAQUE_AUTH_HINT_SEGMENTS = new Set([
+  ...AUTH_CORE_SEGMENTS, ...AUTH_SUBJECT_SEGMENTS, ...AUTH_ENFORCE_SEGMENTS,
+  "check", "confirm", "guard",
+]);
+// Keys/attributes whose read marks a credential surface (gates the session/
+// cookie/header read shapes so session.get("locale") stays boring).
+const CREDENTIAL_KEY_SEGMENTS = new Set([
+  "user", "uid", "token", "jwt", "auth", "authorization", "login", "credentials",
+]);
+
 export const SECURITY_AST_PY = {
   ROUTE_METHODS, HTTP_VERBS, MUTATING_VERBS, ROUTER_RECEIVER, ROUTER_CONSTRUCTORS,
   AUTH_DECORATORS, DEPENDS_AUTH_SEGMENTS, DEPENDS_AUTH_PAIRS, DEPENDS_VETO_SEGMENTS,
   VAL_NAMES, RATE_NAMES, AUTH_CORE_SEGMENTS, AUTH_ENFORCE_SEGMENTS,
   AUTH_SUBJECT_SEGMENTS, OPTIONAL_AUTH_VETO, MIDDLEWARE_AUTH_SEGMENTS, PERMISSION_AUTH,
+  REJECT_STATUSES, REJECT_STATUS_BLESSES_ALONE, AUTH_EXCEPTION_ALONE, AUTH_EXCEPTION_TOPIC,
+  AUTH_EXCEPTION_KIND, LOGIN_REDIRECT_SEGMENTS, KNOWN_AUTH_PRIMITIVES,
+  OPAQUE_AUTH_HINT_SEGMENTS, CREDENTIAL_KEY_SEGMENTS,
 };
 
 /** Value of a Python string-ish path argument with quotes AND prefixes stripped.
@@ -409,6 +463,328 @@ function nameHasAuthToken(name: string): boolean {
     segs.some((s) => AUTH_ENFORCE_SEGMENTS.has(s)) &&
     segs.some((s) => AUTH_SUBJECT_SEGMENTS.has(s))
   );
+}
+
+// ─── Body-signature analyzer (addendum) ──────────────────────────────────────
+//
+// Classifies a before_request-style hook by what its BODY does, not what its
+// name suggests. `bodyAuthSignature` walks the body (plus ONE hop into a
+// same-file helper) and returns "reject" | "none" | "opaque"; `classifyHookAuth`
+// layers name precedence on top (an optionality-veto name always wins;
+// otherwise behavior beats a name; an opaque body hedges as "unsure" unless the
+// name is an unambiguous CORE auth token). Every walk keeps the module's
+// per-node `hasError` gate, so error-recovery nodes never contribute a bless.
+//
+// MEASURED reject-catalog recall gaps (SAFE, over-flag direction — a later pass
+// may widen deliberately): reject via a Response/make_response object
+// (abort(make_response(..., 401)) / abort(Response(status=401)), arg0 a call not
+// an integer); Flask-Login `return login_manager.unauthorized()` (an attribute
+// call outside KNOWN_AUTH_PRIMITIVES); and custom auth exceptions outside the
+// lexicon (raise Http401, raise NotAuthenticated). All resolve opaque/unsure or
+// not-auth today, never a false-bless.
+
+// Calls whose reject/target semantics are read in the raise/return walks (or are
+// merely nested), so the generic call walk must not re-interpret them.
+const CALL_HANDLED_ELSEWHERE = new Set([
+  "redirect", "RedirectResponse", "url_for", "jsonify", "HTTPException",
+]);
+
+/** Final callee/exception name of a node: an identifier's text, an attribute's
+ *  `attribute` field text, or (recursively) a call's function name. */
+function finalName(node: SyntaxNode | null): string | null {
+  if (!node) return null;
+  if (node.type === "identifier") return node.text;
+  if (node.type === "attribute") return node.childForFieldName("attribute")?.text ?? null;
+  if (node.type === "call") return finalName(node.childForFieldName("function"));
+  return null;
+}
+
+/** "401" | "403" only when `n` is exactly that integer literal; null otherwise. */
+function rejectStatusKind(n: SyntaxNode | null): "401" | "403" | null {
+  if (!n || n.type !== "integer") return null;
+  return REJECT_STATUSES.has(n.text) ? (n.text as "401" | "403") : null;
+}
+
+/** True when an argument_list has zero named children (a bare `f()`). */
+function isEmptyArgList(args: SyntaxNode | null): boolean {
+  return args !== null && args.namedChildren.filter((c) => c !== null).length === 0;
+}
+
+/** True when any whole segment of `name` is an OPAQUE_AUTH_HINT_SEGMENTS member. */
+function hintHit(name: string): boolean {
+  return nameSegments(name).some((s) => OPAQUE_AUTH_HINT_SEGMENTS.has(s));
+}
+
+/** Auth-exception name match (raise matching): an ALONE segment, or a TOPIC
+ *  segment paired anywhere in the name with a KIND segment. Whole-segment. */
+function isAuthExceptionName(name: string): boolean {
+  const segs = nameSegments(name);
+  if (segs.some((s) => AUTH_EXCEPTION_ALONE.has(s))) return true;
+  return (
+    segs.some((s) => AUTH_EXCEPTION_TOPIC.has(s)) &&
+    segs.some((s) => AUTH_EXCEPTION_KIND.has(s))
+  );
+}
+
+/** True when a stripped string key carries a credential segment. */
+function keyIsCredential(key: string | null): boolean {
+  return key !== null && nameSegments(key).some((s) => CREDENTIAL_KEY_SEGMENTS.has(s));
+}
+
+/** Status a raised HTTPException declares: "401"/"403"; "unreadable" (status_code
+ *  set to an opaque identifier such as CODE); or null (no 401/403 signal, e.g. a
+ *  404 or a detail-only raise). */
+function httpExceptionStatus(call: SyntaxNode): "401" | "403" | "unreadable" | null {
+  const args = call.childForFieldName("arguments");
+  if (!args) return null;
+  const named = args.namedChildren.filter((n): n is SyntaxNode => n !== null);
+  const kw = named.find(
+    (n) => n.type === "keyword_argument" && n.childForFieldName("name")?.text === "status_code",
+  );
+  if (kw) {
+    const val = kw.childForFieldName("value");
+    if (!val) return null;
+    if (val.type === "integer") {
+      return REJECT_STATUSES.has(val.text) ? (val.text as "401" | "403") : null;
+    }
+    if (val.type === "attribute") {
+      const m = (val.childForFieldName("attribute")?.text ?? "").match(/^HTTP_(401|403)_/);
+      return m ? (m[1] as "401" | "403") : null;
+    }
+    if (val.type === "identifier") {
+      const m = val.text.match(/^HTTP_(401|403)_/);
+      return m ? (m[1] as "401" | "403") : "unreadable"; // bare CODE identifier
+    }
+    return null;
+  }
+  const pos = named.find((n) => n.type !== "keyword_argument") ?? null;
+  return rejectStatusKind(pos);
+}
+
+/** Resolved redirect target string, or null when statically unreadable. */
+function redirectTargetString(call: SyntaxNode): string | null {
+  const arg0 = call.childForFieldName("arguments")?.namedChild(0) ?? null;
+  if (!arg0) return null;
+  if (arg0.type === "string") return pyStringText(arg0);
+  if (arg0.type === "call" && finalName(arg0.childForFieldName("function")) === "url_for") {
+    const inner = arg0.childForFieldName("arguments")?.namedChild(0) ?? null;
+    return inner && inner.type === "string" ? pyStringText(inner) : null;
+  }
+  return null;
+}
+
+/** True when a resolved redirect target has a login-flavored segment. */
+function redirectTargetIsLogin(target: string): boolean {
+  return target
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((s) => s.length > 0)
+    .some((s) => LOGIN_REDIRECT_SEGMENTS.has(s));
+}
+
+/** True when a `.get(...)`-style call reads a credential key off a session /
+ *  cookie / header surface (session.get, g.get, request.headers.get, ...). */
+function isCredentialGetCall(call: SyntaxNode): boolean {
+  const fn = call.childForFieldName("function");
+  if (!fn || fn.type !== "attribute" || fn.childForFieldName("attribute")?.text !== "get") {
+    return false;
+  }
+  const obj = fn.childForFieldName("object");
+  if (!obj) return false;
+  const receiverOk =
+    (obj.type === "identifier" && (obj.text === "session" || obj.text === "g")) ||
+    (obj.type === "attribute" &&
+      obj.childForFieldName("object")?.text === "request" &&
+      ["headers", "cookies", "session"].includes(obj.childForFieldName("attribute")?.text ?? ""));
+  if (!receiverOk) return false;
+  const arg0 = call.childForFieldName("arguments")?.namedChild(0) ?? null;
+  return arg0 !== null && arg0.type === "string" && keyIsCredential(pyStringText(arg0));
+}
+
+interface BodySignals {
+  reject401: boolean;
+  reject403: boolean;
+  opaqueHint: boolean;
+  credentialRead: boolean;
+}
+
+/** One body's direct signals; `hop` = whether a same-file helper body may be
+ *  followed (depth exactly 1). reject401 blesses ALONE; reject403 blesses only
+ *  WITH a credentialRead (403 is routinely non-auth). */
+function scanBody(
+  body: SyntaxNode,
+  defs: Map<string, SyntaxNode | null>,
+  hop: boolean,
+): BodySignals {
+  const out: BodySignals = {
+    reject401: false, reject403: false, opaqueHint: false, credentialRead: false,
+  };
+  const merge = (s: BodySignals) => {
+    out.reject401 = out.reject401 || s.reject401;
+    out.reject403 = out.reject403 || s.reject403;
+    out.opaqueHint = out.opaqueHint || s.opaqueHint;
+    out.credentialRead = out.credentialRead || s.credentialRead;
+  };
+
+  // Calls: aborts, auth primitives, one-hop helpers, opaque hints, credential .get.
+  for (const call of body.descendantsOfType("call")) {
+    if (!call || call.hasError) continue;
+    if (isCredentialGetCall(call)) out.credentialRead = true;
+    const fn = call.childForFieldName("function");
+    const args = call.childForFieldName("arguments");
+    const name = finalName(fn);
+    if (name === "abort") {
+      const arg0 = args?.namedChild(0) ?? null;
+      const kind = rejectStatusKind(arg0);
+      if (kind === "401") out.reject401 = true;
+      else if (kind === "403") out.reject403 = true;
+      else if (arg0 !== null && arg0.type !== "integer") out.opaqueHint = true; // abort(code_var)
+      continue;
+    }
+    if (name !== null && KNOWN_AUTH_PRIMITIVES.has(name) && isEmptyArgList(args)) {
+      out.reject401 = true; // verify_jwt_in_request() raises internally
+      continue;
+    }
+    if (name !== null && CALL_HANDLED_ELSEWHERE.has(name)) continue;
+    if (fn?.type === "identifier" && name !== null && defs.has(name)) {
+      const def = defs.get(name) ?? null;
+      if (def && hop) {
+        const hopBody = def.childForFieldName("body");
+        if (hopBody) merge(scanBody(hopBody, defs, false));
+      } else if (!def && hintHit(name)) {
+        out.opaqueHint = true; // duplicate same-name def: unresolvable + flavored
+      }
+      // A resolvable def at hop=false is the cycle guard: contribute nothing.
+      continue;
+    }
+    if (name !== null && hintHit(name)) out.opaqueHint = true; // unresolvable flavored callee
+  }
+
+  // raise <exception>: HTTPException status, else the auth-exception lexicon.
+  for (const rs of body.descendantsOfType("raise_statement")) {
+    if (!rs || rs.hasError) continue;
+    const raised = rs.namedChild(0);
+    if (!raised) continue;
+    if (
+      raised.type === "call" &&
+      finalName(raised.childForFieldName("function")) === "HTTPException"
+    ) {
+      const st = httpExceptionStatus(raised);
+      if (st === "401") out.reject401 = true;
+      else if (st === "403") out.reject403 = true;
+      else if (st === "unreadable") out.opaqueHint = true;
+      continue;
+    }
+    const rn = finalName(raised);
+    if (rn !== null && isAuthExceptionName(rn)) out.reject401 = true;
+  }
+
+  // return: a login-flavored redirect, or an (expr, 401|403) tuple.
+  for (const ret of body.descendantsOfType("return_statement")) {
+    if (!ret || ret.hasError) continue;
+    const val = ret.namedChild(0);
+    if (!val) continue;
+    if (val.type === "call") {
+      const cn = finalName(val.childForFieldName("function"));
+      if (cn === "redirect" || cn === "RedirectResponse") {
+        const target = redirectTargetString(val);
+        if (target === null) out.opaqueHint = true; // redirect(page_var): unreadable target
+        else if (redirectTargetIsLogin(target)) out.reject401 = true;
+      }
+      continue;
+    }
+    if (val.type === "expression_list") {
+      const kids = val.namedChildren.filter((n): n is SyntaxNode => n !== null);
+      const kind = rejectStatusKind(kids[kids.length - 1] ?? null);
+      if (kind === "401") out.reject401 = true;
+      else if (kind === "403") out.reject403 = true;
+    }
+  }
+
+  // Credential-surface reads (comparison + subscript shapes; the .get call shape
+  // is folded into the call walk above via isCredentialGetCall).
+  for (const cmp of body.descendantsOfType("comparison_operator")) {
+    if (!cmp || cmp.hasError) continue;
+    const ops = cmp.children
+      .filter((c): c is SyntaxNode => c !== null && !c.isNamed)
+      .map((c) => c.type);
+    const named = cmp.namedChildren.filter((n): n is SyntaxNode => n !== null);
+    if (ops.includes("is")) {
+      const hasNone = named.some((n) => n.type === "none");
+      const credOperand = named.some(
+        (n) =>
+          (n.type === "identifier" || n.type === "attribute") &&
+          nameSegments(n.text).some((s) => CREDENTIAL_KEY_SEGMENTS.has(s)),
+      );
+      if (hasNone && credOperand) out.credentialRead = true;
+    }
+    if (ops.includes("in") || ops.includes("not in")) {
+      if (named.some((n) => n.type === "string" && keyIsCredential(pyStringText(n)))) {
+        out.credentialRead = true;
+      }
+    }
+  }
+  for (const sub of body.descendantsOfType("subscript")) {
+    if (!sub || sub.hasError) continue;
+    const value = sub.childForFieldName("value");
+    if (!value || value.type !== "identifier" || !(value.text === "session" || value.text === "g")) {
+      continue;
+    }
+    const idx = sub.childForFieldName("subscript");
+    if (idx && idx.type === "string" && keyIsCredential(pyStringText(idx))) out.credentialRead = true;
+  }
+
+  return out;
+}
+
+/** File-wide map of top-level and nested function definitions by name. A name
+ *  seen more than once maps to null (duplicate: follow NEITHER definition). */
+export function collectFunctionDefs(root: SyntaxNode): Map<string, SyntaxNode | null> {
+  const defs = new Map<string, SyntaxNode | null>();
+  for (const def of root.descendantsOfType("function_definition")) {
+    if (!def || def.hasError) continue;
+    const name = def.childForFieldName("name")?.text;
+    if (!name) continue;
+    defs.set(name, defs.has(name) ? null : def);
+  }
+  return defs;
+}
+
+/** A hook body's three-way auth signal. 401-family blesses alone; a 403 blesses
+ *  only when a credential surface is also read; an uncorroborated 403 is neither
+ *  reject nor opaque (keeps the hedge meaningful). */
+export function bodyAuthSignature(
+  body: SyntaxNode,
+  defs: Map<string, SyntaxNode | null>,
+): BodySignal {
+  const s = scanBody(body, defs, true);
+  if (s.reject401 || (s.reject403 && s.credentialRead)) return "reject";
+  if (s.opaqueHint || s.credentialRead) return "opaque";
+  return "none";
+}
+
+/** Precedence layer over `bodyAuthSignature`. `nameIsSimpleIdentifier` is false
+ *  for attribute targets (AuthGate.check), which can hedge but never bless. */
+export function classifyHookAuth(
+  hookName: string,
+  body: SyntaxNode | null,
+  defs: Map<string, SyntaxNode | null>,
+  nameIsSimpleIdentifier: boolean,
+): HookAuthOutcome {
+  const segs = nameSegments(hookName);
+  if (segs.some((s) => OPTIONAL_AUTH_VETO.has(s))) return "not-auth"; // rule 1
+  const isCore =
+    nameIsSimpleIdentifier &&
+    (segs.some((s) => AUTH_CORE_SEGMENTS.has(s)) || AUTH_DECORATORS.has(hookName));
+  if (body) {
+    const sig = bodyAuthSignature(body, defs);
+    if (sig === "reject") return "auth"; // rule 2: behavior beats name
+    if (sig === "none") return "not-auth"; // rule 3: a visible non-enforcing body, name never rescues
+    return isCore ? "auth" : "unsure"; // rule 4: opaque -> CORE carve-out, else hedge
+  }
+  if (isCore) return "auth"; // rule 5: resolved simple CORE name
+  const flavored = segs.some((s) => AUTH_CORE_SEGMENTS.has(s)) || nameHasAuthToken(hookName);
+  return flavored ? "unsure" : "not-auth";
 }
 
 /** Segment-matched auth verdict for a resolved dependency name (see the constants
