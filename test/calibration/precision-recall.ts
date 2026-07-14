@@ -21,6 +21,7 @@ import { runDriftDetection } from "../../src/drift/index.js";
 import type { Finding } from "../../src/core/types.js";
 import { generateBaseline, type BaselineFile } from "./baseline.js";
 import { INJECTORS } from "./injectors.js";
+import { flaskAuthedGroup, pyAuthFile, pyAppFile, stripFlaskAuth } from "./python-security-fixture.js";
 import { classify, findingCategory, type CategoryMetrics, type DriftLabel, type ScoredFinding } from "./metrics.js";
 
 // Each injector's expected detector category (what a correct detector emits).
@@ -123,13 +124,31 @@ async function main(): Promise<void> {
     mergeInto(agg, classify(scored(await scan(dir)), labels));
   }
 
+  // 3. Python security corpus (own root, own row label). This exercises the
+  // AST extractor's realistic Flask fixture through the FULL on-disk scan
+  // pipeline (not the direct detector call test/calibration/security-python.ts
+  // uses), and is kept out of the TS baseline/injector loop above by design:
+  // merging Python files into generateBaseline() would contaminate the
+  // naming/architecture rows and shift the clean-scan FP floor, and merging
+  // this row's counts into the JS "security_posture" category would let a
+  // Python precision regression hide behind good JS numbers.
+  const pyBase = [...flaskAuthedGroup(), pyAuthFile, pyAppFile];
+  const pyVariant = stripFlaskAuth(pyBase, 3); // 3 of 8 unauthed -> ratio 5/8 <= 0.75: primary vote silent, gap path
+  const pyLabels = diffLabels(pyBase, pyVariant, "security_posture_py");
+  const pyDir = join(root, "security_python");
+  await writeFixture(pyDir, pyVariant);
+  const pyScored = scored(await scan(pyDir))
+    .filter((s) => s.category === "security_posture")
+    .map((s) => ({ ...s, category: "security_posture_py" }));
+  mergeInto(agg, classify(pyScored, pyLabels));
+
   const allRows = finalize(agg);
   // Only the INJECTED categories have synthetic ground truth — those are the
   // ones we can fairly score. Other categories that fire on the templated
   // baseline (semantic_duplication, dead-code, phantom_scaffolding — the 6
   // near-identical, consumer-less handlers legitimately trip them) have no
   // ground truth here and are reported separately as un-measured.
-  const injectedCats = new Set(Object.values(INJECTOR_CATEGORY));
+  const injectedCats = new Set([...Object.values(INJECTOR_CATEGORY), "security_posture_py"]);
   const rows = allRows.filter((r) => injectedCats.has(r.category));
   const unmeasured = allRows.filter((r) => !injectedCats.has(r.category) && (r.fp ?? 0) > 0);
 

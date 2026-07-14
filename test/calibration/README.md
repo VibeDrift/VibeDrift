@@ -87,6 +87,50 @@ monotonicity: ✓  (composite + drift both strictly decrease)
 responsiveness: ✓  (each +25% drift yields ≥5pt score drop)
 ```
 
+## Python security fixture (the multilang calibration gate)
+
+`python-security-fixture.ts` + `security-python.test.ts` are the enforced
+precision/recall gate for the Python AST security extractor
+(`src/drift/security-ast-python.ts`). Unlike the harness above, this one runs
+as a normal vitest file (`test/**/*.test.ts`), so it is checked on every
+`npm test`, not just `npm run calibrate`.
+
+The corpus is realistic Flask/FastAPI multi-file code (real Blueprint/
+APIRouter idioms, `login_required` decorators, `Depends(get_current_user)`),
+not minimal stubs, split into three independent roots:
+
+- `pysrv/` — 8 Flask blueprints, one mutating route each, receiver names
+  deliberately mixed between convention-gated (`users_bp`, `orders_bp`,
+  `payments_router`, `api`) and bare names resolved only structurally via
+  their `Blueprint(...)` assignment (`main`, `carts`, `auth`, `admin`).
+- `fastsrv/` — 5 FastAPI routers, one mutating route each, guarded via
+  `Depends(get_current_user)`.
+- `hooks/` — 5 uniformly PUBLIC webhook receivers (Stripe, GitHub, Slack,
+  Twilio, SendGrid). This is the negative control and lives in its own root
+  so it never shares `repoHasAuthMachinery` evidence with the authed corpora
+  (that check is repo-global over whatever files are in `ctx.files`, not
+  scoped to a route group).
+
+Five scenarios, each computing precision/recall explicitly against planted
+ground truth:
+
+- **S0** recognition self-check — every route file in the Flask/FastAPI
+  corpora yields exactly one route (13 total), and the negative control
+  yields exactly 5. A receiver-gate recall regression fails here with a
+  count, instead of silently vanishing from a vote several layers down.
+- **S1 / S2** the primary dominance vote (`analyzeSecurityProperty`) on
+  Flask and FastAPI respectively: one planted deviator among an authed
+  majority, precision 1.0 / recall 1.0.
+- **S3** the uniform-auth-gap fallback (`analyzeUniformAuthGap`): all 8
+  Flask routes stripped at once, so the primary vote goes silent (ratio 0)
+  and the gap must fire instead, precision 1.0 / recall 1.0.
+- **S4** the negative control: route extraction is asserted BEFORE
+  zero-findings (non-vacuity), because zero findings is also what you get
+  when zero routes are recognized — silence only proves something once the
+  routes were actually seen.
+- **S5** the uniformly-authed control: zero findings on every axis (auth,
+  validation, rate-limit).
+
 ## Adding a new injection type
 
 Drop a generator in `generators/`. Signature:
