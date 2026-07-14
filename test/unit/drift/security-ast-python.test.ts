@@ -2344,6 +2344,24 @@ const NEVER_FALSE_BLESS_SWEEP: Array<{
       `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
     groundTruth: [{ path: "/x", method: "POST", authed: false }],
   },
+  // CRITICAL 1: guarded-403 over-match. A 403 gated by a bare credential-ish name
+  // against a non-credential container (`"login" in request.path`) or an
+  // is-None on an attribute that merely contains the "user" segment
+  // (`request.user_agent`) is NOT a credential guard and must never bless.
+  {
+    name: "path-filter-403", // "login" in request.path is a path filter, not an auth guard
+    source:
+      `@app.before_request\ndef path_filter():\n    if "login" in request.path:\n        abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "user-agent-403", // request.user_agent is None reads no credential surface
+    source:
+      `@app.before_request\ndef user_agent_gate():\n    if request.user_agent is None:\n        abort(403)\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
   // ACCEPTED OVER-BLESS (documented, NOT asserted authed:false): a boring `gate`
   // hook that early-returns for public paths then abort(401)s reads as a verified
   // reject and blesses its receiver's routes at RECEIVER granularity — including
@@ -3001,6 +3019,34 @@ describe("tightening 2: a 403 blesses only inside a credential-guarded reject", 
     const src = `def hook():\n    if request.user_agent:\n        abort(403)\n`;
     expect(await sig(src)).not.toBe("reject");
     expect(await sig(src)).toBe("none");
+  });
+
+  // CRITICAL 1 (false-bless): the guarded-403 bless gate must read a STRUCTURAL
+  // credential surface (a session/request .get call, a session/g subscript, a
+  // credential membership against session/request.session/request.headers, or an
+  // is-None test on a known credential surface), never a bare credential-ish name
+  // against ANY container. A path filter that 403s and a user-agent null-check
+  // that 403s must NOT drive a bless.
+  it("bodyAuthSignature: `if \"login\" in request.path: abort(403)` does NOT bless (string-in-ANY-container over-match closed)", async () => {
+    const src = `def hook():\n    if "login" in request.path:\n        abort(403)\n`;
+    expect(await sig(src)).not.toBe("reject");
+    expect(await sig(src)).toBe("opaque");
+  });
+
+  it("bodyAuthSignature: `if request.user_agent is None: abort(403)` does NOT bless (bare credential-segment name over-match closed)", async () => {
+    const src = `def hook():\n    if request.user_agent is None:\n        abort(403)\n`;
+    expect(await sig(src)).not.toBe("reject");
+    expect(await sig(src)).toBe("opaque");
+  });
+
+  it("bodyAuthSignature: `if not session.get(\"user\"): abort(403)` stays reject (structural .get guard on session)", async () => {
+    const src = `def hook():\n    if not session.get("user"):\n        abort(403)\n`;
+    expect(await sig(src)).toBe("reject");
+  });
+
+  it("bodyAuthSignature: `if request.headers.get(\"Authorization\") is None: abort(403)` stays reject (structural header .get guard)", async () => {
+    const src = `def hook():\n    if request.headers.get("Authorization") is None:\n        abort(403)\n`;
+    expect(await sig(src)).toBe("reject");
   });
 
   it("extractor: a CSRF gate that reads the session but 403s on csrf failure does NOT bless", async () => {

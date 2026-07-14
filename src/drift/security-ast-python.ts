@@ -806,14 +806,28 @@ function prunedSelfAndDescendants(node: SyntaxNode, types: Set<string>): SyntaxN
   return out;
 }
 
-/** True when a node subtree reads a credential/session/auth surface, by the SAME
- *  three shapes the body scan recognizes: a session/cookie/header `.get("<cred>")`
- *  call; a `<cred> is None` comparison or a `"<cred>" in/not in <x>` comparison;
- *  or a `session["<cred>"]` / `g["<cred>"]` subscript. Deliberately NOT a bare
- *  credential-named identifier read (that would over-match user_agent, username,
- *  ...): keeping this identical to the body-wide `credentialRead` detection
- *  guarantees the guarded-403 blessing set is a strict SUBSET of the pre-tightening
- *  body-wide set, so the tightening only ever REMOVES blesses, never adds one. */
+/** True when `sub` is a `session["<cred>"]` / `g["<cred>"]` subscript reading a
+ *  credential key. Shared by the body-wide read and the strict guard gate. */
+function isCredentialSubscript(sub: SyntaxNode): boolean {
+  const value = sub.childForFieldName("value");
+  if (!value || value.type !== "identifier" || !(value.text === "session" || value.text === "g")) {
+    return false;
+  }
+  const idx = sub.childForFieldName("subscript");
+  return idx !== null && idx.type === "string" && keyIsCredential(pyStringText(idx));
+}
+
+/** True when a node subtree reads a credential/session/auth surface, by a LOOSE
+ *  reading of the recognized shapes: a session/cookie/header `.get("<cred>")`
+ *  call; a `<cred> is None` comparison or a `"<cred>" in/not in <x>` comparison
+ *  (against ANY container); or a `session["<cred>"]` / `g["<cred>"]` subscript.
+ *
+ *  Used ONLY for the body-wide `credentialRead` signal, which resolves at most to
+ *  `opaque` (a hedge, never a bless), so its deliberate over-match on a bare
+ *  credential-ish name merely widens the SAFE opaque bucket. The guarded-403 BLESS
+ *  gate does NOT use this helper — it uses the stricter
+ *  `guardConditionHasCredentialRead` below, so `request.user_agent is None` and
+ *  `"login" in request.path` never drive a bless. */
 function nodeHasCredentialRead(node: SyntaxNode): boolean {
   for (const call of prunedSelfAndDescendants(node, CALL_T)) {
     if (!call.hasError && isCredentialGetCall(call)) return true;
@@ -838,13 +852,94 @@ function nodeHasCredentialRead(node: SyntaxNode): boolean {
     }
   }
   for (const sub of prunedSelfAndDescendants(node, SUBSCRIPT_T)) {
-    if (sub.hasError) continue;
-    const value = sub.childForFieldName("value");
-    if (!value || value.type !== "identifier" || !(value.text === "session" || value.text === "g")) {
-      continue;
+    if (!sub.hasError && isCredentialSubscript(sub)) return true;
+  }
+  return false;
+}
+
+/** Local names in `body` bound to a STRUCTURAL credential source (a session/
+ *  request `.get(...)` call, or a `session`/`g` subscript), pruned of nested
+ *  defs. Lets `user = session.get("user_id"); if user is None: abort(403)` count
+ *  as a credential guard while a bare `request.user_agent` name never does. */
+function credentialBoundLocals(body: SyntaxNode): Set<string> {
+  const bound = new Set<string>();
+  for (const asn of prunedDescendants(body, new Set(["assignment"]))) {
+    if (asn.hasError) continue;
+    const left = asn.childForFieldName("left");
+    const right = asn.childForFieldName("right");
+    if (!left || left.type !== "identifier" || !right) continue;
+    const rhsIsCredential =
+      (right.type === "call" && isCredentialGetCall(right)) ||
+      (right.type === "subscript" && isCredentialSubscript(right));
+    if (rhsIsCredential) bound.add(left.text);
+  }
+  return bound;
+}
+
+/** Containers a credential membership test (`"<cred>" in/not in X`) may read
+ *  against: `session`/`g`, or `request.session`/`request.headers`/
+ *  `request.cookies`. `request.path` is deliberately NOT one, so
+ *  `"login" in request.path` is not a credential read. */
+function isCredentialContainer(node: SyntaxNode): boolean {
+  if (node.type === "identifier") return node.text === "session" || node.text === "g";
+  if (node.type === "attribute") {
+    return (
+      node.childForFieldName("object")?.text === "request" &&
+      ["session", "headers", "cookies"].includes(node.childForFieldName("attribute")?.text ?? "")
+    );
+  }
+  return false;
+}
+
+/** True when an is-None operand is a KNOWN credential surface: a `g.<cred>` /
+ *  `session.<cred>` attribute (never `request.<x>`, so `request.user_agent` is
+ *  out), or a bare identifier bound to a credential source earlier in the body. */
+function isCredentialNoneOperand(node: SyntaxNode, boundLocals: Set<string>): boolean {
+  if (node.type === "identifier") return boundLocals.has(node.text);
+  if (node.type === "attribute") {
+    const obj = node.childForFieldName("object");
+    const attr = node.childForFieldName("attribute")?.text ?? "";
+    return (
+      obj !== null &&
+      obj.type === "identifier" &&
+      (obj.text === "g" || obj.text === "session") &&
+      nameSegments(attr).some((s) => CREDENTIAL_KEY_SEGMENTS.has(s))
+    );
+  }
+  return false;
+}
+
+/** STRICTER credential read for the guarded-403 BLESS gate ONLY. A 403 guard
+ *  qualifies solely via a STRUCTURAL read: a session/request `.get(...)` call, a
+ *  `session`/`g` subscript, a credential membership against a credential
+ *  container (isCredentialContainer), or an is-None test on a known credential
+ *  surface (isCredentialNoneOperand). Never a bare credential-ish name against an
+ *  arbitrary container, so `"login" in request.path` and `request.user_agent is
+ *  None` never bless (they still resolve `opaque` -> unsure via the loose
+ *  body-wide read, a hedge, never a bless). */
+function guardConditionHasCredentialRead(cond: SyntaxNode, boundLocals: Set<string>): boolean {
+  for (const call of prunedSelfAndDescendants(cond, CALL_T)) {
+    if (!call.hasError && isCredentialGetCall(call)) return true;
+  }
+  for (const sub of prunedSelfAndDescendants(cond, SUBSCRIPT_T)) {
+    if (!sub.hasError && isCredentialSubscript(sub)) return true;
+  }
+  for (const cmp of prunedSelfAndDescendants(cond, COMPARISON_T)) {
+    if (cmp.hasError) continue;
+    const ops = cmp.children
+      .filter((c): c is SyntaxNode => c !== null && !c.isNamed)
+      .map((c) => c.type);
+    const named = cmp.namedChildren.filter((n): n is SyntaxNode => n !== null);
+    if (ops.includes("in") || ops.includes("not in")) {
+      const credString = named.some((n) => n.type === "string" && keyIsCredential(pyStringText(n)));
+      const credContainer = named.some((n) => isCredentialContainer(n));
+      if (credString && credContainer) return true;
     }
-    const idx = sub.childForFieldName("subscript");
-    if (idx && idx.type === "string" && keyIsCredential(pyStringText(idx))) return true;
+    if (ops.includes("is")) {
+      const hasNone = named.some((n) => n.type === "none");
+      const credOperand = named.some((n) => isCredentialNoneOperand(n, boundLocals));
+      if (hasNone && credOperand) return true;
+    }
   }
   return false;
 }
@@ -883,9 +978,11 @@ function subtreeHas403Reject(node: SyntaxNode): boolean {
 
 interface BodySignals {
   reject401: boolean;
-  /** A 403 reject that sits inside an `if` whose CONDITION reads a credential
-   *  surface. A bare 403 anywhere no longer contributes (a lone 403 is routinely
-   *  a CSRF / IP / maintenance gate, not an authentication denial). */
+  /** A 403 reject that sits inside an `if` whose CONDITION STRUCTURALLY reads a
+   *  credential surface (guardConditionHasCredentialRead). A bare 403 anywhere no
+   *  longer contributes (a lone 403 is routinely a CSRF / IP / maintenance gate),
+   *  nor does a 403 guarded by a bare credential-ish name against an arbitrary
+   *  container (`"login" in request.path`, `request.user_agent is None`). */
   reject403Guarded: boolean;
   opaqueHint: boolean;
   credentialRead: boolean;
@@ -951,13 +1048,16 @@ function scanBody(
 
   // Guarded 403: an `if <credential-condition>: ... <403 reject> ...`. A 403 is
   // routinely a non-auth denial (CSRF, IP allowlist, maintenance), so it blesses
-  // ONLY when the reject is driven by a guard condition that reads a credential
-  // surface, never on body-wide co-occurrence with an unrelated credential read.
+  // ONLY when the reject is driven by a guard condition that STRUCTURALLY reads a
+  // credential surface (guardConditionHasCredentialRead — stricter than the loose
+  // body-wide read), never off a bare credential-ish name against an arbitrary
+  // container, and never on body-wide co-occurrence with an unrelated read.
+  const boundLocals = credentialBoundLocals(body);
   for (const ifs of prunedDescendants(body, new Set(["if_statement"]))) {
     if (ifs.hasError) continue;
     const cond = ifs.childForFieldName("condition");
     const cons = ifs.childForFieldName("consequence");
-    if (cond && cons && nodeHasCredentialRead(cond) && subtreeHas403Reject(cons)) {
+    if (cond && cons && guardConditionHasCredentialRead(cond, boundLocals) && subtreeHas403Reject(cons)) {
       out.reject403Guarded = true;
     }
   }
