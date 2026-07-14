@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractGoRoutesAst, SECURITY_AST_GO } from "../../../src/drift/security-ast-go.js";
+import { SECURITY_AST } from "../../../src/drift/security-ast.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 
 const go = (path: string, src: string) => fileWithTree(path, src, "go");
@@ -416,5 +417,336 @@ describe("extractGoRoutesAst: path-string forms", () => {
     const f = await go("grouppath.go",
       `package main\n\nfunc routes() {\n\tapi := r.Group("/api")\n\tapi.POST("", h)\n}\n`);
     expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+});
+
+describe("Gorilla mux and stdlib recognition", () => {
+  it("recognizes router.HandleFunc(...).Methods(\"POST\") as exactly one POST route (HandleFunc is the anchor)", async () => {
+    const f = await go("gorilla.go",
+      `package main\n\nfunc routes() {\n` +
+      `\trouter := mux.NewRouter()\n` +
+      `\trouter.HandleFunc("/orders", createOrder).Methods("POST")\n` +
+      `}\n`);
+    const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /orders"]);
+  });
+
+  it("resolves a multiline fluent chain with the line of the HandleFunc anchor, not the Methods call", async () => {
+    const f = await go("multiline.go",
+      `package main\n\nfunc routes() {\n` +
+      `\trouter := mux.NewRouter()\n` +
+      `\trouter.HandleFunc("/orders", h).\n` +
+      `\t\tMethods("POST")\n` +
+      `}\n`);
+    const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /orders"]);
+    expect(routes[0].line).toBe(5);
+  });
+
+  it("walks chain ascent through an intermediate link: .Methods(\"POST\").Name(\"create\")", async () => {
+    const f = await go("chain-a.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/orders", h).Methods("POST").Name("create")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /orders"]);
+  });
+
+  it("walks chain ascent through an intermediate link in the other order: .Name(\"create\").Methods(\"POST\")", async () => {
+    const f = await go("chain-b.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/orders", h).Name("create").Methods("POST")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /orders"]);
+  });
+
+  it("recognizes router.Handle(...).Methods(\"PUT\") the same way as HandleFunc", async () => {
+    const f = await go("handle-chain.go",
+      `package main\n\nfunc routes() {\n\trouter.Handle("/x", handler).Methods("PUT")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["PUT /x"]);
+  });
+
+  it("disambiguates Gin's verb-first Handle(method, path, h)", async () => {
+    const f = await go("handle-verbfirst.go",
+      `package main\n\nfunc routes() {\n\tr.Handle("POST", "/x", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /x"]);
+  });
+
+  it("disambiguates Gorilla's path-first Handle(path, h) with no chain as ALL", async () => {
+    const f = await go("handle-pathfirst.go",
+      `package main\n\nfunc routes() {\n\trouter.Handle("/x", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["ALL /x"]);
+  });
+
+  it("resolves a chain split across statements as ALL (variable-carried chains are not tracked), never double-counted", async () => {
+    const f = await go("split-chain.go",
+      `package main\n\nfunc routes() {\n\troute := r.HandleFunc("/orders", h)\n\troute.Methods("POST")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["ALL /orders"]);
+  });
+
+  it("resolves a Gorilla subrouter's HandleFunc(...).Methods(...) chain", async () => {
+    const f = await go("subrouter-chain.go",
+      `package main\n\nfunc routes() {\n\tapi := r.PathPrefix("/api").Subrouter()\n\tapi.HandleFunc("/orders", h).Methods("POST")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /orders"]);
+  });
+
+  it("recognizes stdlib http.HandleFunc as ALL (\"http\" special-cased for Handle/HandleFunc only)", async () => {
+    const f = await go("stdlib-http.go",
+      `package main\n\nfunc routes() {\n\thttp.HandleFunc("/orders", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["ALL /orders"]);
+  });
+
+  it("resolves a structurally-assigned http.NewServeMux() receiver's HandleFunc", async () => {
+    const f = await go("servemux.go",
+      `package main\n\nfunc routes() {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc("/orders", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["ALL /orders"]);
+  });
+
+  it("resolves chi's any-method HandleFunc and Handle to ALL", async () => {
+    const f = await go("chi-any.go",
+      `package main\n\nfunc routes() {\n\tr.HandleFunc("/events", h)\n\tr.Handle("/events", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["ALL /events", "ALL /events"]);
+  });
+
+  it("does not recognize http.Post / http.Get as routes: \"http\" is not a receiver for verb fields", async () => {
+    const f = await go("http-client.go",
+      `package main\n\nfunc routes() {\n` +
+      `\thttp.Post("https://api.example.com/orders", ct, body)\n` +
+      `\thttp.Get(url)\n` +
+      `}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("parses a Go 1.22 verb-in-path pattern (POST /orders)", async () => {
+    const f = await go("go122-post.go",
+      `package main\n\nfunc routes() {\n\tmux.HandleFunc("POST /orders", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /orders"]);
+  });
+
+  it("parses a Go 1.22 pattern with a path parameter (GET /items/{id})", async () => {
+    const f = await go("go122-get.go",
+      `package main\n\nfunc routes() {\n\tmux.HandleFunc("GET /items/{id}", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["GET /items/{id}"]);
+  });
+
+  it("resolves a Go 1.22 pattern with double-space separation", async () => {
+    const f = await go("go122-doublespace.go",
+      `package main\n\nfunc routes() {\n\tmux.HandleFunc("POST  /orders", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /orders"]);
+  });
+
+  it("skips Go 1.22-shaped negatives: lowercase verb, host pattern, and a verb with no path", async () => {
+    const f = await go("go122-negatives.go",
+      `package main\n\nfunc routes() {\n` +
+      `\tmux.HandleFunc("post /x", h)\n` +
+      `\tmux.HandleFunc("example.com/route", h)\n` +
+      `\tmux.HandleFunc("POST", h)\n` +
+      `}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+});
+
+describe("method resolution", () => {
+  it.each(Array.from(SECURITY_AST_GO.VERB_FIELDS.entries()))(
+    "resolves verb-field casing %s to canonical %s",
+    async (field, canonical) => {
+      const f = await go("casing.go", `package main\n\nfunc routes() {\n\tr.${field}("/x", h)\n}\n`);
+      expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual([canonical]);
+    },
+  );
+
+  it("resolves a single-verb .Methods(\"POST\") to POST", async () => {
+    const f = await go("methods-post.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/x", h).Methods("POST")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["POST"]);
+  });
+
+  it("resolves .Methods(\"GET\", \"POST\") to POST: first MUTATING verb in argument order", async () => {
+    const f = await go("methods-getpost.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/x", h).Methods("GET", "POST")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["POST"]);
+  });
+
+  it("resolves .Methods(\"DELETE\", \"POST\") to DELETE: DELETE is first and already mutating", async () => {
+    const f = await go("methods-deletepost.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/x", h).Methods("DELETE", "POST")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["DELETE"]);
+  });
+
+  it("resolves .Methods(\"GET\") to GET: emitted, simply outside the mutating vote", async () => {
+    const f = await go("methods-get.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/x", h).Methods("GET")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["GET"]);
+  });
+
+  it("resolves .Methods(\"post\") lowercase to POST: gorilla uppercases at runtime", async () => {
+    const f = await go("methods-lower.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/x", h).Methods("post")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["POST"]);
+  });
+
+  it("resolves .Methods(verbs...) with a non-literal arg to ALL: statically unresolvable stays in the mutating vote", async () => {
+    const f = await go("methods-spread.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/x", h).Methods(verbs...)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["ALL"]);
+  });
+
+  it("resolves .Methods(\"MKCOL\") to GET: fully literal, zero recognized verbs is not ambiguity (mkcol parity)", async () => {
+    const f = await go("methods-mkcol.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/x", h).Methods("MKCOL")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["GET"]);
+  });
+
+  it("pins ABSENT Methods as ALL, never ANY, across HandleFunc/Handle with no chain, chi, and stdlib bare paths", async () => {
+    const f = await go("absent-methods.go",
+      `package main\n\nfunc routes() {\n` +
+      `\trouter.HandleFunc("/a", h)\n` +
+      `\trouter.Handle("/b", h)\n` +
+      `\tr.HandleFunc("/c", h)\n` +
+      `\tr.Handle("/d", h)\n` +
+      `\thttp.HandleFunc("/e", h)\n` +
+      `}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method))
+      .toEqual(["ALL", "ALL", "ALL", "ALL", "ALL"]);
+  });
+
+  it("ALL is in the shared mutating vocabulary and ANY is not", () => {
+    const mutating = [...SECURITY_AST.MUTATING].map((m) => m.toUpperCase());
+    expect(mutating).toContain("ALL");
+    expect(mutating).not.toContain("ANY");
+  });
+
+  it("resolves chi's verb-first Method(method, path, h)", async () => {
+    const f = await go("verbfirst-method.go",
+      `package main\n\nfunc routes() {\n\tr.Method("PATCH", "/y", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["PATCH /y"]);
+  });
+
+  it("resolves chi's verb-first MethodFunc(method, path, h)", async () => {
+    const f = await go("verbfirst-methodfunc.go",
+      `package main\n\nfunc routes() {\n\tr.MethodFunc("DELETE", "/z", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["DELETE /z"]);
+  });
+
+  it("resolves Echo's verb-first Add(method, path, h)", async () => {
+    const f = await go("verbfirst-add.go",
+      `package main\n\nfunc routes() {\n\te.Add("DELETE", "/z", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["DELETE /z"]);
+  });
+
+  it("resolves a verb-first call with a variable verb to ALL", async () => {
+    const f = await go("verbfirst-variable.go",
+      `package main\n\nfunc routes() {\n\tr.Method(verb, "/x", h)\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["ALL /x"]);
+  });
+
+  it("skips HEAD/OPTIONS on the chained .Methods(...) path", async () => {
+    const head = await go("chain-head.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/status", h).Methods("HEAD")\n}\n`);
+    expect(extractGoRoutesAst(head.tree!, head.relativePath)).toEqual([]);
+    const options = await go("chain-options.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/status", h).Methods("OPTIONS")\n}\n`);
+    expect(extractGoRoutesAst(options.tree!, options.relativePath)).toEqual([]);
+  });
+
+  it("filters HEAD before the first-mutating pick in a mixed .Methods(\"HEAD\", \"POST\")", async () => {
+    const f = await go("chain-headpost.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/status", h).Methods("HEAD", "POST")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["POST"]);
+  });
+
+  it("filters HEAD before the first-mutating pick in a mixed .Methods(\"HEAD\", \"GET\")", async () => {
+    const f = await go("chain-headget.go",
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/status", h).Methods("HEAD", "GET")\n}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["GET"]);
+  });
+
+  it("skips HEAD/OPTIONS on the verb-first resolution path", async () => {
+    const head = await go("verbfirst-head.go",
+      `package main\n\nfunc routes() {\n\tr.Method("HEAD", "/x", h)\n}\n`);
+    expect(extractGoRoutesAst(head.tree!, head.relativePath)).toEqual([]);
+    const options = await go("verbfirst-options.go",
+      `package main\n\nfunc routes() {\n\te.Add("OPTIONS", "/x", h)\n}\n`);
+    expect(extractGoRoutesAst(options.tree!, options.relativePath)).toEqual([]);
+    const ginHead = await go("verbfirst-gin-head.go",
+      `package main\n\nfunc routes() {\n\tr.Handle("HEAD", "/x", h)\n}\n`);
+    expect(extractGoRoutesAst(ginHead.tree!, ginHead.relativePath)).toEqual([]);
+  });
+
+  it("skips HEAD/OPTIONS on the Go 1.22 verb-in-path resolution path", async () => {
+    const head = await go("go122-head.go",
+      `package main\n\nfunc routes() {\n\tmux.HandleFunc("HEAD /status", h)\n}\n`);
+    expect(extractGoRoutesAst(head.tree!, head.relativePath)).toEqual([]);
+    const options = await go("go122-options.go",
+      `package main\n\nfunc routes() {\n\tmux.HandleFunc("OPTIONS /cors", h)\n}\n`);
+    expect(extractGoRoutesAst(options.tree!, options.relativePath)).toEqual([]);
+  });
+
+  describe("documented trade-offs (pinned recall gaps, never a false-bless)", () => {
+    it("pins the Gorilla Route-builder chain form as unrecognized: HandlerFunc/Handler is the registering field, not an anchor", async () => {
+      const a = await go("builder-a.go",
+        `package main\n\nfunc routes() {\n\tr.Methods("POST").Path("/orders").HandlerFunc(h)\n}\n`);
+      expect(extractGoRoutesAst(a.tree!, a.relativePath)).toEqual([]);
+      const b = await go("builder-b.go",
+        `package main\n\nfunc routes() {\n\tr.Path("/orders").Handler(h)\n}\n`);
+      expect(extractGoRoutesAst(b.tree!, b.relativePath)).toEqual([]);
+      const c = await go("builder-c.go",
+        `package main\n\nfunc routes() {\n\tr.PathPrefix("/api").HandlerFunc(h)\n}\n`);
+      expect(extractGoRoutesAst(c.tree!, c.relativePath)).toEqual([]);
+    });
+  });
+
+  describe("vocabulary property", () => {
+    // Non-vacuous: the HEAD/OPTIONS-only fixtures below are recognized route
+    // registrations that must contribute ZERO methods on every one of the
+    // three resolution paths (chain, verb-first, Go 1.22), proving the skip
+    // is real rather than the property holding by omission.
+    const MUTATING_VOTE_FIXTURES: string[] = [
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/orders", h).Methods("POST")\n}\n`,
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/status", h).Methods("HEAD", "GET")\n}\n`,
+      `package main\n\nfunc routes() {\n\trouter.Handle("/x", h).Methods("PUT")\n}\n`,
+      `package main\n\nfunc routes() {\n\tr.Method("PATCH", "/y", h)\n}\n`,
+      `package main\n\nfunc routes() {\n\tr.MethodFunc("DELETE", "/z", h)\n}\n`,
+      `package main\n\nfunc routes() {\n\trouter.Handle("/x", h)\n}\n`,
+    ];
+    const HEAD_OPTIONS_ONLY_FIXTURES: string[] = [
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/status", h).Methods("HEAD")\n}\n`,
+      `package main\n\nfunc routes() {\n\trouter.HandleFunc("/status", h).Methods("OPTIONS")\n}\n`,
+      `package main\n\nfunc routes() {\n\tr.Method("HEAD", "/x", h)\n}\n`,
+      `package main\n\nfunc routes() {\n\te.Add("OPTIONS", "/x", h)\n}\n`,
+      `package main\n\nfunc routes() {\n\tr.Handle("HEAD", "/x", h)\n}\n`,
+      `package main\n\nfunc routes() {\n\tmux.HandleFunc("HEAD /status", h)\n}\n`,
+      `package main\n\nfunc routes() {\n\tmux.HandleFunc("OPTIONS /cors", h)\n}\n`,
+    ];
+
+    it("keeps every emitted method inside {GET,POST,PUT,PATCH,DELETE,ALL}; HEAD/OPTIONS/ANY/lowercase never leak", async () => {
+      const ALLOWED = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "ALL"]);
+      const collected: string[] = [];
+      for (let i = 0; i < MUTATING_VOTE_FIXTURES.length; i++) {
+        const f = await go(`vocab-mutating-${i}.go`, MUTATING_VOTE_FIXTURES[i]);
+        for (const r of extractGoRoutesAst(f.tree!, f.relativePath)) collected.push(r.method);
+      }
+      for (let i = 0; i < HEAD_OPTIONS_ONLY_FIXTURES.length; i++) {
+        const f = await go(`vocab-skip-${i}.go`, HEAD_OPTIONS_ONLY_FIXTURES[i]);
+        for (const r of extractGoRoutesAst(f.tree!, f.relativePath)) collected.push(r.method);
+      }
+      for (const m of collected) expect(ALLOWED.has(m)).toBe(true);
+      expect(collected).toEqual(expect.arrayContaining(["GET", "POST", "PUT", "PATCH", "DELETE", "ALL"]));
+      // Exactly the 6 MUTATING_VOTE_FIXTURES routes: the 7 HEAD/OPTIONS-only
+      // fixtures contributed nothing (non-vacuous skip).
+      expect(collected.length).toBe(6);
+    });
   });
 });
