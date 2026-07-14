@@ -474,3 +474,415 @@ describe("extractPythonRoutesAst: method resolution", () => {
     expect(routes[0].method).toBe("POST");
   });
 });
+
+describe("auth recognition: decorators", () => {
+  it("blesses @login_required BELOW the route decorator (applied first, wraps the registered handler)", async () => {
+    const f = await py("below.py",
+      `@app.post("/orders")\n` +
+      `@login_required\n` +
+      `def create_order():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual([
+      "POST /orders auth=true",
+    ]);
+  });
+
+  it("does NOT bless @login_required ABOVE the route decorator (registers the unwrapped handler)", async () => {
+    const f = await py("above.py",
+      `@login_required\n` +
+      `@app.post("/orders")\n` +
+      `def create_order():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual([
+      "POST /orders auth=false",
+    ]);
+  });
+
+  it("mixed stacked-route order: /a wraps the auth decorator (true), /b registers unwrapped (false)", async () => {
+    const f = await py("mixed.py",
+      `@app.post("/a")\n` +
+      `@login_required\n` +
+      `@app.post("/b")\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual([
+      "POST /a auth=true",
+      "POST /b auth=false",
+    ]);
+  });
+
+  it("blesses @jwt_required() and @jwt_required(refresh=True)", async () => {
+    const f = await py("jwt.py",
+      `@app.post("/a")\n` +
+      `@jwt_required()\n` +
+      `def a():\n` +
+      `    return {}\n\n` +
+      `@app.post("/b")\n` +
+      `@jwt_required(refresh=True)\n` +
+      `def b():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/a auth=true",
+      "/b auth=true",
+    ]);
+  });
+
+  it("does not bless @jwt_required(optional=True): optional auth admits anonymous requests", async () => {
+    const f = await py("optionaltrue.py",
+      `@app.post("/x")\n` +
+      `@jwt_required(optional=True)\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("does not bless @jwt_required(optional=OPTIONAL_AUTH): statically unknowable value resolves false", async () => {
+    const f = await py("optionalflag.py",
+      `@app.post("/x")\n` +
+      `@jwt_required(optional=OPTIONAL_AUTH)\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("blesses @auth.login_required (flask-httpauth) and @flask_login.login_required", async () => {
+    const f = await py("attrdec.py",
+      `@app.post("/a")\n` +
+      `@auth.login_required\n` +
+      `def a():\n` +
+      `    return {}\n\n` +
+      `@app.post("/b")\n` +
+      `@flask_login.login_required\n` +
+      `def b():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/a auth=true",
+      "/b auth=true",
+    ]);
+  });
+
+  it("blesses lexicon names: requires_auth, admin_required, permission_required(...), token_required, bare requires(...)", async () => {
+    const f = await py("lexicon.py",
+      `@app.post("/a")\n` +
+      `@requires_auth\n` +
+      `def a():\n` +
+      `    return {}\n\n` +
+      `@app.post("/b")\n` +
+      `@admin_required\n` +
+      `def b():\n` +
+      `    return {}\n\n` +
+      `@app.post("/c")\n` +
+      `@permission_required("orders.write")\n` +
+      `def c():\n` +
+      `    return {}\n\n` +
+      `@app.post("/d")\n` +
+      `@token_required\n` +
+      `def d():\n` +
+      `    return {}\n\n` +
+      `@app.post("/e")\n` +
+      `@requires("admin")\n` +
+      `def e():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/a auth=true",
+      "/b auth=true",
+      "/c auth=true",
+      "/d auth=true",
+      "/e auth=true",
+    ]);
+  });
+
+  it("does not bless @feature.requires(...) or @pytest.mark.requires: bare requires only matches the bare-identifier call form", async () => {
+    const f = await py("bogusrequires.py",
+      `@app.post("/a")\n` +
+      `@feature.requires("new_ui")\n` +
+      `def a():\n` +
+      `    return {}\n\n` +
+      `@app.post("/b")\n` +
+      `@pytest.mark.requires\n` +
+      `def b():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/a auth=false",
+      "/b auth=false",
+    ]);
+  });
+
+  it("does not bless @author_stats: substring near-miss, exact-segment matching only", async () => {
+    const f = await py("authorstats.py",
+      `@app.post("/x")\n` +
+      `@author_stats\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("does not bless @track_metrics or an aliased @guard: name-based recognition is conservative", async () => {
+    const f = await py("aliases.py",
+      `@app.post("/a")\n` +
+      `@track_metrics\n` +
+      `def a():\n` +
+      `    return {}\n\n` +
+      `@app.post("/b")\n` +
+      `@guard\n` +
+      `def b():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/a auth=false",
+      "/b auth=false",
+    ]);
+  });
+
+  it("adjacent-function no-leak: a's auth decorator does not bless sibling b", async () => {
+    const f = await py("noleak.py",
+      `@app.post("/a")\n` +
+      `@login_required\n` +
+      `def a():\n` +
+      `    return {}\n\n` +
+      `@app.post("/b")\n` +
+      `def b():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/a auth=true",
+      "/b auth=false",
+    ]);
+  });
+});
+
+describe("auth recognition: FastAPI dependencies", () => {
+  it("blesses a typed default parameter: user: User = Depends(get_current_user)", async () => {
+    const f = await py("typeddefault.py",
+      `@router.post("/x")\n` +
+      `def h(user: User = Depends(get_current_user)):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => r.hasAuth)).toEqual([true]);
+  });
+
+  it("blesses an untyped default parameter: user=Depends(get_current_user)", async () => {
+    const f = await py("untypeddefault.py",
+      `@router.post("/x")\n` +
+      `def h(user=Depends(get_current_user)):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => r.hasAuth)).toEqual([true]);
+  });
+
+  it("blesses Annotated[User, Depends(get_current_user)] (typed_parameter, generic_type nesting)", async () => {
+    const f = await py("annotateddepends.py",
+      `@router.post("/x")\n` +
+      `def h(user: Annotated[User, Depends(get_current_user)]):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => r.hasAuth)).toEqual([true]);
+  });
+
+  it("blesses Annotated[str, Security(get_api_key)]", async () => {
+    const f = await py("annotatedsecurity.py",
+      `@router.post("/x")\n` +
+      `def h(key: Annotated[str, Security(get_api_key)]):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => r.hasAuth)).toEqual([true]);
+  });
+
+  it("does not bless db=Depends(get_db), Depends(get_settings), Depends(pagination_params), or bare Depends()", async () => {
+    const f = await py("nonauthdeps.py",
+      `@router.post("/db")\n` +
+      `def h1(db=Depends(get_db)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/settings")\n` +
+      `def h2(x=Depends(get_settings)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/pagination")\n` +
+      `def h3(x=Depends(pagination_params)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/bare")\n` +
+      `def h4(x=Depends()):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/db auth=false",
+      "/settings auth=false",
+      "/pagination auth=false",
+      "/bare auth=false",
+    ]);
+  });
+
+  it("blesses Depends(oauth2_scheme) and Depends(verify_token)", async () => {
+    const f = await py("oauthverify.py",
+      `@router.post("/oauth")\n` +
+      `def h1(x=Depends(oauth2_scheme)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/verify")\n` +
+      `def h2(x=Depends(verify_token)):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/oauth auth=true",
+      "/verify auth=true",
+    ]);
+  });
+
+  it("segment near-misses all resolve false: get_author_stats, get_authors, get_jwt_settings, get_api_key_usage_stats, get_current_user_optional, get_current_user_or_none", async () => {
+    const f = await py("nearmisses.py",
+      `@router.post("/x1")\n` +
+      `def h1(a=Depends(get_author_stats)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/x2")\n` +
+      `def h2(a=Depends(get_authors)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/x3")\n` +
+      `def h3(a=Depends(get_jwt_settings)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/x4")\n` +
+      `def h4(a=Depends(get_api_key_usage_stats)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/x5")\n` +
+      `def h5(a=Depends(get_current_user_optional)):\n` +
+      `    return {}\n\n` +
+      `@router.post("/x6")\n` +
+      `def h6(a=Depends(get_current_user_or_none)):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/x1 auth=false",
+      "/x2 auth=false",
+      "/x3 auth=false",
+      "/x4 auth=false",
+      "/x5 auth=false",
+      "/x6 auth=false",
+    ]);
+  });
+
+  it("argument text never blesses: Depends(make_client(\"oauth2_url\")) and Depends(Client(url=jwt_issuer_url))", async () => {
+    const f = await py("argtextnoblesses.py",
+      `@router.post("/x1")\n` +
+      `def h1(a=Depends(make_client("oauth2_url"))):\n` +
+      `    return {}\n\n` +
+      `@router.post("/x2")\n` +
+      `def h2(a=Depends(Client(url=jwt_issuer_url))):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/x1 auth=false",
+      "/x2 auth=false",
+    ]);
+  });
+
+  it("blesses class dependencies via CamelCase segments: Depends(JWTBearer()) and Depends(OAuth2PasswordBearer(tokenUrl=\"token\"))", async () => {
+    const f = await py("classdeps.py",
+      `@router.post("/x1")\n` +
+      `def h1(a=Depends(JWTBearer())):\n` +
+      `    return {}\n\n` +
+      `@router.post("/x2")\n` +
+      `def h2(token: str = Depends(OAuth2PasswordBearer(tokenUrl="token"))):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/x1 auth=true",
+      "/x2 auth=true",
+    ]);
+  });
+
+  it("blesses an auth dependency as the third of several params", async () => {
+    const f = await py("thirdparam.py",
+      `@router.post("/x")\n` +
+      `def h(a: int, b: str, user=Depends(get_current_user)):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => r.hasAuth)).toEqual([true]);
+  });
+
+  it("resolves the dependencies= kwarg on the route decorator: verify_token true, get_db/get_author_stats/unrelated Security false", async () => {
+    const f = await py("depkwarg.py",
+      `@router.post("/dep-verify", dependencies=[Depends(verify_token)])\n` +
+      `def h1():\n` +
+      `    return {}\n\n` +
+      `@router.post("/dep-db", dependencies=[Depends(get_db)])\n` +
+      `def h2():\n` +
+      `    return {}\n\n` +
+      `@router.post("/dep-author", dependencies=[Depends(get_author_stats)])\n` +
+      `def h3():\n` +
+      `    return {}\n\n` +
+      `@router.post("/dep-unrelated", dependencies=[Security(some_unrelated_name)])\n` +
+      `def h4():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual([
+      "/dep-verify auth=true",
+      "/dep-db auth=false",
+      "/dep-author auth=false",
+      "/dep-unrelated auth=false",
+    ]);
+  });
+
+  it("does not bless a module-level Annotated alias: the Depends signal is invisible at the param (documented recall gap)", async () => {
+    const f = await py("annotatedalias.py",
+      `CurrentUser = Annotated[User, Depends(get_current_user)]\n\n` +
+      `@router.post("/alias")\n` +
+      `def h(user: CurrentUser):\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/alias auth=false"]);
+  });
+});
+
+describe("per-route validation and rate-limit lanes", () => {
+  it("@limiter.limit(...) sets hasRateLimit true, leaves hasAuth false", async () => {
+    const f = await py("ratelimit.py",
+      `@app.post("/x")\n` +
+      `@limiter.limit("5/minute")\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasRateLimit).toBe(true);
+    expect(routes[0].hasAuth).toBe(false);
+  });
+
+  it("@validate_schema(OrderSchema) sets hasValidation true", async () => {
+    const f = await py("validate.py",
+      `@app.post("/y")\n` +
+      `@validate_schema(OrderSchema)\n` +
+      `def h():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasValidation).toBe(true);
+  });
+
+  it("a route PATH is not middleware: /validate and /ratelimit paths never bless their own lanes", async () => {
+    const f = await py("pathnoise.py",
+      `@app.post("/validate")\n` +
+      `def h1():\n` +
+      `    return {}\n\n` +
+      `@app.post("/ratelimit")\n` +
+      `def h2():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => r.hasValidation)).toEqual([false, false]);
+    expect(routes.map((r) => r.hasRateLimit)).toEqual([false, false]);
+  });
+
+  it("a bare route has all three lanes false", async () => {
+    const f = await py("bare.py", `@app.get("/bare")\ndef h():\n    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].hasValidation).toBe(false);
+    expect(routes[0].hasRateLimit).toBe(false);
+  });
+});

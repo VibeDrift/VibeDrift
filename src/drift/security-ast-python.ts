@@ -58,9 +58,53 @@ const ROUTER_RECEIVER =
 // ROUTER_RECEIVER remain a documented recall gap, measured in Task 7 (S0) and
 // whole-phase gate item 7.
 const ROUTER_CONSTRUCTORS = new Set(["Blueprint", "APIRouter", "Flask", "FastAPI"]);
+// Auth decorators, matched by EXACT final name segment (never substring, so
+// @author_stats can never match). Flask-Login, flask-jwt-extended, flask-httpauth,
+// Django, DRF, and common custom names. Bare "requires" is deliberately NOT here:
+// it is a generic English verb whose final-segment match collides with
+// feature-flag / DI / marker decorators (@feature.requires("new_ui"),
+// @pytest.mark.requires). The bare-identifier call form @requires("admin") is
+// special-cased in isAuthDecorator; @anything.requires never matches.
+const AUTH_DECORATORS = new Set([
+  "login_required", "fresh_login_required", "jwt_required", "token_required",
+  "auth_required", "requires_auth", "require_auth", "permission_required",
+  "roles_required", "roles_accepted", "admin_required", "staff_required",
+  "superuser_required", "verify_token", "authenticated",
+]);
+// FastAPI Depends(...)/Security(...) auth recognition is SEGMENT-based, applied to
+// the dependency's RESOLVED NAME only (identifier, dotted attribute, or a class
+// dependency's callee: Depends(JWTBearer())), never to raw expression text. The
+// name is split on underscore AND CamelCase boundaries (nameSegments), lowercased,
+// then:
+//   hit  = any single segment in DEPENDS_AUTH_SEGMENTS, or any ADJACENT segment
+//          pair in DEPENDS_AUTH_PAIRS. Whole segments make substring blessing
+//          structurally impossible: get_author_stats is [get, author, stats] and
+//          "author" is not "auth"; JWTBearer is [jwt, bearer] and hits.
+//   veto = any segment in DEPENDS_VETO_SEGMENTS cancels a hit and resolves FALSE:
+//          optional-auth dependencies (get_current_user_optional,
+//          get_current_user_or_none) admit anonymous requests, and settings /
+//          config / stats / url dependencies (get_jwt_settings,
+//          get_api_key_usage_stats) are not auth enforcement. Ambiguity resolves
+//          to false, per the invariant.
+const DEPENDS_AUTH_SEGMENTS = new Set([
+  "auth", "authenticate", "authenticated", "jwt", "oauth", "oauth2", "bearer",
+]);
+const DEPENDS_AUTH_PAIRS = new Set([
+  "current user", "active user", "api key", "verify token", "validate token",
+  "require auth", "requires auth", "require admin", "require user", "require login",
+  "auth required", "check auth", "logged in",
+]);
+const DEPENDS_VETO_SEGMENTS = new Set([
+  "optional", "maybe", "anonymous", "none", "settings", "setting", "config",
+  "params", "options", "url", "urls", "stats", "metrics", "usage",
+]);
+const VAL_NAMES = /(?:pydantic|validate|validator|schema|serializer|marshmallow)/i;
+const RATE_NAMES = /(?:rate_?limit|throttle|limiter|slowapi|slowdown)/i;
 
 export const SECURITY_AST_PY = {
   ROUTE_METHODS, HTTP_VERBS, MUTATING_VERBS, ROUTER_RECEIVER, ROUTER_CONSTRUCTORS,
+  AUTH_DECORATORS, DEPENDS_AUTH_SEGMENTS, DEPENDS_AUTH_PAIRS, DEPENDS_VETO_SEGMENTS,
+  VAL_NAMES, RATE_NAMES,
 };
 
 /** Value of a Python string-ish path argument with quotes AND prefixes stripped.
@@ -197,6 +241,140 @@ function resolveMethod(attr: string, args: SyntaxNode): string {
   return verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0];
 }
 
+/** Final name segment of a decorator expression: "login_required" for
+ *  @login_required, @auth.login_required, @flask_login.login_required. */
+function decoratorName(expr: SyntaxNode): string | null {
+  if (expr.type === "identifier") return expr.text;
+  if (expr.type === "attribute") return expr.childForFieldName("attribute")?.text ?? null;
+  return null;
+}
+
+/** Lowercase segments of an identifier, split on underscore/non-alphanumeric AND
+ *  CamelCase boundaries (digits stay attached to their run):
+ *  "get_author_stats" -> [get, author, stats]; "JWTBearer" -> [jwt, bearer];
+ *  "OAuth2PasswordBearer" -> [o, auth2, password, bearer]. Whole-segment matching
+ *  makes substring blessing structurally impossible. */
+function nameSegments(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((s) => s.length > 0);
+}
+
+/** Segment-matched auth verdict for a resolved dependency name (see the constants
+ *  block): hit on a single DEPENDS_AUTH_SEGMENTS segment or an adjacent
+ *  DEPENDS_AUTH_PAIRS pair; ANY DEPENDS_VETO_SEGMENTS segment cancels the hit
+ *  (optional / settings / stats flavored dependencies resolve false). */
+function dependsNameIsAuth(name: string): boolean {
+  const segs = nameSegments(name);
+  if (segs.some((s) => DEPENDS_VETO_SEGMENTS.has(s))) return false;
+  if (segs.some((s) => DEPENDS_AUTH_SEGMENTS.has(s))) return true;
+  for (let i = 0; i < segs.length - 1; i++) {
+    if (DEPENDS_AUTH_PAIRS.has(`${segs[i]} ${segs[i + 1]}`)) return true;
+  }
+  return false;
+}
+
+/** The NAME a Depends/Security argument resolves to: an identifier's text, an
+ *  attribute's dotted text, or, for a class dependency Depends(JWTBearer()), the
+ *  call's OWN callee name (never its arguments). Anything else (lambda, subscript,
+ *  literal) resolves null: matching raw expression text would let a nested string
+ *  or kwarg bless (Depends(make_client("oauth2_url")) must stay false). */
+function dependencyTargetName(target: SyntaxNode): string | null {
+  if (target.type === "identifier" || target.type === "attribute") return target.text;
+  if (target.type === "call") {
+    const fn = target.childForFieldName("function");
+    if (fn && (fn.type === "identifier" || fn.type === "attribute")) return fn.text;
+  }
+  return null;
+}
+
+/** The value node of a `name=` kwarg on a call, or null when absent. */
+function kwargValue(call: SyntaxNode, kwarg: string): SyntaxNode | null {
+  const args = call.childForFieldName("arguments");
+  if (!args) return null;
+  for (const n of args.namedChildren) {
+    if (
+      n !== null &&
+      n.type === "keyword_argument" &&
+      n.childForFieldName("name")?.text === kwarg
+    ) {
+      return n.childForFieldName("value");
+    }
+  }
+  return null;
+}
+
+function isAuthDecorator(dec: SyntaxNode): boolean {
+  const expr = dec.namedChild(0);
+  if (!expr) return false;
+  if (expr.type === "identifier" || expr.type === "attribute") {
+    const name = decoratorName(expr);
+    return name !== null && AUTH_DECORATORS.has(name);
+  }
+  if (expr.type === "call") {
+    const fn = expr.childForFieldName("function");
+    if (!fn) return false;
+    const name = decoratorName(fn);
+    // Bare "requires" counts ONLY in its bare-identifier form @requires(...):
+    // @feature.requires("new_ui") / @pytest.mark.requires are feature-flag and
+    // marker decorators, not auth.
+    const recognized =
+      (name !== null && AUTH_DECORATORS.has(name)) ||
+      (fn.type === "identifier" && fn.text === "requires");
+    if (!recognized) return false;
+    // flask-jwt-extended: @jwt_required(optional=True) admits anonymous requests.
+    // ANY optional= value other than the literal False counts as optional
+    // (optional=SOME_FLAG is statically unknowable; ambiguity resolves to false,
+    // never toward a bless).
+    const optional = kwargValue(expr, "optional");
+    return optional === null || optional.text === "False";
+  }
+  return false;
+}
+
+/** Any Depends(...)/Security(...) call under `scope` whose RESOLVED dependency
+ *  name matches the segment lexicon. Bare Depends(), an unresolvable target, or a
+ *  vetoed name resolves false. */
+function callsWithAuthDependency(scope: SyntaxNode): boolean {
+  for (const call of scope.descendantsOfType("call")) {
+    if (!call) continue;
+    const fn = call.childForFieldName("function");
+    if (!fn || fn.type !== "identifier") continue;
+    if (fn.text !== "Depends" && fn.text !== "Security") continue;
+    const target = call.childForFieldName("arguments")?.namedChild(0);
+    const name = target ? dependencyTargetName(target) : null;
+    if (name !== null && dependsNameIsAuth(name)) return true;
+  }
+  return false;
+}
+
+/** FastAPI parameter dependencies: one descendant-call walk over the parameters
+ *  node covers plain defaults (default_parameter), typed defaults
+ *  (typed_default_parameter), and Annotated[T, Depends(...)] (typed_parameter,
+ *  where the call nests under the TYPE field's generic_type). */
+function paramsHaveAuthDependency(definition: SyntaxNode): boolean {
+  const params = definition.childForFieldName("parameters");
+  return params ? callsWithAuthDependency(params) : false;
+}
+
+/** Route-decorator-level dependencies kwarg:
+ *  @router.post("/x", dependencies=[Depends(verify_token)]). */
+function routeCallHasAuthDependency(call: SyntaxNode): boolean {
+  const args = call.childForFieldName("arguments");
+  if (!args) return false;
+  const kw = args.namedChildren.find(
+    (n) =>
+      n !== null &&
+      n.type === "keyword_argument" &&
+      n.childForFieldName("name")?.text === "dependencies",
+  );
+  const value = kw?.childForFieldName("value");
+  return value ? callsWithAuthDependency(value) : false;
+}
+
 export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const routerNames = collectRouterNames(tree.rootNode);
@@ -209,12 +387,31 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const decorators = dd.namedChildren.filter(
       (n): n is SyntaxNode => n !== null && n.type === "decorator",
     );
-    // Per-route signals land in Task 3; receiver-scoped middleware inheritance
-    // lands in Task 4. Task 1 emits structurally-correct routes with the
-    // never-false-bless default.
-    const perAuth = false;
-    const perVal = false;
-    const perRate = false;
+    // Auth decorators bind POSITIONALLY. Python decorators apply bottom-up, so an
+    // auth decorator protects a route only when it is applied BEFORE the route
+    // decorator registers the handler, i.e. only when it sits BELOW that route
+    // decorator (strictly greater start row). @login_required stacked ABOVE
+    // @app.route leaves the url_map holding the unwrapped handler: genuinely
+    // unauthed at runtime, so it must not bless.
+    const authDecoratorRows = decorators
+      .filter(isAuthDecorator)
+      .map((d) => d.startPosition.row);
+    const paramAuth = paramsHaveAuthDependency(definition);
+    // Validation / rate-limit lanes match NON-ROUTE decorator CALLEE NAMES only
+    // (@limiter.limit -> "limiter.limit", @validate_schema -> "validate_schema"),
+    // never argument or path text: @app.post("/validate") is a path, not
+    // validation middleware, and must not bless its lane.
+    const laneNames = decorators
+      .filter((d) => asRouteDecorator(d, routerNames) === null)
+      .map((d) => {
+        const expr = d.namedChild(0);
+        if (!expr) return "";
+        if (expr.type === "call") return expr.childForFieldName("function")?.text ?? "";
+        return expr.text;
+      })
+      .filter((t) => t.length > 0);
+    const perVal = laneNames.some((t) => VAL_NAMES.test(t));
+    const perRate = laneNames.some((t) => RATE_NAMES.test(t));
     for (const dec of decorators) {
       const route = asRouteDecorator(dec, routerNames);
       if (!route) continue;
@@ -226,7 +423,10 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
         // not the def line): regex parity, and the @vibedrift-public suppression
         // binding depends on it.
         line: dec.startPosition.row + 1,
-        hasAuth: perAuth,
+        hasAuth:
+          authDecoratorRows.some((row) => row > dec.startPosition.row) ||
+          paramAuth ||
+          routeCallHasAuthDependency(route.call),
         hasValidation: perVal,
         hasRateLimit: perRate,
         hasErrorHandler: false, // write-only field; JS AST extractor hard-codes false too
