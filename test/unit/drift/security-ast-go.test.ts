@@ -1527,3 +1527,813 @@ describe("extractGoFileMiddlewareAst (file-level OR of confirmed lanes)", () => 
     expect(await mwIndex(`// just a comment\nfunc routes() {}\n`)).toEqual(NONE);
   });
 });
+
+// ─── Task 6: adversarial hardening ──────────────────────────────────────────
+//
+// Every fixture here is fed straight to extractGoRoutesAst / extractGoFileMiddlewareAst
+// on whatever tree tree-sitter produces (error-recovered or clean). The bar is
+// twofold: the extractor must never THROW on hostile input, and it must never emit
+// a route with hasAuth:true that the source does not actually protect. The
+// security-critical member of this group is the fused Use call: an unterminated
+// r.Use(...) that error recovery FUSES with the following route registrations into
+// one errored region. Blessing, or even extracting, out of that fused region would
+// let a broken middleware call silently protect routes it never actually wired.
+describe("malformed and adversarial input", () => {
+  it("CROSS-BLESS GUARD: an unterminated r.Use(...) fuses with the following routes; the region emits NOTHING and blesses nothing", async () => {
+    // PINNED EXACT SOURCE (probe-verified against the shipped tree-sitter-go
+    // grammar): the missing close-paren on r.Use fuses the Use call with BOTH
+    // POST registrations into one errored subtree. An unterminated Use can never
+    // become auth for anything — the cross-bless guard this test pins.
+    const f = await go("fuseduse.go",
+      PKG + `func routes() {\n\tr.Use(authMiddleware\n\tr.POST("/a", createA)\n\tr.POST("/b", createB)\n}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(true);
+    expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+    expect(extractGoFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: false, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("unclosed paren in a route call swallows the next valid registration; no throw, nothing emitted from the errored region", async () => {
+    // Probe-verified: error recovery nests `r.GET("/later", h)` INSIDE the broken
+    // POST call's own argument_list as a clean-looking nested call_expression.
+    // Both calls sit under a hasError ancestor, so the ancestor-error walk skips
+    // both. Detect-level recall (the regex fallback recovering /later) is pinned
+    // separately in security-consistency.test.ts.
+    const f = await go("unclosedcall.go",
+      PKG + `func routes() {\n\tr.POST("/broken", mw, h\n\tr.GET("/later", h)\n}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(true);
+    expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("surgical per-node skip: an error confined to one function body never suppresses a clean sibling function's route", async () => {
+    // `x := := 1` breaks `bad`'s body only; `good`'s r.POST("/good", h) parses
+    // clean. The ancestor-error walk stops below source_file, so the sibling
+    // function is unaffected — a per-construct skip, not a whole-file one.
+    const f = await go("surgical.go",
+      PKG + `func bad() {\n\tx := := 1\n\t_ = x\n}\n\nfunc good() {\n\tr.POST("/good", h)\n}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(true); // cumulative at the file level
+    expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractGoRoutesAst(f.tree!, f.relativePath).map((r) => `${r.method} ${r.path}`))
+      .toEqual(["POST /good"]);
+  });
+
+  it("unterminated string in a route path: no throw, no route from the fused region", async () => {
+    const f = await go("unclosedstring.go",
+      PKG + `func routes() {\n\tr.POST("/oops, handler)\n\tr.GET("/later", h)\n}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(true);
+    expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("garbled binary-ish content, empty file, and comments-only file: [] routes, all-false middleware, no throw", async () => {
+    for (const src of [` \x00\x01 garbage {{{ func ( `, ``, `// just a comment\n/* block */\n`]) {
+      const f = await go("garbled.go", src);
+      expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+      expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+      expect(() => extractGoFileMiddlewareAst(f.tree!)).not.toThrow();
+      expect(extractGoFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: false, hasValidation: false, hasRateLimit: false });
+    }
+  });
+
+  it("routes written inside comments or string literals do not extract", async () => {
+    const f = await go("stringroutes.go",
+      PKG +
+      `func routes() {\n` +
+      `\t// r.POST("/fake", h)\n` +
+      `\t/* r.POST("/fake2", h) */\n` +
+      `\ts := \`r.POST("/fake3", h)\`\n` +
+      `\tdoc := "r.POST(\\"/fake4\\", h)"\n` +
+      `\t_ = s\n\t_ = doc\n}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  describe("unicode", () => {
+    it("a unicode path with real in-file auth blesses normally (positive control)", async () => {
+      const src = PKG + authDef() + `func routes() {\n\tr.Use(authMiddleware)\n\tr.POST("/café", h)\n}\n`;
+      const f = await go("unicodepath.go", src);
+      const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+      expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual(["POST /café auth=true"]);
+    });
+
+    it("a unicode Use argument never blesses (ASCII lexicon: recognition miss, never a bless)", async () => {
+      const f = await go("unicodeuse.go", PKG + `func routes() {\n\tr.Use(認証)\n\tr.POST("/x", h)\n}\n`);
+      const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+      expect(rt.hasAuth).toBe(false);
+      expect(rt.authUnsureHook).toBeUndefined();
+    });
+
+    it("a unicode receiver does not extract", async () => {
+      const f = await go("unicoderecv.go", PKG + `func routes() {\n\tルーター.POST("/x", h)\n}\n`);
+      expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+    });
+  });
+
+  it("20-deep nested wrap: no throw, no bless (re-asserted from Task 3 inside the adversarial totality)", async () => {
+    let expr = "h";
+    for (let i = 0; i < 20; i++) expr = `logWrap(${expr})`;
+    const f = await go("deepwrap.go", PKG + `func routes() {\n\tmux.Handle("/x", ${expr})\n}\n`);
+    expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)[0].hasAuth).toBe(false);
+  });
+
+  it("no-throw totality: extractGoRoutesAst and extractGoFileMiddlewareAst never throw across every adversarial fixture", async () => {
+    const sources = [
+      PKG + `func routes() {\n\tr.Use(authMiddleware\n\tr.POST("/a", createA)\n\tr.POST("/b", createB)\n}\n`,
+      PKG + `func routes() {\n\tr.POST("/broken", mw, h\n\tr.GET("/later", h)\n}\n`,
+      PKG + `func bad() {\n\tx := := 1\n\t_ = x\n}\n\nfunc good() {\n\tr.POST("/good", h)\n}\n`,
+      PKG + `func routes() {\n\tr.POST("/oops, handler)\n\tr.GET("/later", h)\n}\n`,
+      ` \x00\x01 garbage {{{ func ( `,
+      ``,
+      `// just a comment\n/* block */\n`,
+      PKG + `func routes() {\n\tr.Use(認証)\n\tr.POST("/x", h)\n}\n`,
+      PKG + `func routes() {\n\tルーター.POST("/x", h)\n}\n`,
+    ];
+    for (const src of sources) {
+      const f = await go("totality.go", src);
+      expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+      expect(() => extractGoFileMiddlewareAst(f.tree!)).not.toThrow();
+    }
+  });
+});
+
+// ─── Task 6: documented trade-offs (collected pins, never change behavior) ───
+//
+// Consolidates the deliberate divergences this module carries, whether pinned
+// earlier (referenced by comment, not re-derived) or new to this task. Nothing
+// here is a false-bless: every item resolves to a documented UNDER-report, a
+// documented receiver-granularity OVER-bless (mirroring the Python module's own
+// accepted exposure), or a plain recognition miss.
+describe("Task 6: documented trade-offs", () => {
+  it("re-pins already-locked recognition trade-offs in one place (Tasks 1-2, unchanged)", async () => {
+    // .Methods("MKCOL") -> GET (fully literal, zero recognized verbs is not
+    // ambiguity; see the full pin at "method resolution" > mkcol parity).
+    const mkcol = await go("mkcol.go", PKG + `func routes() {\n\trouter.HandleFunc("/x", h).Methods("MKCOL")\n}\n`);
+    expect(extractGoRoutesAst(mkcol.tree!, mkcol.relativePath).map((r) => r.method)).toEqual(["GET"]);
+    // A chain split across statements resolves ALL (variable-carried chains are
+    // not tracked); see "Gorilla mux and stdlib recognition" for the full pin.
+    const split = await go("split.go", PKG + `func routes() {\n\troute := r.HandleFunc("/orders", h)\n\troute.Methods("POST")\n}\n`);
+    expect(extractGoRoutesAst(split.tree!, split.relativePath).map((r) => r.method)).toEqual(["ALL"]);
+    // e.Match(...) (composite-literal method list) is not a recognized anchor.
+    const match = await go("match.go", PKG + `func routes() {\n\te.Match([]string{"GET"}, "/x", h)\n}\n`);
+    expect(extractGoRoutesAst(match.tree!, match.relativePath)).toEqual([]);
+    // Gorilla route-builder chains (HandlerFunc/Handler as the OUTER, registering
+    // field) are never unwound; see "documented trade-offs (pinned recall gaps..."
+    const builder = await go("builder.go", PKG + `func routes() {\n\tr.Methods("POST").Path("/orders").HandlerFunc(h)\n}\n`);
+    expect(extractGoRoutesAst(builder.tree!, builder.relativePath)).toEqual([]);
+    // Embedded-engine method receivers are not recognized (no struct field walk).
+    const embedded = await go("embedded.go",
+      PKG + `type Server struct {\n\t*gin.Engine\n}\n\nfunc (s *Server) routes() {\n\ts.POST("/orders", h)\n}\n`);
+    expect(extractGoRoutesAst(embedded.tree!, embedded.relativePath)).toEqual([]);
+  });
+
+  it("re-pins already-locked scope/lane trade-offs in one place (Task 4, unchanged)", async () => {
+    // Echo trailing single middleware -> false: the module always treats the
+    // LAST arg as the handler, so a REAL rejecting middleware placed after the
+    // handler (Echo's own m ...MiddlewareFunc order) is invisible to the
+    // classifier — never even hedged, a structural recall gap, never a bless.
+    const echoTrail = await go("echotrail.go",
+      PKG +
+      `func RequireAuth(c echo.Context) error {\n\tif c.Request().Header.Get("Authorization") == "" {\n\t\treturn c.NoContent(401)\n\t}\n\treturn nil\n}\n` +
+      `func routes() {\n\te.POST("/x", h, RequireAuth)\n}\n`);
+    const [et] = extractGoRoutesAst(echoTrail.tree!, echoTrail.relativePath);
+    expect(et.hasAuth).toBe(false);
+    expect(et.authUnsureHook).toBeUndefined();
+    // Composed wrap chain(logger, auth)(h): the outer call's function is itself
+    // a call, so it never resolves to a NAME; the wrap-recursion gate requires
+    // name===null OR a transparent wrap, and the inner (logger, auth) pair is
+    // arity>=2 (DI), so recursion never reaches "auth".
+    const composed = await go("composed.go", PKG + `func routes() {\n\tmux.Handle("/x", chain(logger, auth)(h))\n}\n`);
+    expect(extractGoRoutesAst(composed.tree!, composed.relativePath)[0].hasAuth).toBe(false);
+    // Cross-function Use never blesses (same-scope pin: Use is keyed to its own
+    // enclosing function body, never file-wide).
+    const cross = await go("cross.go",
+      PKG + authDef() + `func setup(r *gin.Engine) {\n\tr.Use(authMiddleware)\n}\nfunc routes(r *gin.Engine) {\n\tr.POST("/x", h)\n}\n`);
+    expect(extractGoRoutesAst(cross.tree!, cross.relativePath)[0].hasAuth).toBe(false);
+    // Conditional Use (`if cfg.AuthEnabled { r.Use(auth) }`) never marks:
+    // statically-ambiguous registration resolves false, never a bless.
+    const conditional = await go("conditional.go",
+      PKG + authDef() + `func routes() {\n\tif cfg.AuthEnabled {\n\t\tr.Use(authMiddleware)\n\t}\n\tr.POST("/x", h)\n}\n`);
+    expect(extractGoRoutesAst(conditional.tree!, conditional.relativePath)[0].hasAuth).toBe(false);
+    // Gin copy-at-creation: a parent Use registered AFTER a Group's creation call
+    // does not retroactively bless the group (accepted Gin runtime semantics).
+    const afterGroup = await go("aftergroup.go",
+      PKG + authDef() + `func routes() {\n\tapi := r.Group("/api")\n\tr.Use(authMiddleware)\n\tapi.POST("/items", h)\n}\n`);
+    expect(extractGoRoutesAst(afterGroup.tree!, afterGroup.relativePath)
+      .find((r) => r.path === "/items")!.hasAuth).toBe(false);
+  });
+
+  it("HEAD/OPTIONS are never extracted on ANY resolution path (verb field, .Methods chain, verb-first, Go 1.22 pattern)", async () => {
+    const f = await go("headoptions.go",
+      PKG +
+      `func routes() {\n` +
+      `\tr.HEAD("/a", h)\n` +
+      `\tr.OPTIONS("/b", h)\n` +
+      `\trouter.HandleFunc("/c", h).Methods("HEAD")\n` +
+      `\trouter.HandleFunc("/d", h).Methods("OPTIONS")\n` +
+      `\tr.Method("HEAD", "/e", h)\n` +
+      `\te.Add("OPTIONS", "/f", h)\n` +
+      `\tmux.HandleFunc("HEAD /g", h)\n` +
+      `\tmux.HandleFunc("OPTIONS /h", h)\n` +
+      `}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("a handler body calling c.ShouldBindJSON does NOT set hasValidation (validation lane is name-based only)", async () => {
+    const f = await go("bindjson.go",
+      PKG + `func h(c *gin.Context) {\n\tvar body Order\n\tc.ShouldBindJSON(&body)\n}\nfunc routes() {\n\tr.POST("/x", h)\n}\n`);
+    const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(rt.hasValidation).toBe(false);
+  });
+
+  it("single-arg DI residual NewHandler(auth.NewService(key)): the 'handler' veto segment closes this before recursion, never blesses", async () => {
+    // Pre-LOCKED plan carried this as an open false-bless exposure. The shipped
+    // veto set includes the "handler" segment specifically to close it: the
+    // outer name resolves not-auth at rule 1 and, being a NAMED (non-transparent)
+    // outer, wrap recursion into auth.NewService(key) never runs.
+    const f = await go("dihandler.go", PKG + `func routes() {\n\tmux.Handle("/x", NewHandler(auth.NewService(key)))\n}\n`);
+    const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("a selector/method Use callee (authSvc.Middleware) stays opaque/name-tier: v1 resolves only bare-identifier callees to an in-file body", async () => {
+    // authSvc.Middleware is an in-file METHOD with a real rejecting body, but
+    // classifyGoMiddlewareArg only resolves a bare-identifier callee to a def;
+    // a selector target is never looked up, so it stays name-tier. "authSvc"
+    // segments to auth+svc, which is flavored, so the recall gap surfaces as an
+    // UNSURE hedge, never a silent drop and never a bless.
+    const f = await go("selectormw.go",
+      PKG +
+      `type AuthSvc struct{}\nfunc (a *AuthSvc) Middleware(c *gin.Context) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(401)\n\t\treturn\n\t}\n\tc.Next()\n}\n` +
+      `func routes() {\n\tr.Use(authSvc.Middleware)\n\tr.POST("/x", h)\n}\n`);
+    const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBe("authSvc.Middleware");
+  });
+
+  it("KNOWN receiver-granularity OVER-BLESS: a partial-guard middleware blesses its WHOLE receiver, including the path it exempts", async () => {
+    // mw exempts /exempt via `if isPublic(...) { c.Next(); return }` and then
+    // credential-guards the rest with a real 401. bodyAuthSignatureGo sees a
+    // verified reject SOMEWHERE in the body (rule 2) and blesses the receiver at
+    // Use-scope granularity — it does not model per-branch exemptions. This
+    // mirrors the Python module's own accepted receiver-level over-bless.
+    // ACCEPTED VERDICT: NOT asserted authed:false — this is a recorded trade-off,
+    // not a regression to fix here (see open question 3 in the module header).
+    const f = await go("partialguard.go",
+      PKG +
+      `func mw(c *gin.Context) {\n\tif isPublic(c.Request.URL.Path) {\n\t\tc.Next()\n\t\treturn\n\t}\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\treturn\n\t}\n\tc.Next()\n}\n` +
+      `func routes() {\n\tr.Use(mw)\n\tr.GET("/exempt", h)\n\tr.POST("/protected", h)\n}\n`);
+    const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(routes.find((r) => r.path === "/protected")!.hasAuth).toBe(true);
+    // The exempted route is blessed too — the documented over-bless.
+    expect(routes.find((r) => r.path === "/exempt")!.hasAuth).toBe(true);
+  });
+
+  it("a variable-status abort under a boring name resolves opaque -> not-auth (no flavored delegation, key absent)", async () => {
+    const f = await go("varstatus.go",
+      PKG + `func mw(c *gin.Context) {\n\tc.AbortWithStatus(code)\n}\nfunc routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`);
+    const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+
+  it("AUDIT NOTE: the pre-LOCKED chi jwtauth.Verifier and single-arg-DI 'known false-bless exposures' described by the original task plan do NOT reproduce against the shipped LOCKED classifier", async () => {
+    // r.Use(jwtauth.Verifier(tokenAuth)): "jwtauth.Verifier" is a resolved,
+    // non-null, non-transparent NAME (a pure selector chain), so the wrap
+    // recursion gate (name===null || transparent) never fires and the inner
+    // "tokenAuth" (which WOULD be CORE-flavored) is never inspected. This
+    // fixture is pinned here as a plain never-false-bless entry (also present
+    // in NEVER_FALSE_BLESS_SWEEP_GO) rather than as a "known exposure": the
+    // module's own header already documents this restriction as CLOSING the
+    // chi jwtauth.Verifier / config-object / arity-1-DI exposures the
+    // pre-LOCKED name-only plan carried.
+    const f = await go("jwtauthverifier.go",
+      PKG + `func routes() {\n\tr.Use(jwtauth.Verifier(tokenAuth))\n\tr.POST("/x", h)\n}\n`);
+    const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(rt.hasAuth).toBe(false);
+    expect(rt.authUnsureHook).toBeUndefined();
+  });
+});
+
+// ─── Task 6: never-false-bless sweep ─────────────────────────────────────────
+//
+// Registry of every ambiguous / opaque / unresolvable Go fixture class from
+// Tasks 1-5. Every NEW go fixture added in a later task MUST be registered
+// here (verbatim Phase A mechanism, mirroring the shipped JS/Python modules).
+// `groundTruth` entries with `authed: true` are DOCUMENTATION ONLY (the sweep
+// loop below only checks `authed: false` entries) — they exist so a reader can
+// see the authed positive control sitting next to its unauthed sibling.
+const NEVER_FALSE_BLESS_SWEEP_GO: Array<{
+  name: string; source: string; groundTruth: Array<{ path: string; method: string; authed: boolean }>;
+}> = [
+  {
+    name: "unknown-middleware-middle-arg",
+    source: PKG + `func routes() {\n\tr.POST("/x", track(), h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "wrapped-unknown-callee",
+    source: PKG + `func routes() {\n\tmux.Handle("/x", wrap(h)).Methods("POST")\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "use-package-qualified-unknown-nonflavored",
+    source: PKG + `func routes() {\n\tr.Use(middleware.RequestID)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "use-after-route",
+    source: PKG + authDef() + `func routes() {\n\tr.POST("/a", h)\n\tr.Use(authMiddleware)\n\tr.POST("/b", h2)\n}\n`,
+    groundTruth: [
+      { path: "/a", method: "POST", authed: false },
+      { path: "/b", method: "POST", authed: true }, // doc: registered after Use, genuinely blessed
+    ],
+  },
+  {
+    name: "use-cross-function",
+    source: PKG + authDef() + `func setup(r *gin.Engine) {\n\tr.Use(authMiddleware)\n}\nfunc routes(r *gin.Engine) {\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "chi-closure-shadow",
+    source: PKG + authDef() +
+      `func routes() {\n\tr.Route("/admin", func(r chi.Router) {\n\t\tr.Use(authMiddleware)\n\t\tr.Post("/users", h)\n\t})\n\tr.Post("/public", pub)\n}\n`,
+    groundTruth: [
+      { path: "/public", method: "POST", authed: false },
+      { path: "/users", method: "POST", authed: true }, // doc: inner closure scope, genuinely blessed
+    ],
+  },
+  {
+    name: "group-use-never-blesses-parent",
+    source: PKG + authFactory() +
+      `func routes() {\n\tapi := r.Group("/api")\n\tapi.Use(RequireAuth())\n\tapi.POST("/items", h)\n\tr.POST("/public", h)\n}\n`,
+    groundTruth: [
+      { path: "/public", method: "POST", authed: false },
+      { path: "/items", method: "POST", authed: true }, // doc
+    ],
+  },
+  {
+    name: "parent-use-after-group-creation",
+    source: PKG + authDef() + `func routes() {\n\tapi := r.Group("/api")\n\tr.Use(authMiddleware)\n\tapi.POST("/items", h)\n}\n`,
+    groundTruth: [{ path: "/items", method: "POST", authed: false }],
+  },
+  {
+    name: "same-scope-rebind-poisoning",
+    source: PKG + authDef() + `func routes() {\n\tapi := r.Group("/a")\n\tapi.Use(authMiddleware)\n\tapi = r.Group("/b")\n\tapi.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "same-name-groups-independent",
+    source: PKG + authDef() +
+      `func first(r *gin.Engine) {\n\tapi := r.Group("/api")\n\tapi.Use(authMiddleware)\n\tapi.POST("/x", h)\n}\n` +
+      `func second(r *gin.Engine) {\n\tapi := r.Group("/api")\n\tapi.POST("/y", h)\n}\n`,
+    groundTruth: [
+      { path: "/x", method: "POST", authed: true }, // doc: paired own-scope positive control
+      { path: "/y", method: "POST", authed: false },
+    ],
+  },
+  {
+    name: "conditional-use",
+    source: PKG + authDef() + `func routes() {\n\tif cfg.AuthEnabled {\n\t\tr.Use(authMiddleware)\n\t}\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "di-constructor-injection-webhook",
+    source: PKG + `func routes() {\n\tmux.Handle("/webhook", NewWebhookHandler(cfg, auth.NewService(key)))\n}\n`,
+    groundTruth: [{ path: "/webhook", method: "ALL", authed: false }],
+  },
+  {
+    name: "di-constructor-injection-orders",
+    source: PKG + `func routes() {\n\tmux.Handle("/orders", NewOrdersHandler(db, jwtVerifier()))\n}\n`,
+    groundTruth: [{ path: "/orders", method: "ALL", authed: false }],
+  },
+  {
+    name: "impure-selector-use",
+    source: PKG + `func routes() {\n\tr.Use(factory.Make(authCfg).Logger())\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "impure-selector-bare-arg",
+    source: PKG + `func routes() {\n\tr.Use(registry.get("authCfg").Logger)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "builder-chain-wrap",
+    source: PKG + `func routes() {\n\tmux.Handle("/x", handlers.For(authConfig).Build(h))\n}\n`,
+    groundTruth: [{ path: "/x", method: "ALL", authed: false }],
+  },
+  {
+    name: "with-chain-no-auth",
+    source: PKG + `func routes() {\n\tr.With(paginate).With(audit).Post("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "author-segmentation-use",
+    source: PKG + `func routes() {\n\tr.Use(AuthorMiddleware)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "author-segmentation-middle-arg",
+    source: PKG + `func routes() {\n\tr.POST("/y", AuthorTracking(), h)\n}\n`,
+    groundTruth: [{ path: "/y", method: "POST", authed: false }],
+  },
+  {
+    name: "echo-trailing-middleware",
+    source: PKG +
+      `func RequireAuth(c echo.Context) error {\n\tif c.Request().Header.Get("Authorization") == "" {\n\t\treturn c.NoContent(401)\n\t}\n\treturn nil\n}\n` +
+      `func routes() {\n\te.POST("/x", h, RequireAuth)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "handler-position-identifier",
+    source: PKG + `func routes() {\n\tr.POST("/login", authLogin)\n}\n`,
+    groundTruth: [{ path: "/login", method: "POST", authed: false }],
+  },
+  {
+    name: "handler-position-401-body",
+    source: PKG +
+      `func h(c *gin.Context) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(401)\n\t\treturn\n\t}\n\tc.JSON(200, nil)\n}\n` +
+      `func routes() {\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "unicode-auth-middleware",
+    source: PKG + `func routes() {\n\tr.Use(認証)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "stdlib-bare",
+    source: PKG + `func routes() {\n\thttp.HandleFunc("/orders", h)\n}\n`,
+    groundTruth: [{ path: "/orders", method: "ALL", authed: false }],
+  },
+  {
+    name: "verb-first-unknown-middleware",
+    source: PKG + `func routes() {\n\tr.Handle("POST", "/x", metrics(), h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "composed-wrap",
+    source: PKG + `func routes() {\n\tmux.Handle("/x", chain(logger, auth)(h))\n}\n`,
+    groundTruth: [{ path: "/x", method: "ALL", authed: false }],
+  },
+  {
+    name: "subsuming-veto-wrap-set",
+    source: PKG +
+      `func realGate(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tif r.Header.Get("Authorization") == "" {\n\t\t\tw.WriteHeader(http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n` +
+      `func requireAuth(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tif r.Header.Get("Authorization") == "" {\n\t\t\tw.WriteHeader(http.StatusUnauthorized)\n\t\t\treturn\n\t\t}\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n` +
+      `func routes() {\n\tmux.Handle("/a", optionalAuth(realGate))\n\tmux.Handle("/b", SkipAuth(realGate))\n\tmux.Handle("/c", DisableAuthInDev(realGate))\n\tmux.Handle("/d", parseJWT(realGate))\n\tmux.Handle("/e", logRequests(requireAuth(h)))\n}\n`,
+    groundTruth: [
+      { path: "/a", method: "ALL", authed: false },
+      { path: "/b", method: "ALL", authed: false },
+      { path: "/c", method: "ALL", authed: false },
+      { path: "/d", method: "ALL", authed: false },
+      { path: "/e", method: "ALL", authed: true }, // doc: transparent-vs-subsuming positive control
+    ],
+  },
+  {
+    name: "broken-parse-fused-use",
+    source: PKG + `func routes() {\n\tr.Use(authMiddleware\n\tr.POST("/a", createA)\n\tr.POST("/b", createB)\n}\n`,
+    groundTruth: [
+      { path: "/a", method: "POST", authed: false }, // non-emission: a dropped route cannot false-bless
+      { path: "/b", method: "POST", authed: false },
+    ],
+  },
+  {
+    name: "broken-parse-swallowed-route",
+    source: PKG + `func routes() {\n\tr.POST("/broken", mw, h\n\tr.GET("/later", h)\n}\n`,
+    groundTruth: [{ path: "/later", method: "GET", authed: false }], // non-emission
+  },
+
+  // ── BODY-FIRST required entries (all authed:false) ──
+  {
+    name: "visible-non-enforcing-body-use",
+    source: PKG +
+      `func authCheck(c *gin.Context) {\n\tlog.Printf("auth %s", c.Request.URL.Path)\n\tc.Next()\n}\n` +
+      `func routes() {\n\tr.Use(authCheck)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "visible-non-enforcing-body-middle-arg",
+    source: PKG +
+      `func authCheck(c *gin.Context) {\n\tlog.Printf("auth %s", c.Request.URL.Path)\n\tc.Next()\n}\n` +
+      `func routes() {\n\tr.POST("/y", authCheck, h)\n}\n`,
+    groundTruth: [{ path: "/y", method: "POST", authed: false }],
+  },
+  {
+    name: "logging-mw",
+    source: PKG + `func logMiddleware(c *gin.Context) {\n\tlog.Printf("request")\n\tc.Next()\n}\nfunc routes() {\n\tr.Use(logMiddleware)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "metrics-mw",
+    source: PKG + `func metricsMiddleware(c *gin.Context) {\n\tmetrics.Inc("req")\n\tc.Next()\n}\nfunc routes() {\n\tr.Use(metricsMiddleware)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "header-set-only-mw",
+    source: PKG + `func securityHeaders(c *gin.Context) {\n\tc.Header("X-Frame-Options", "DENY")\n\tc.Next()\n}\nfunc routes() {\n\tr.Use(securityHeaders)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "passthru-mw",
+    source: PKG + `func passthru(c *gin.Context) {\n\tc.Next()\n}\nfunc routes() {\n\tr.Use(passthru)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "abort-404-mw",
+    source: PKG + `func mw(c *gin.Context) {\n\tc.AbortWithStatus(http.StatusNotFound)\n}\nfunc routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "abort-500-mw",
+    source: PKG + `func mw(c *gin.Context) {\n\tc.AbortWithStatus(http.StatusInternalServerError)\n}\nfunc routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "bare-403-mw",
+    source: PKG + `func mw(c *gin.Context) {\n\tc.AbortWithStatus(http.StatusForbidden)\n}\nfunc routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "path-filter-403-mw",
+    source: PKG +
+      `func pathFilter(c *gin.Context) {\n\tif strings.HasPrefix(c.Request.URL.Path, "/admin") {\n\t\tc.AbortWithStatus(403)\n\t}\n}\n` +
+      `func routes() {\n\tr.Use(pathFilter)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "bot-gate-403-mw",
+    // Finding 4: MUST actually read User-Agent so the "agent" key veto is
+    // proven non-vacuously (a fixture that dodges User-Agent passes trivially).
+    source: PKG +
+      `func botGate(c *gin.Context) {\n\tif c.GetHeader("User-Agent") == "" {\n\t\tc.AbortWithStatus(403)\n\t\treturn\n\t}\n}\n` +
+      `func routes() {\n\tr.Use(botGate)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "csrf-403-mw",
+    source: PKG +
+      `func csrfCheck(c *gin.Context) {\n\tif c.GetHeader("X-CSRF-Token") != valid {\n\t\tc.AbortWithStatus(403)\n\t}\n}\n` +
+      `func routes() {\n\tr.Use(csrfCheck)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "query-param-get-403-mw",
+    // Finding 2: Query().Get's operand is a CALL, not a GO_CRED_GET_RECEIVERS
+    // identifier, so it is not a credential read and must not bless.
+    source: PKG +
+      `func mw(c *gin.Context) {\n\tif c.Request.URL.Query().Get("token") == "" {\n\t\tc.AbortWithStatus(403)\n\t\treturn\n\t}\n}\n` +
+      `func routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "cache-get-403-mw",
+    source: PKG +
+      `func mw(c *gin.Context) {\n\tif cache.Get("user") == nil {\n\t\tc.AbortWithStatus(403)\n\t\treturn\n\t}\n}\n` +
+      `func routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "store-get-403-mw",
+    source: PKG +
+      `func mw(c *gin.Context) {\n\tif store.Get("session") == nil {\n\t\tc.AbortWithStatus(403)\n\t\treturn\n\t}\n}\n` +
+      `func routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "credential-read-but-unrelated-403-guard-mw",
+    source: PKG +
+      `func mw(c *gin.Context) {\n\ttoken := c.GetHeader("Authorization")\n\tlog.Printf("token seen: %v", token != "")\n\tif !featureEnabled {\n\t\tc.AbortWithStatus(403)\n\t\treturn\n\t}\n\tc.Next()\n}\n` +
+      `func routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "status-variable-mw",
+    source: PKG + `func mw(c *gin.Context) {\n\tc.AbortWithStatus(code)\n}\nfunc routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "returned-non-executed-closure-reject",
+    source: PKG + `func mw(c *gin.Context) {\n\tgo func() {\n\t\tc.AbortWithStatus(401)\n\t}()\n\tc.Next()\n}\nfunc routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "veto-over-reject-set",
+    source: PKG +
+      ["OptionalAuth", "SkipAuth", "DisableAuth", "InsecureSkipAuth", "MockAuth", "testAuth"]
+        .map((n) => `func ${n}(c *gin.Context) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\treturn\n\t}\n\tc.Next()\n}\n`)
+        .join("") +
+      `func routes() {\n` +
+      ["OptionalAuth", "SkipAuth", "DisableAuth", "InsecureSkipAuth", "MockAuth", "testAuth"]
+        .map((n, i) => `\tr.Use(${n})\n\tr.POST("/v${i}", h${i})\n`).join("") +
+      `}\n`,
+    groundTruth: [0, 1, 2, 3, 4, 5].map((i) => ({ path: `/v${i}`, method: "POST", authed: false })),
+  },
+  {
+    name: "authlogger-veto",
+    source: PKG + `func routes() {\n\tr.POST("/x", authLogger, h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "parsejwt-veto",
+    source: PKG + `func routes() {\n\tr.POST("/x", parseJWT(secret), h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "newauthhandler-wrap-veto",
+    source: PKG + `func routes() {\n\tmux.Handle("/x", newAuthHandler(deps))\n}\n`,
+    groundTruth: [{ path: "/x", method: "ALL", authed: false }],
+  },
+  {
+    name: "authlogin-middle-arg-veto",
+    source: PKG + `func routes() {\n\tr.POST("/x", authLogin, mainHandler)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+
+  // ── Pre-LOCKED-plan exposures that do NOT reproduce (verified: see the
+  // "AUDIT NOTE" documented-trade-offs pin above) — pinned as plain
+  // never-false-bless entries, not as accepted over-blesses. ──
+  {
+    name: "jwtauth-verifier-wrap",
+    source: PKG + `func routes() {\n\tr.Use(jwtauth.Verifier(tokenAuth))\n\tr.POST("/x", h)\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "single-arg-di-residual",
+    source: PKG + `func routes() {\n\tmux.Handle("/x", NewHandler(auth.NewService(key)))\n}\n`,
+    groundTruth: [{ path: "/x", method: "ALL", authed: false }],
+  },
+];
+
+describe("never-false-bless sweep", () => {
+  it("no route with ground truth authed:false is ever emitted hasAuth:true", async () => {
+    for (const entry of NEVER_FALSE_BLESS_SWEEP_GO) {
+      const f = await go(`sweep/${entry.name}.go`, entry.source);
+      const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+      for (const gt of entry.groundTruth.filter((g) => !g.authed)) {
+        const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
+        // Non-emission counts as not-blessed (a dropped route cannot false-bless).
+        expect(emitted?.hasAuth ?? false, `${entry.name}: ${gt.method} ${gt.path}`).toBe(false);
+      }
+    }
+  });
+
+  it("non-vacuity: every authed:false sweep entry (excluding the two broken-parse fixtures) actually emits its route(s)", async () => {
+    const nonEmitting = new Set(["broken-parse-fused-use", "broken-parse-swallowed-route"]);
+    for (const entry of NEVER_FALSE_BLESS_SWEEP_GO) {
+      if (nonEmitting.has(entry.name)) continue;
+      const f = await go(`sweep-nv/${entry.name}.go`, entry.source);
+      const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+      for (const gt of entry.groundTruth.filter((g) => !g.authed)) {
+        const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
+        expect(emitted, `${entry.name}: ${gt.method} ${gt.path} must be EMITTED (non-vacuous)`).toBeDefined();
+      }
+    }
+  });
+});
+
+// ─── Task 6: UNSURE sweep + the three-way machine-statement invariant ────────
+
+const UNSURE_SWEEP_GO: Array<{
+  name: string; source: string; route: { path: string; method: string }; hook: string;
+}> = [
+  {
+    name: "imported-non-core-use",
+    source: PKG + `func routes() {\n\tr.Use(middleware.VerifyToken)\n\tr.POST("/x", h)\n}\n`,
+    route: { path: "/x", method: "POST" },
+    hook: "middleware.VerifyToken",
+  },
+  {
+    name: "imported-per-route-arg",
+    source: PKG + `func routes() {\n\tr.POST("/x", middleware.VerifyToken(), h)\n}\n`,
+    route: { path: "/x", method: "POST" },
+    hook: "middleware.VerifyToken",
+  },
+  {
+    name: "opaque-wrapper",
+    source: PKG + `func routes() {\n\tmux.Handle("/x", TokenRequired(handler)).Methods("POST")\n}\n`,
+    route: { path: "/x", method: "POST" },
+    hook: "TokenRequired",
+  },
+  {
+    name: "opaque-in-file-helper",
+    // checkAuth is an in-file, RESOLVABLE function whose body calls the
+    // unresolved checkSession(c) — opaque body (rule 4), flavored name -> unsure.
+    // ("requireLogin" is deliberately NOT used here: "login" is a VETO segment
+    // and would resolve flat not-auth, not unsure — see the veto-over-reject set.)
+    source: PKG +
+      `func checkAuth(c *gin.Context) {\n\tif !checkSession(c) {\n\t\tc.Next()\n\t\treturn\n\t}\n\tc.Next()\n}\n` +
+      `func routes() {\n\tr.Use(checkAuth)\n\tr.POST("/x", h)\n}\n`,
+    route: { path: "/x", method: "POST" },
+    hook: "checkAuth",
+  },
+  {
+    name: "echo-group-inline",
+    // jwt is CORE too, but middleware.VerifyToken is used here so the pin never
+    // depends on which specific CORE segment fired.
+    source: PKG + `func routes() {\n\tadmin := e.Group("/admin", middleware.VerifyToken)\n\tadmin.POST("/users", h)\n}\n`,
+    route: { path: "/users", method: "POST" },
+    hook: "middleware.VerifyToken",
+  },
+  {
+    name: "chi-With-unsure",
+    source: PKG + `func routes() {\n\tr.With(middleware.VerifyToken).Post("/x", h)\n}\n`,
+    route: { path: "/x", method: "POST" },
+    hook: "middleware.VerifyToken",
+  },
+  {
+    name: "first-of-two-unsure",
+    source: PKG + `func routes() {\n\tr.Use(middleware.VerifyToken)\n\tr.Use(middleware.CheckToken)\n\tr.POST("/x", h)\n}\n`,
+    route: { path: "/x", method: "POST" },
+    hook: "middleware.VerifyToken", // deterministic first-in-document-order wins
+  },
+];
+
+describe("unsure sweep", () => {
+  it("each UNSURE_SWEEP_GO route emits hasAuth:false and the exact expected authUnsureHook", async () => {
+    for (const entry of UNSURE_SWEEP_GO) {
+      const f = await go(`unsure/${entry.name}.go`, entry.source);
+      const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+      const rt = routes.find((r) => r.path === entry.route.path && r.method === entry.route.method);
+      expect(rt, `${entry.name}: route must be emitted (non-vacuous)`).toBeDefined();
+      expect(rt!.hasAuth, entry.name).toBe(false);
+      expect(rt!.authUnsureHook, entry.name).toBe(entry.hook);
+    }
+  });
+
+  it("MACHINE STATEMENT: authUnsureHook !== undefined implies hasAuth === false, and hasAuth === true implies no authUnsureHook key, over every route in both sweeps", async () => {
+    const allRoutes: Array<{ hasAuth: boolean; authUnsureHook?: string }> = [];
+    for (const entry of NEVER_FALSE_BLESS_SWEEP_GO) {
+      const f = await go(`machine-nfb/${entry.name}.go`, entry.source);
+      allRoutes.push(...extractGoRoutesAst(f.tree!, f.relativePath));
+    }
+    for (const entry of UNSURE_SWEEP_GO) {
+      const f = await go(`machine-unsure/${entry.name}.go`, entry.source);
+      allRoutes.push(...extractGoRoutesAst(f.tree!, f.relativePath));
+    }
+    expect(allRoutes.length).toBeGreaterThan(0);
+    for (const r of allRoutes) {
+      if (r.authUnsureHook !== undefined) expect(r.hasAuth).toBe(false);
+      if (r.hasAuth === true) expect("authUnsureHook" in r).toBe(false);
+    }
+  });
+
+  it("FileMiddleware honesty: every UNSURE_SWEEP_GO fixture's file-level hasAuth is false (unsure never enters the OR)", async () => {
+    for (const entry of UNSURE_SWEEP_GO) {
+      const f = await go(`unsure-fm/${entry.name}.go`, entry.source);
+      expect(extractGoFileMiddlewareAst(f.tree!).hasAuth, entry.name).toBe(false);
+    }
+  });
+
+  it("ambiguous-body generator sweep: every candidate ambiguous body placed in a Use hook over one POST route never yields hasAuth:true", async () => {
+    const bodies: Array<[string, string]> = [
+      ["AbortWithStatus(codeVar)", `func mw(c *gin.Context) {\n\tc.AbortWithStatus(code)\n}\n`],
+      ["AbortWithStatus(404)", `func mw(c *gin.Context) {\n\tc.AbortWithStatus(404)\n}\n`],
+      ["AbortWithStatus(500)", `func mw(c *gin.Context) {\n\tc.AbortWithStatus(500)\n}\n`],
+      ["bare AbortWithStatus(403)", `func mw(c *gin.Context) {\n\tc.AbortWithStatus(403)\n}\n`],
+      ["http.Error(w,...,404)", `func mw(w http.ResponseWriter, r *http.Request) {\n\thttp.Error(w, "not found", 404)\n}\n`],
+      ["WriteHeader(500)", `func mw(w http.ResponseWriter, r *http.Request) {\n\tw.WriteHeader(500)\n}\n`],
+      ["path-filter-403", `func mw(c *gin.Context) {\n\tif strings.HasPrefix(c.Request.URL.Path, "/admin") {\n\t\tc.AbortWithStatus(403)\n\t}\n}\n`],
+      ["csrf-403", `func mw(c *gin.Context) {\n\tif c.GetHeader("X-CSRF-Token") != valid {\n\t\tc.AbortWithStatus(403)\n\t}\n}\n`],
+      ["opaque-boring-call", `func mw(c *gin.Context) {\n\tdoStuff(c)\n}\n`],
+      ["only c.Next()", `func mw(c *gin.Context) {\n\tc.Next()\n}\n`],
+    ];
+    for (const [label, body] of bodies) {
+      const src = PKG + body + `func routes() {\n\tr.Use(mw)\n\tr.POST("/x", h)\n}\n`;
+      const f = await go(`ambiguous/${label.replace(/[^a-z0-9]+/gi, "-")}.go`, src);
+      const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+      expect(rt.hasAuth, label).toBe(false);
+    }
+  });
+
+  it("depth-cap / cycle safety: a mutual in-file helper cycle terminates, throws nothing, and blesses nothing", async () => {
+    const src = PKG +
+      `func a(c *gin.Context) {\n\tb(c)\n}\nfunc b(c *gin.Context) {\n\ta(c)\n}\n` +
+      `func routes() {\n\tr.Use(a)\n\tr.POST("/x", h)\n}\n`;
+    const f = await go("mutualcycle.go", src);
+    expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    const [rt] = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(rt.hasAuth).toBe(false);
+  });
+
+  it("depth-cap / cycle safety: a 20-deep returned-closure wrap terminates, throws nothing, and blesses nothing", async () => {
+    let expr = "h";
+    for (let i = 0; i < 20; i++) expr = `logWrap(${expr})`;
+    const f = await go("deepwrap2.go", PKG + `func routes() {\n\tmux.Handle("/x", ${expr})\n}\n`);
+    expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)[0].hasAuth).toBe(false);
+  });
+
+  it("no-throw totality: every adversarial-plus-unsure fixture never throws in either extractor", async () => {
+    const sources = [
+      ...NEVER_FALSE_BLESS_SWEEP_GO.map((e) => e.source),
+      ...UNSURE_SWEEP_GO.map((e) => e.source),
+    ];
+    for (const src of sources) {
+      const f = await go("totality2.go", src);
+      expect(() => extractGoRoutesAst(f.tree!, f.relativePath)).not.toThrow();
+      expect(() => extractGoFileMiddlewareAst(f.tree!)).not.toThrow();
+    }
+  });
+});

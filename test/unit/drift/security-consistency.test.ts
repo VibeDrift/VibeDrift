@@ -5,7 +5,7 @@ import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
-import { extractGoFileMiddlewareAst } from "../../../src/drift/security-ast-go.js";
+import { extractGoFileMiddlewareAst, extractGoRoutesAst } from "../../../src/drift/security-ast-go.js";
 import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
   SECURITY_SUPPRESSION_ANALYZER_ID,
@@ -1681,5 +1681,179 @@ describe("Task 5 (Go): terminal hedge visibility", () => {
     expect(out).toContain("Unprotected routes may be exposed in production");
     expect(out.toLowerCase()).not.toContain("double check");
     expect(out).not.toContain("middleware.VerifyToken");
+  });
+});
+
+// ── Task 6 (Go): adversarial detect-level fallback ────────────────────────────
+//
+// Companions to the direct-extractor pins in security-ast-go.test.ts
+// ("malformed and adversarial input"): here the SAME hazards are run through
+// securityConsistency.detect end-to-end, proving the whole-file hasError gate
+// preserves recall via the regex fallback exactly as it does for JS/Python.
+describe("Task 6 (Go): adversarial detect-level fallback", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const authFinding = (fs: any[]) => fs.find((f: any) => f.subCategory === "Auth middleware");
+  const devPaths = (f: any): string[] =>
+    f ? f.deviatingFiles.map((d: any) => d.evidence[0].code.split(" ")[1]) : [];
+  const authedPeer = (dir: string, n: number) =>
+    goTree(`${dir}/peer${n}.go`, `func routes${n}(r *gin.Engine) {\n\tr.Use(authMiddleware)\n\tr.POST("/peer${n}", createX)\n}\n`);
+
+  it("swallowed-route hazard: the whole file (rootNode.hasError) still routes to regex and recovers the swallowed route's recall", async () => {
+    // The direct extractor emits NOTHING from this file (pinned in
+    // security-ast-go.test.ts). Here the mutating verb is POST rather than the
+    // brief's illustrative GET: GET is structurally outside every
+    // security-consistency auth vote (MUTATION_METHODS-gated), so a GET would
+    // never surface as an observable deviator regardless of recall — this swap
+    // is required to make recall OBSERVABLE end-to-end, not a change to the
+    // hazard itself (same unclosed-paren-swallows-the-next-call shape).
+    const broken = await goTree("src/swallow/danger.go",
+      `package main\n\n` + `func routes() {\n\tr.POST("/broken", mw, h\n\tr.POST("/later", h)\n}\n`);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    expect(extractGoRoutesAst(broken.tree!, broken.relativePath)).toEqual([]);
+
+    const peers = await Promise.all([
+      authedPeer("src/swallow", 1), authedPeer("src/swallow", 2),
+      authedPeer("src/swallow", 3), authedPeer("src/swallow", 4),
+    ]);
+    const f = authFinding(securityConsistency.detect(mkCtx([broken, ...peers])));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/later");
+  });
+
+  it("surgical-per-node-skip parity: a file-level parse error elsewhere still routes the WHOLE file to regex (python bodyerror parity)", async () => {
+    // The direct extractor's surgical per-node skip emits POST /good from this
+    // exact source (pinned in security-ast-go.test.ts) — but detect's dispatch
+    // gate is coarser than that per-node precision: ANY hasError anywhere in the
+    // file routes the WHOLE file to the regex fallback, never reaching the AST
+    // extractor's surgical logic at all. /good still recovers, just via a
+    // completely different mechanism (regex line-window), which this pins.
+    const broken = await goTree("src/surgical/mix.go",
+      `package main\n\n` + `func bad() {\n\tx := := 1\n\t_ = x\n}\n\nfunc good() {\n\tr.POST("/good", h)\n}\n`);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    expect(extractGoRoutesAst(broken.tree!, broken.relativePath).map((r) => `${r.method} ${r.path}`))
+      .toEqual(["POST /good"]); // the direct-extractor pin, re-asserted here for contrast
+
+    const peers = await Promise.all([
+      authedPeer("src/surgical", 1), authedPeer("src/surgical", 2),
+      authedPeer("src/surgical", 3), authedPeer("src/surgical", 4),
+    ]);
+    const f = authFinding(securityConsistency.detect(mkCtx([broken, ...peers])));
+    expect(f).toBeDefined();
+    expect(devPaths(f)).toContain("/good");
+  });
+});
+
+// ── Task 6 (Go): suppression pins ──────────────────────────────────────────────
+//
+// The `@vibedrift-public` annotation mechanism (security-suppression.ts) is
+// language-generic: it keys off `route.line` (the anchor call's OWN row) and AST
+// comment nodes when a tree is attached. These pins prove it binds correctly for
+// Go, including the Task 2 line-choice decision (a Gorilla chain's route.line is
+// the HandleFunc row, never a chained `.Methods(...)` continuation's row).
+describe("Task 6 (Go): suppression pins", () => {
+  const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+  const auth = (fs: any[]) => fs.find((f: any) => f.subCategory === "Auth middleware");
+  const audit = (fs: any[]) => fs.find((f: any) => f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+  const requireAuthDef =
+    `func requireAuth(c *gin.Context) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\treturn\n\t}\n\tc.Next()\n}\n`;
+  const authedFour = [
+    `\tr.POST("/a", requireAuth, ha)`,
+    `\tr.POST("/b", requireAuth, hb)`,
+    `\tr.POST("/c", requireAuth, hc)`,
+    `\tr.POST("/d", requireAuth, hd)`,
+  ];
+
+  it("// @vibedrift-public on the route's OWN line suppresses it; the audit finding cites that line", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\tr.POST("/public", handlePublic) // @vibedrift-public`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    // /public leaves the vote entirely -> the remaining 4 /a../d are 4/4 authed,
+    // so no auth-drift finding fires.
+    expect(auth(findings)).toBeUndefined();
+    const a = audit(findings);
+    expect(a).toBeDefined();
+    expect(a!.deviatingFiles).toHaveLength(1);
+    expect(a!.deviatingFiles[0].path).toBe("src/suppress/api.go");
+    // The route's own registration line (the r.POST("/public"...) row).
+    const ownLine = src.split("\n").findIndex((l) => l.includes(`/public`)) + 1;
+    expect(a!.deviatingFiles[0].evidence[0].line).toBe(ownLine);
+  });
+
+  it("// @vibedrift-public on the line immediately ABOVE a multiline Gorilla chain suppresses it (binds to the HandleFunc row)", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\t// @vibedrift-public`,
+      `\trouter.HandleFunc("/public", handlePublic).`,
+      `\t\tMethods("POST")`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress2/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    expect(auth(findings)).toBeUndefined();
+    const a = audit(findings);
+    expect(a).toBeDefined();
+    expect(a!.deviatingFiles).toHaveLength(1);
+    const handleFuncLine = src.split("\n").findIndex((l) => l.includes(`HandleFunc("/public"`)) + 1;
+    expect(a!.deviatingFiles[0].evidence[0].line).toBe(handleFuncLine);
+  });
+
+  it("the SAME annotation placed beside the .Methods(\"POST\") continuation line does NOT suppress (proves route.line = the HandleFunc row is load-bearing)", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\trouter.HandleFunc("/public", handlePublic).`,
+      `\t\tMethods("POST") // @vibedrift-public`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress3/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    // Nothing suppressed -> no audit finding.
+    expect(audit(findings)).toBeUndefined();
+    // /public stays in the vote as the unauthed deviator (4 authed + 1 unauthed
+    // = 0.8 > 0.75), cited on its own HandleFunc row.
+    const a = auth(findings);
+    expect(a).toBeDefined();
+    const handleFuncLine = src.split("\n").findIndex((l) => l.includes(`HandleFunc("/public"`)) + 1;
+    expect(a!.deviatingFiles.some((d: any) => d.evidence[0].line === handleFuncLine)).toBe(true);
+  });
+
+  it("an @vibedrift-public annotation inside a Go string literal never suppresses (comment-awareness via AST comment nodes)", async () => {
+    const src = [
+      `package main`, ``,
+      ...requireAuthDef.split("\n").slice(0, -1),
+      ``,
+      `func routes(r *gin.Engine) {`,
+      ...authedFour,
+      `\tdoc := "publish under // @vibedrift-public to opt out"`,
+      `\tr.POST("/danger", handleDanger)`,
+      `}`,
+    ].join("\n");
+    const f = await goTree("src/suppress4/api.go", src);
+    const findings = securityConsistency.detect(mkCtx([f]));
+
+    // The string literal is not a comment node, so nothing is suppressed.
+    expect(audit(findings)).toBeUndefined();
+    const a = auth(findings);
+    expect(a).toBeDefined();
+    const dangerLine = src.split("\n").findIndex((l) => l.includes(`/danger`)) + 1;
+    expect(a!.deviatingFiles.some((d: any) => d.evidence[0].line === dangerLine)).toBe(true);
   });
 });
