@@ -111,7 +111,7 @@ not minimal stubs, split into three independent roots:
   (that check is repo-global over whatever files are in `ctx.files`, not
   scoped to a route group).
 
-Five scenarios, each computing precision/recall explicitly against planted
+Nine scenarios, each computing precision/recall explicitly against planted
 ground truth:
 
 - **S0** recognition self-check — every route file in the Flask/FastAPI
@@ -130,6 +130,34 @@ ground truth:
   routes were actually seen.
 - **S5** the uniformly-authed control: zero findings on every axis (auth,
   validation, rate-limit).
+
+The addendum adds four body-signature / methods-variable scenarios, each in
+its own directory root and each RED-FIRST against the pre-addendum commit
+(`353a939`): the assertion fails there and passes on this branch, so the pin
+measures a real behavior change, not a tautology.
+
+- **S6** name-auth-but-body-isnt collision (`hookcol/`): four
+  `@login_required` routes plus one whose only gate is a `verify_user_email`
+  before_request hook that merely emails. Body-first classification resolves
+  it flat not-auth, so the finding must NOT be suppressed (dominantCount 4,
+  consistencyScore 80, precision/recall 1.0). Red-first: the pre-addendum
+  name-only path blessed the hook and the scenario produced ZERO findings.
+- **S7** body-is-real-auth positive (`bodysrv/`): five routes whose ONLY auth
+  is a boring-named `gate()` hook (session read + `abort(401)`); a
+  machinery-style self-check asserts no auth-lexicon identifier appears. All
+  five bless on the body signature alone (scenario A: zero findings);
+  stripping one hook flags exactly it (scenario B). Red-first: scenario A
+  fails non-vacuity pre-addendum (no body-bless, so nothing is authed).
+- **S8** unresolvable-body UNSURE (`unsuresrv/`): four `@login_required`
+  routes plus one gated only by an imported `before_request` hook, which
+  resolves UNSURE — still flagged, with HEDGED copy naming the hook
+  (`double check hook 'verify_session'`), counts identical to S6, and the S1
+  deviator asserted flat in the same run (no hedge leakage). Red-first: the
+  pre-addendum name path blessed the imported hook.
+- **S9** methods=variable resolution (`varsrv/`): five routes registered via
+  `methods=ALLOWED` where `ALLOWED = ("POST",)` is a same-file literal; every
+  route resolves method exactly POST and enters the mutating auth vote.
+  Red-first: pre-addendum a `methods=` variable resolved ALL, not POST.
 
 ## Adding a new injection type
 

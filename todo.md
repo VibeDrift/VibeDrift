@@ -1,5 +1,47 @@
 # CLI backlog
 
+- **Python hook body: `Depends`-target body DEMOTION.** The additive Depends
+  same-file body path (`callsWithAuthDependency`, `security-ast-python.ts`) only
+  ever ADDS a bless when a boring-named dependency's visible body raises a
+  verified reject; it never DEMOTES a name-hit dependency whose visible body is
+  plainly non-enforcing (the mirror of the `verify_user_email` fix on the hook
+  path). Symmetry with the before_request path would close a residual name-only
+  bless for Depends. Left additive-only for now (demotion could hide a real
+  reject reached via a shape the scanner does not model).
+
+- **`add_middleware` class-body analysis.** `app.add_middleware(X)` blesses on
+  the CLASS NAME segments only (`MIDDLEWARE_AUTH_SEGMENTS`); it does not read the
+  middleware class body (its `__call__`/`dispatch`) to confirm or deny auth. A
+  body-first pass (as done for before_request hooks) would let a boring-named
+  middleware whose dispatch 401s bless, and stop an auth-named one whose body is
+  visibly non-enforcing. Out of scope for this addendum.
+
+- **`@api_view(SOME_VAR)` same-file methods resolution.** Upgrade 2 resolves a
+  Flask `methods=VAR` kwarg through a same-file literal (`collectMethodsVars` +
+  `methodFromLiteral`), but `asApiViewDecorator` deliberately does NOT: an
+  `@api_view(METHODS)` list behind a variable stays ALL even when METHODS has a
+  same-file literal assignment. Flipping it is a two-line owner-gated change
+  (reuse `methodFromLiteral` against the same census); scoped out because the
+  approved Upgrade 2 names the `methods=` kwarg only.
+
+- **Poison-census residual: `match`/`case` capture rebinding a `methods=` var.**
+  `collectPoisonedMethodsNames` covers augmented/subscript/slice/pattern-unpack/
+  `global`/walrus/for-target/`with-as`/mutating-call writes, but a `case`
+  capture pattern that rebinds a module-level name used as `methods=VAR`
+  (`match x:\n    case [*ALLOWED]:`) is not in the census. Astronomically rare
+  (a match capture reusing a route's methods variable name) and only ever
+  under-poisons toward a false GET-drop in that one shape; out of scope, safe to
+  defer.
+
+- **`context-md.ts` does not surface the auth hedge.** `buildContextMarkdown`
+  renders only the neutral aggregate headline (`Auth middleware missing on N of
+  M routes`), never the per-route deviator copy or the recommendation, so an
+  UNSURE (hedged) route is not named in the committed `.vibedrift/context.md`.
+  Safe today because context-md makes no confident per-route claim (see
+  `test/unit/output/security-hedge-surfaces.test.ts`); a follow-up could add a
+  short "N routes could not be confirmed (hooks: ...)" line so the AI-agent
+  context file carries the same hedge the report surfaces do.
+
 - **Landing-page release notes for SCORING_VERSION v10 (cross-repo).** The
   security release bumps `SCORING_VERSION` v9 -> v10 (Express `.all()` + Flask
   `@app.route(methods=[...])` mutating routes now enter the security auth vote,

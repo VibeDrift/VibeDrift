@@ -16,6 +16,16 @@
  *   fastsrv/deps.py            the shared get_current_user dependency
  *   hooks/routes/*_hook.py     5 uniformly PUBLIC webhook receivers (negative control)
  *
+ * Addendum (S6-S9) adds four more independent roots exercising the body-signature
+ * hook classifier and the methods= variable resolver:
+ *   hookcol/routes/*_routes.py    S6: 4 @login_required + 1 name-auth-but-body-isnt
+ *                                 collision (verify_user_email that only emails)
+ *   bodysrv/routes/*_routes.py    S7: 5 routes whose ONLY auth is a boring gate()
+ *                                 before_request hook (session read + abort(401))
+ *   unsuresrv/routes/*_routes.py  S8: 4 @login_required + 1 imported-hook UNSURE
+ *   varsrv/routes/*_routes.py     S9: 5 routes with methods=ALLOWED resolved from a
+ *                                 same-file ("POST",) tuple literal
+ *
  * Receiver names in the Flask group deliberately mix two recognition paths so
  * the fixture measures recall across BOTH: four convention-gated names
  * (users_bp, orders_bp, payments_router, api — recognized by ROUTER_RECEIVER)
@@ -271,5 +281,202 @@ export function stripFastapiAuth(files: BaselineFile[], count: number): Baseline
       .join("\n")
       .replace(", user=Depends(get_current_user)", "");
     return { path: f.path, content };
+  });
+}
+
+// ─── S6-S9: body-signature + methods-var calibration groups (addendum) ───────
+//
+// Each group roots its own directory so the route-directory vote grouping and
+// `repoHasAuthMachinery` evidence never bleed between scenarios. Each helper
+// keeps "one route per file" so the non-vacuity guards stay exact.
+
+/** A Flask route file authed by an @login_required decorator applied BELOW the
+ *  route decorator (positional binding: it must sit below to be enforced). */
+function loginRequiredRouteFile(root: string, receiver: string, blueprintName: string, name: string): BaselineFile {
+  return {
+    path: `${root}/${name}_routes.py`,
+    content:
+`"""POST /${name}: create a ${name} record."""
+from flask import Blueprint, jsonify, request
+from ..auth import login_required
+
+${receiver} = Blueprint("${blueprintName}", __name__)
+
+@${receiver}.route("/${name}", methods=["POST"])
+@login_required
+def create_${name}():
+    payload = request.get_json()
+    return jsonify(payload), 201
+`,
+  };
+}
+
+// ── S6: name-auth-but-body-isnt collision (negative) ─────────────────────────
+const S6_ROOT = "hookcol/routes";
+/** The one deviator in S6: its only gate is a `verify_user_email` before_request
+ *  hook whose visible body merely sends a confirmation email. Body-first
+ *  classification resolves it flat not-auth (name looks like auth, body is not),
+ *  so the finding must NOT be suppressed. */
+export const hookCollisionDeviatorPath = `${S6_ROOT}/notify_routes.py`;
+export function hookCollisionGroup(): BaselineFile[] {
+  const authed = [
+    loginRequiredRouteFile(S6_ROOT, "users_bp", "users", "users"),
+    loginRequiredRouteFile(S6_ROOT, "orders_bp", "orders", "orders"),
+    loginRequiredRouteFile(S6_ROOT, "payments_router", "payments", "payments"),
+    loginRequiredRouteFile(S6_ROOT, "carts", "carts", "carts"),
+  ];
+  const collision: BaselineFile = {
+    path: hookCollisionDeviatorPath,
+    content:
+`"""POST /notify: send a notification. The only before_request gate is
+verify_user_email, whose visible body merely emails a confirmation link, so the
+NAME looks like auth while the BODY does not authenticate (body-first: flat
+not-auth, no bless)."""
+from flask import Blueprint, jsonify, request, g
+
+notify_bp = Blueprint("notify", __name__)
+
+
+@notify_bp.before_request
+def verify_user_email():
+    send_confirmation_email(g.user.email)
+    return None
+
+
+@notify_bp.route("/notify", methods=["POST"])
+def create_notify():
+    payload = request.get_json()
+    return jsonify(payload), 201
+`,
+  };
+  return [...authed, collision];
+}
+
+// ── S7: body-is-real-auth positive (boring gate() hook) ──────────────────────
+const S7_ROOT = "bodysrv/routes";
+/** The exact before_request block S7 files carry and stripBodyHook removes; a
+ *  boring name (`gate`) whose BODY reads the session and abort(401)s, so ONLY
+ *  the body signature blesses (no auth-lexicon identifier anywhere in S7). */
+function bodyGateBlock(receiver: string): string {
+  return (
+`@${receiver}.before_request
+def gate():
+    if not session.get("user_id"):
+        abort(401)
+
+
+`
+  );
+}
+function bodyGateFile(name: string): BaselineFile {
+  const receiver = `${name}_bp`;
+  return {
+    path: `${S7_ROOT}/${name}_routes.py`,
+    content:
+`"""POST /${name}: create a ${name}. The ONLY auth is a boring-named gate()
+before_request hook (session read + abort(401)); no auth-lexicon identifier
+appears in this corpus, so a name-based check would see nothing."""
+from flask import Blueprint, session, abort, request, jsonify
+
+${receiver} = Blueprint("${name}", __name__)
+
+
+${bodyGateBlock(receiver)}@${receiver}.route("/${name}", methods=["POST"])
+def create_${name}():
+    return jsonify(request.get_json()), 201
+`,
+  };
+}
+export function bodyAuthedGroup(): BaselineFile[] {
+  return ["items", "accounts", "subscriptions", "tickets", "shipments"].map(bodyGateFile);
+}
+export function sortedBodyRoutePaths(files: BaselineFile[]): string[] {
+  return sortedEligiblePaths(files, (p) => p.startsWith(`${S7_ROOT}/`) && p.endsWith("_routes.py"));
+}
+/** Removes the gate() before_request block from the first `count` S7 files,
+ *  sorted by path, leaving a bare (now unauthed) still-mutating route. */
+export function stripBodyHook(files: BaselineFile[], count: number): BaselineFile[] {
+  const targets = new Set(sortedBodyRoutePaths(files).slice(0, count));
+  return files.map((f) => {
+    if (!targets.has(f.path)) return f;
+    const name = f.path.slice(`${S7_ROOT}/`.length, -"_routes.py".length);
+    return { path: f.path, content: f.content.replace(bodyGateBlock(`${name}_bp`), "") };
+  });
+}
+
+// ── S8: unresolvable-body UNSURE (imported before_request hook) ───────────────
+const S8_ROOT = "unsuresrv/routes";
+/** The one deviator in S8: an IMPORTED before_request hook whose body is not
+ *  visible in-file, so it resolves UNSURE (hasAuth false, authUnsureHook set,
+ *  hedged copy), never a bless. */
+export const unsureHookDeviatorPath = `${S8_ROOT}/reports_routes.py`;
+export function unsureHookGroup(): BaselineFile[] {
+  const authed = [
+    loginRequiredRouteFile(S8_ROOT, "alpha_bp", "alpha", "alpha"),
+    loginRequiredRouteFile(S8_ROOT, "beta_bp", "beta", "beta"),
+    loginRequiredRouteFile(S8_ROOT, "gamma_bp", "gamma", "gamma"),
+    loginRequiredRouteFile(S8_ROOT, "delta_bp", "delta", "delta"),
+  ];
+  const unsure: BaselineFile = {
+    path: unsureHookDeviatorPath,
+    content:
+`"""POST /reports: create a report. The only gate is an IMPORTED before_request
+hook whose body is not visible in this file, so it resolves UNSURE (hedged copy
+naming the hook), never a bless."""
+from flask import Blueprint, jsonify, request
+from .auth_helpers import verify_session
+
+reports_bp = Blueprint("reports", __name__)
+reports_bp.before_request(verify_session)
+
+
+@reports_bp.route("/reports", methods=["POST"])
+def create_reports():
+    return jsonify(request.get_json()), 201
+`,
+  };
+  return [...authed, unsure];
+}
+
+// ── S9: methods= variable resolved from a same-file literal ───────────────────
+const S9_ROOT = "varsrv/routes";
+function methodsVarFile(name: string, authed: boolean): BaselineFile {
+  const receiver = `${name}_bp`;
+  return {
+    path: `${S9_ROOT}/${name}_routes.py`,
+    content:
+`"""POST /${name}: methods resolved from a same-file ALLOWED tuple literal."""
+from flask import Blueprint, jsonify, request
+from ..auth import login_required
+
+${receiver} = Blueprint("${name}", __name__)
+ALLOWED = ("POST",)
+
+@${receiver}.route("/${name}", methods=ALLOWED)${authed ? "\n@login_required" : ""}
+def create_${name}():
+    return jsonify(request.get_json()), 201
+`,
+  };
+}
+export function methodsVarGroup(): BaselineFile[] {
+  return ["invoices", "refunds", "coupons", "receipts", "credits"].map((n) => methodsVarFile(n, true));
+}
+export function sortedMethodsVarRoutePaths(files: BaselineFile[]): string[] {
+  return sortedEligiblePaths(files, (p) => p.startsWith(`${S9_ROOT}/`) && p.endsWith("_routes.py"));
+}
+/** Strips @login_required (decorator + import) from the first `count` S9 files,
+ *  sorted by path. The route decorator and its methods=ALLOWED kwarg are
+ *  untouched, so the stripped file stays a POST-resolved, unauthed route. */
+export function stripMethodsVarAuth(files: BaselineFile[], count: number): BaselineFile[] {
+  const targets = new Set(sortedMethodsVarRoutePaths(files).slice(0, count));
+  return files.map((f) => {
+    if (!targets.has(f.path)) return f;
+    const lines = f.content
+      .split("\n")
+      .filter(
+        (line) =>
+          line.trim() !== "@login_required" && line.trim() !== "from ..auth import login_required",
+      );
+    return { path: f.path, content: lines.join("\n") };
   });
 }
