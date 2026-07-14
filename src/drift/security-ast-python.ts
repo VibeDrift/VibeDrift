@@ -32,6 +32,10 @@
  * vote (matching how an Express `.all()` route is treated). This is a real,
  * user-visible behavior change from today's regex path, not a bug fix; it is
  * called out here for explicit sign-off rather than shipped silently.
+ * `asApiViewDecorator` follows the SAME ALL-on-unresolvable convention: an
+ * `@api_view([METHOD])` / `@api_view([*BASE])` list whose only verbs are hidden
+ * behind a variable resolves to "ALL", not GET. Same open question, same
+ * pending sign-off.
  *
  * DJANGO REST SCOPE (best-effort, function views only): `@api_view(["POST"])`
  * routes are recognized; the URL lives in `urls.py` and cross-file resolution
@@ -117,6 +121,14 @@ const RATE_NAMES = /(?:rate_?limit|throttle|limiter|slowapi|slowdown)/i;
 // hooks that do not authenticate. Whole-segment matching makes substring blessing
 // structurally impossible.
 const AUTH_CORE_SEGMENTS = new Set(["auth", "authenticate", "authenticated"]);
+// LEXICON NOTE (pending owner lexicon sign-off): these two sets are broader than
+// the plan's Integration contract. Beyond the contract, ENFORCE adds
+// verify/verified, protect/protected, restrict/restricted, and SUBJECT adds
+// users, jwt, role(s), admin, credentials. The additions expand the two-tier
+// (ENFORCE + SUBJECT) bless surface, so the closest non-auth neighbors are pinned
+// FALSE by boundary tests (restricted_zone_redirect, track_user_metrics,
+// role_labels, protect_branch) to keep the surface explicit. The sets are left
+// UNCHANGED here; any narrowing waits on the owner's lexicon decision.
 const AUTH_ENFORCE_SEGMENTS = new Set([
   "require", "required", "requires", "verify", "verified", "ensure",
   "protect", "protected", "restrict", "restricted",
@@ -125,6 +137,14 @@ const AUTH_SUBJECT_SEGMENTS = new Set([
   "login", "token", "user", "users", "session", "jwt", "permission",
   "permissions", "role", "roles", "admin", "credentials",
 ]);
+// Optionality-flavored veto, the subset of DEPENDS_VETO_SEGMENTS that signals an
+// auth check which ADMITS unauthenticated requests. Applied to before_request
+// HOOK names (nameHasAuthToken) and add_middleware CLASS names so an
+// optional_authenticate hook or an OptionalAuthMiddleware never blesses, exactly
+// as Depends(optional_auth) already does not. Only the optionality members are
+// carried here: the settings/config/stats/url vetoes are Depends-argument-shape
+// specific and do not generalize to hook/middleware names.
+const OPTIONAL_AUTH_VETO = new Set(["optional", "maybe", "anonymous", "none"]);
 // Middleware CLASS-NAME auth segments for app.add_middleware(X). Matched by WHOLE
 // CamelCase/underscore segment on the class name ONLY (never the whole arg text):
 // AuthMiddleware and AuthenticationMiddleware bless, AuthorTrackingMiddleware does
@@ -146,7 +166,7 @@ export const SECURITY_AST_PY = {
   ROUTE_METHODS, HTTP_VERBS, MUTATING_VERBS, ROUTER_RECEIVER, ROUTER_CONSTRUCTORS,
   AUTH_DECORATORS, DEPENDS_AUTH_SEGMENTS, DEPENDS_AUTH_PAIRS, DEPENDS_VETO_SEGMENTS,
   VAL_NAMES, RATE_NAMES, AUTH_CORE_SEGMENTS, AUTH_ENFORCE_SEGMENTS,
-  AUTH_SUBJECT_SEGMENTS, MIDDLEWARE_AUTH_SEGMENTS, PERMISSION_AUTH,
+  AUTH_SUBJECT_SEGMENTS, OPTIONAL_AUTH_VETO, MIDDLEWARE_AUTH_SEGMENTS, PERMISSION_AUTH,
 };
 
 /** Value of a Python string-ish path argument with quotes AND prefixes stripped.
@@ -296,11 +316,24 @@ function asApiViewDecorator(dec: SyntaxNode, definition: SyntaxNode): PyRoute | 
   const list = expr.childForFieldName("arguments")?.namedChild(0);
   let method = "GET"; // DRF default when @api_view() has no args
   if (list && ["list", "tuple", "set"].includes(list.type)) {
-    const verbs = list.namedChildren
-      .filter((n): n is SyntaxNode => n !== null && n.type === "string")
+    const children = list.namedChildren.filter((n): n is SyntaxNode => n !== null);
+    const verbs = children
+      .filter((n) => n.type === "string")
       .map((s) => (pyStringText(s) ?? "").toUpperCase())
       .filter((v) => HTTP_VERBS.has(v));
-    method = verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0] ?? "GET";
+    // A non-string element (a variable verb: @api_view([METHOD]) or
+    // @api_view([*BASE])) is statically unresolvable. Following the module's
+    // ALL-on-unresolvable convention (resolveMethod, pending the owner sign-off
+    // in the header OPEN QUESTION), an unresolvable list with no visible literal
+    // verb resolves ALL so the route STAYS in the mutating vote rather than
+    // silently defaulting GET; a visible literal still resolves it normally.
+    const hidden = children.some((n) => n.type !== "string");
+    method =
+      verbs.length === 0
+        ? hidden
+          ? "ALL"
+          : "GET"
+        : (verbs.find((v) => MUTATING_VERBS.has(v)) ?? verbs[0]);
   } else if (list) {
     method = "ALL"; // verbs behind a variable: keep the route in the mutating vote
   }
@@ -359,6 +392,9 @@ function nameSegments(name: string): string[] {
  *  authenticate. Substring blessing is structurally impossible (segments). */
 function nameHasAuthToken(name: string): boolean {
   const segs = nameSegments(name);
+  // Optional-auth veto first: optional_authenticate / maybe_require_login admit
+  // anonymous requests, so they never bless (mirrors the Depends path).
+  if (segs.some((s) => OPTIONAL_AUTH_VETO.has(s))) return false;
   if (segs.some((s) => AUTH_CORE_SEGMENTS.has(s))) return true;
   return (
     segs.some((s) => AUTH_ENFORCE_SEGMENTS.has(s)) &&
@@ -554,8 +590,14 @@ function collectPyMiddleware(tree: Tree): PyMiddlewareScopes {
       // Middleware CLASS NAME only (never the whole arg text), matched by WHOLE
       // CamelCase/underscore segment: AuthMiddleware and AuthenticationMiddleware
       // bless, AuthorTrackingMiddleware does not (the segment "author" is not
-      // "auth"; same discipline as decorators and Depends targets).
-      if (nameSegments(mwName).some((s) => MIDDLEWARE_AUTH_SEGMENTS.has(s))) {
+      // "auth"; same discipline as decorators and Depends targets). The
+      // optional-auth veto cancels a hit: OptionalAuthMiddleware admits anonymous
+      // requests, so it must not bless (mirrors the Depends path).
+      const mwSegs = nameSegments(mwName);
+      if (
+        mwSegs.some((s) => MIDDLEWARE_AUTH_SEGMENTS.has(s)) &&
+        !mwSegs.some((s) => OPTIONAL_AUTH_VETO.has(s))
+      ) {
         mark(receiver, false, "hasAuth");
       }
       if (/[Ll]imit/.test(mwName) || RATE_NAMES.test(mwName)) mark(receiver, false, "hasRateLimit");
@@ -619,11 +661,16 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const authDecoratorRows = decorators
       .filter(isAuthDecorator)
       .map((d) => d.startPosition.row);
-    // @permission_classes([IsAuthenticated]) is a POSITIONAL auth decorator too
-    // (DRF: it must sit BELOW @api_view or it is never enforced), so it folds
-    // into the same rows array and the same "row > dec.startPosition.row" check
-    // below.
-    authDecoratorRows.push(...decorators.filter(isAuthPermissionClasses).map((d) => d.startPosition.row));
+    // @permission_classes([IsAuthenticated]) is DRF-only and runtime-inert when
+    // stacked under a Flask (@app.route) or FastAPI (@router.post) route
+    // decorator, so its rows are collected SEPARATELY and may bless ONLY an
+    // api_view-derived route (never a co-located @app/@router route in the same
+    // decorated_definition). DRF's own positional rule still applies: a
+    // permission_classes decorator counts only when it sits BELOW @api_view
+    // (row > the api_view decorator's row), enforced by the same check below.
+    const permissionClassRows = decorators
+      .filter(isAuthPermissionClasses)
+      .map((d) => d.startPosition.row);
     const paramAuth = paramsHaveAuthDependency(definition);
     // Validation / rate-limit lanes match NON-ROUTE decorator CALLEE NAMES only
     // (@limiter.limit -> "limiter.limit", @validate_schema -> "validate_schema"),
@@ -641,8 +688,14 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const perVal = laneNames.some((t) => VAL_NAMES.test(t));
     const perRate = laneNames.some((t) => RATE_NAMES.test(t));
     for (const dec of decorators) {
-      const route = asRouteDecorator(dec, routerNames) ?? asApiViewDecorator(dec, definition);
+      const routeFromDecorator = asRouteDecorator(dec, routerNames);
+      // asApiViewDecorator is only consulted when the decorator is not already a
+      // router/app route, so the api_view-only permission_classes bless below can
+      // key off apiViewRoute !== null.
+      const apiViewRoute = routeFromDecorator ? null : asApiViewDecorator(dec, definition);
+      const route = routeFromDecorator ?? apiViewRoute;
       if (!route) continue;
+      const fromApiView = apiViewRoute !== null;
       routes.push({
         method: route.method,
         path: route.path,
@@ -653,6 +706,8 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
         line: dec.startPosition.row + 1,
         hasAuth:
           authDecoratorRows.some((row) => row > dec.startPosition.row) ||
+          (fromApiView &&
+            permissionClassRows.some((row) => row > dec.startPosition.row)) ||
           paramAuth ||
           routeCallHasAuthDependency(route.call) ||
           scopes.global.hasAuth ||

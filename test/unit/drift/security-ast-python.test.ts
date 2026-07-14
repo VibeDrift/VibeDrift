@@ -1273,6 +1273,7 @@ describe("malformed and adversarial input", () => {
 
   it("does not extract @app.route(...) decorating a CLASS (definition.type gate)", async () => {
     const f = await py("routeclass.py", `@app.route("/x")\nclass Foo:\n    pass\n`);
+    expect(f.tree!.rootNode.hasError).toBe(false);
     expect(extractPythonRoutesAst(f.tree!, f.relativePath)).toEqual([]);
   });
 
@@ -1417,6 +1418,133 @@ describe("documented trade-offs (task-review pins)", () => {
       "/a auth=false",
       "/b auth=false",
     ]);
+  });
+});
+
+// ─── Final review Fix 1: permission_classes blesses ONLY api_view routes ────
+//
+// @permission_classes([IsAuthenticated]) is DRF machinery. It is runtime-inert
+// when stacked under a Flask (@app.route) or FastAPI (@router.post) route
+// decorator, so it must never bless those routes; it may bless only a route
+// derived from @api_view, and only when it sits BELOW @api_view (DRF's own
+// positional rule).
+describe("permission_classes is api_view-scoped (never blesses Flask/FastAPI routes)", () => {
+  it("does NOT bless a Flask @app.post route with @permission_classes([IsAuthenticated]) below it", async () => {
+    const f = await py("flaskperm.py",
+      `@app.post("/x")\n` +
+      `@permission_classes([IsAuthenticated])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("does NOT bless a FastAPI @router.post route with @permission_classes([IsAuthenticated]) below it", async () => {
+    const f = await py("routerperm.py",
+      `@router.post("/x")\n` +
+      `@permission_classes([IsAuthenticated])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("still blesses an @api_view route with @permission_classes([IsAuthenticated]) below it (unchanged)", async () => {
+    const f = await py("apiviewperm.py",
+      `@api_view(["POST"])\n` +
+      `@permission_classes([IsAuthenticated])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/create_thing auth=true"]);
+  });
+});
+
+// ─── Final review Fix 2: optional-auth veto for hooks and middleware classes ─
+//
+// The optional-flavored veto that the Depends path already applies (an
+// optional/anonymous dependency admits unauthenticated requests, so it must not
+// bless) was missing from the before_request hook-name check and the
+// add_middleware class-name check. Both now veto on the optionality segments.
+describe("optional-auth veto: hook names and middleware class names", () => {
+  it("does NOT bless @app.before_request def optional_authenticate() (optional veto)", async () => {
+    const f = await py("opthook.py", `@app.before_request\ndef optional_authenticate():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+
+  it("optional_authenticate before_request hook does not bless its receiver's routes", async () => {
+    const f = await py("opthookroute.py",
+      `@app.before_request\n` +
+      `def optional_authenticate():\n` +
+      `    return None\n\n` +
+      `@app.route("/x", methods=["POST"])\n` +
+      `def x():\n` +
+      `    return {}\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+  });
+
+  it("does NOT bless app.add_middleware(OptionalAuthMiddleware) (optional veto)", async () => {
+    const f = await py("optmw.py", `app.add_middleware(OptionalAuthMiddleware)\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+});
+
+// ─── Final review Fix 3: @api_view hidden-verb list resolves ALL, not GET ────
+//
+// Aligns asApiViewDecorator with resolveMethod's ALL-on-unresolvable
+// convention: a list holding a non-string element (a variable verb) is
+// statically unresolvable, so it stays in the mutating vote as ALL rather than
+// silently defaulting GET.
+describe("@api_view hidden-verb list resolves ALL", () => {
+  it("resolves @api_view([METHOD]) to ALL (hidden non-string element, unresolvable)", async () => {
+    const f = await py("apiviewvar.py",
+      `@api_view([METHOD])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("ALL");
+  });
+
+  it("resolves @api_view([*BASE, \"POST\"]) to POST (a visible literal still resolves it)", async () => {
+    const f = await py("apiviewsplat.py",
+      `@api_view([*BASE, "POST"])\n` +
+      `def create_thing(request):\n` +
+      `    return Response({})\n`);
+    const routes = extractPythonRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].method).toBe("POST");
+  });
+});
+
+// ─── Final review Fix 4: lexicon boundary pins (sets unchanged) ──────────────
+//
+// The shipped AUTH_ENFORCE_SEGMENTS / AUTH_SUBJECT_SEGMENTS sets are broader
+// than the plan's Integration contract (they add protect(ed)/restrict(ed)/
+// verified and users/jwt/role(s)/admin/credentials). The sets are deliberately
+// left unchanged pending owner lexicon sign-off; these tests pin the closest
+// non-auth neighbors that must stay FALSE so the broadened surface has an
+// explicit boundary.
+describe("hook-name lexicon boundary pins (Fix 4)", () => {
+  it("does NOT bless restricted_zone_redirect (ENFORCE restricted, no SUBJECT)", async () => {
+    const f = await py("h1.py", `@app.before_request\ndef restricted_zone_redirect():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+
+  it("does NOT bless track_user_metrics (SUBJECT user, no ENFORCE/CORE)", async () => {
+    const f = await py("h2.py", `@app.before_request\ndef track_user_metrics():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+
+  it("does NOT bless role_labels (SUBJECT role, no ENFORCE)", async () => {
+    const f = await py("h3.py", `@app.before_request\ndef role_labels():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
+  });
+
+  it("does NOT bless protect_branch (ENFORCE protect, no SUBJECT)", async () => {
+    const f = await py("h4.py", `@app.before_request\ndef protect_branch():\n    pass\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!).hasAuth).toBe(false);
   });
 });
 
@@ -1644,6 +1772,23 @@ const NEVER_FALSE_BLESS_SWEEP: Array<{
       { path: "/a", method: "POST", authed: false },
       { path: "/b", method: "POST", authed: false },
     ],
+  },
+  // permission_classes is DRF-only and runtime-inert under a Flask route
+  // decorator: it must never bless an @app/@router route (Fix 1).
+  {
+    name: "flask-perm",
+    source:
+      `@app.post("/x")\n@permission_classes([IsAuthenticated])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  // A before_request hook with a non-auth name (SUBJECT login, no ENFORCE/CORE)
+  // must not bless the routes on its receiver (two-tier negative, route level).
+  {
+    name: "before-request-nonauth-hook",
+    source:
+      `@app.before_request\ndef track_login_metrics():\n    return None\n\n` +
+      `@app.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
   },
   // ── Broken-parse fixtures (emit nothing; nothing can be blessed) ──
   {
