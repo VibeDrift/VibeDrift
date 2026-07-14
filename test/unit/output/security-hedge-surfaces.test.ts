@@ -11,6 +11,7 @@ import { renderDocxReport } from "../../../src/output/docx.js";
 import { buildContextMarkdown } from "../../../src/output/context-md.js";
 import { renderJsonOutput } from "../../../src/output/terminal.js";
 import { buildFixPromptMarkdown } from "../../../src/output/fix-prompt.js";
+import { toCategoryVote } from "../../../src/core/baseline.js";
 
 /**
  * Cross-surface hedge plumbing (Task 4).
@@ -160,6 +161,21 @@ describe("security hedge reaches every render surface", () => {
     const confident = buildFixPromptMarkdown(confidentFinding);
     expect(confident).not.toContain("verify_session");
     expect(confident.toLowerCase()).not.toContain("double check");
+  });
+
+  it("MCP baseline: the persisted CategoryVote deviator carries the hedged detectedPattern for an unsure route; a confident one stays flat", async () => {
+    // toCategoryVote copies deviatingFiles[].detectedPattern verbatim into the
+    // persisted baseline deviators the MCP server reads, so the hedge reaches MCP
+    // tool output natively. This pins that surface (closes the sweep gap).
+    const hedgedVote = toCategoryVote((await driftFindingsFor("hedged"))[0]);
+    const hedgedPatterns = hedgedVote.deviators.map((d) => d.detectedPattern).join(" ");
+    expect(hedgedPatterns).toContain("verify_session");
+    expect(hedgedPatterns.toLowerCase()).toContain("double check");
+
+    const confidentVote = toCategoryVote((await driftFindingsFor("confident"))[0]);
+    const confidentPatterns = confidentVote.deviators.map((d) => d.detectedPattern).join(" ");
+    expect(confidentPatterns).not.toContain("verify_session");
+    expect(confidentPatterns.toLowerCase()).not.toContain("double check");
   });
 
   it("context-md: renders only the accurate aggregate headline, so it makes no confident per-route claim (hedge-neutral, needs no change)", async () => {

@@ -2460,6 +2460,18 @@ const UNSURE_SWEEP: UnsureEntry[] = [
     source: `@app.before_request\ndef require_login():\n    abort(code_var)\n` + UNSURE_ROUTE,
     hook: "require_login", path: "/x", method: "POST",
   },
+  {
+    // ITEM 5: mixed scope. Both an app-scoped unsure hook AND a receiver-scoped
+    // unsure hook are present; the route on the named receiver must attribute the
+    // RECEIVER hook (verify_local), NOT the app-scoped one (verify_global). Pins
+    // the shipped receiver-first precedence.
+    name: "mixed-scope-receiver-first",
+    source:
+      `@app.before_request\ndef verify_global():\n    check_session()\n\n` +
+      `@orders_bp.before_request\ndef verify_local():\n    check_session()\n\n` +
+      `@orders_bp.route("/x", methods=["POST"])\ndef x():\n    return {}\n`,
+    hook: "verify_local", path: "/x", method: "POST",
+  },
 ];
 
 describe("unsure-state sweep + structural invariants (addendum Task 5)", () => {
@@ -2954,7 +2966,6 @@ describe("SECURITY_AST_PY export bag: body-signature lexicons", () => {
     const keys = Object.keys(SECURITY_AST_PY);
     for (const name of [
       "REJECT_STATUSES",
-      "REJECT_STATUS_BLESSES_ALONE",
       "AUTH_EXCEPTION_ALONE",
       "AUTH_EXCEPTION_TOPIC",
       "AUTH_EXCEPTION_KIND",

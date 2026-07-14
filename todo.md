@@ -1,5 +1,12 @@
 # CLI backlog
 
+- **Terminal hedge detection is a prose-regex.** The terminal decides a security
+  finding is hedged by testing its recommendation text with `/Double check/`
+  (`src/output/terminal.ts`), which is brittle copy coupling: a wording change to
+  the hedge sentence silently drops the hedge from the terminal. A dedicated
+  finding-metadata flag (a boolean the renderers read instead of the prose) would
+  be more robust. Parked.
+
 - **Python hook body: `Depends`-target body DEMOTION.** The additive Depends
   same-file body path (`callsWithAuthDependency`, `security-ast-python.ts`) only
   ever ADDS a bless when a boring-named dependency's visible body raises a

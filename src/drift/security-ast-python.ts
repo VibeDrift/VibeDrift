@@ -208,14 +208,15 @@ const PERMISSION_AUTH = new Set(["IsAuthenticated", "IsAdminUser"]);
 // AUTHENTICATION denial and reject-blesses ALONE. 403 Forbidden is routinely
 // raised for NON-authentication reasons (CSRF token failure, IP allowlist,
 // maintenance/feature gate, generic authorization policy), so a bare
-// abort(403)/HTTPException(403) counts as a reject ONLY when a credential-surface
-// read (CREDENTIAL_KEY_SEGMENTS shapes) also occurs in the scanned bodies. An
-// uncorroborated lone 403 contributes NOTHING to the signal set (not reject, not
-// opaqueHint): the body resolves "none" -> flat not-auth for a boring name, so
-// csrf_protect / maintenance_gate neither bless (a false-bless the name-only path
-// never had) nor pollute the hedge with obvious non-auth hooks.
+// abort(403)/HTTPException(403) blesses ONLY inside a reject whose GUARD CONDITION
+// structurally reads a credential surface (`if "user_id" not in session:
+// abort(403)`), via guardConditionHasCredentialRead. A lone or otherwise-guarded
+// 403 contributes NOTHING to the signal set (not reject, not opaqueHint): the body
+// resolves "none" -> flat not-auth for a boring name, so csrf_protect /
+// maintenance_gate neither bless (a false-bless the name-only path never had) nor
+// pollute the hedge with obvious non-auth hooks. The 401/403 asymmetry is enforced
+// directly in scanBody (abort/HTTPException/return branches), not via a lookup set.
 const REJECT_STATUSES = new Set(["401", "403"]);
-const REJECT_STATUS_BLESSES_ALONE = new Set(["401"]); // 403 also needs a credential read
 // raise <X> auth-exception matching: an ALONE segment (unauthorized/forbidden),
 // or a TOPIC segment paired anywhere with a KIND segment (AuthenticationError,
 // PermissionDenied). raise ValueError / KeyError / NotFound never match.
@@ -249,7 +250,7 @@ export const SECURITY_AST_PY = {
   AUTH_DECORATORS, DEPENDS_AUTH_SEGMENTS, DEPENDS_AUTH_PAIRS, DEPENDS_VETO_SEGMENTS,
   VAL_NAMES, RATE_NAMES, AUTH_CORE_SEGMENTS, AUTH_ENFORCE_SEGMENTS,
   AUTH_SUBJECT_SEGMENTS, OPTIONAL_AUTH_VETO, MIDDLEWARE_AUTH_SEGMENTS, PERMISSION_AUTH,
-  REJECT_STATUSES, REJECT_STATUS_BLESSES_ALONE, AUTH_EXCEPTION_ALONE, AUTH_EXCEPTION_TOPIC,
+  REJECT_STATUSES, AUTH_EXCEPTION_ALONE, AUTH_EXCEPTION_TOPIC,
   AUTH_EXCEPTION_KIND, LOGIN_REDIRECT_SEGMENTS, KNOWN_AUTH_PRIMITIVES,
   OPAQUE_AUTH_HINT_SEGMENTS, CREDENTIAL_KEY_SEGMENTS,
 };
@@ -1565,8 +1566,11 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
         scopes.global.hasAuth ||
         (scopes.byReceiver.get(route.receiver)?.hasAuth ?? false);
       // A route is hedged "unsure" ONLY when it is not otherwise authed AND an
-      // unsure hook is in its scope (receiver-specific first, then app-wide). The
-      // field implies hasAuth === false; a blessed route never carries it.
+      // unsure hook is in its scope. RECEIVER-FIRST is the shipped convention: a
+      // route on a named blueprint/router attributes its OWN receiver's unsure
+      // hook before falling back to an app-scoped one, because the receiver hook
+      // is the more actionable one for that route to double-check. The field
+      // implies hasAuth === false; a blessed route never carries it.
       const unsureHook = hasAuth
         ? undefined
         : (scopes.unsureByReceiver.get(route.receiver) ?? scopes.globalUnsure ?? undefined);
