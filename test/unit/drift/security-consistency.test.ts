@@ -4,6 +4,7 @@ import { runDriftDetection } from "../../../src/drift/index.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
+import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
 import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
   SECURITY_SUPPRESSION_ANALYZER_ID,
@@ -1084,5 +1085,179 @@ describe("Task 6: python detect-level fallback and suppression pins", () => {
     const a = auth(findings);
     expect(a).toBeDefined();
     expect(a!.deviatingFiles.some((d: any) => d.evidence[0].line === 23)).toBe(true);
+  });
+});
+
+// ── Task 4: hedged "unsure, double check" finding copy ───────────────────────
+//
+// A route whose only auth gate is a before_request hook the body-signature
+// analyzer could not verify carries RouteInfo.authUnsureHook (Python AST only).
+// Such a route STAYS not-authed in every vote (hasAuth === false); Task 4 only
+// makes the FINDING COPY hedged so the user is told the exact hook to verify.
+// The hedge is auth-subcategory-only and never touches JS/TS/Go findings.
+describe("Task 4: hedged unsure-auth finding copy", () => {
+  const pyTree = (p: string, c: string) => fileWithTree(p, c, "python");
+  const auth = (findings: any[]) => findings.find((f) => f.subCategory === "Auth middleware");
+  const ctxOf = (files: any[]) => ({
+    files,
+    totalLines: files.reduce((s: number, f: any) => s + f.lineCount, 0),
+    dominantLanguage: "typescript",
+  });
+
+  // A confidently-authed peer route (per-route @requires_auth decorator).
+  const peerAuth = (n: number) =>
+    pyTree(`src/routes/p${n}.py`, `@app.post("/p${n}")\n@requires_auth\ndef p${n}():\n    return {}\n`);
+  // Call-form registration of an imported hook whose body cannot be resolved ->
+  // classifyHookAuth returns "unsure" -> authUnsureHook = "verify_session",
+  // hasAuth stays false. Route path is /x so the deviator reads "POST /x".
+  const unsureRoute = () =>
+    pyTree(
+      "src/routes/x.py",
+      `from auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`,
+    );
+
+  it("dominance vote: the unsure deviator is hedged and names the hook; the recommendation appends the double-check sentence", async () => {
+    const peers = await Promise.all([peerAuth(1), peerAuth(2), peerAuth(3), peerAuth(4)]);
+    const unsure = await unsureRoute();
+    const findings = securityConsistency.detect(ctxOf([...peers, unsure]) as any);
+
+    // exactly one auth finding
+    expect(findings.filter((f: any) => f.subCategory === "Auth middleware")).toHaveLength(1);
+    const a = auth(findings)!;
+    // exactly one deviator (the unsure route), hedged with the EXACT string
+    expect(a.deviatingFiles).toHaveLength(1);
+    expect(a.deviatingFiles[0].detectedPattern).toBe(
+      "POST /x: auth not confirmed, double check hook 'verify_session'",
+    );
+    // recommendation ends with the appended hedge sentence naming the hook
+    expect(a.recommendation).toMatch(/\d+ of these could not be confirmed/);
+    expect(a.recommendation.toLowerCase()).toContain("double check");
+    expect(a.recommendation).toContain("verify_session");
+  });
+
+  it("confident sibling: a plainly-unauthed route (no unsure hook) keeps today's exact flat deviator byte-for-byte", async () => {
+    const peers = await Promise.all([peerAuth(1), peerAuth(2), peerAuth(3), peerAuth(4)]);
+    const bare = await pyTree("src/routes/x.py", `@app.post("/x")\ndef x():\n    return {}\n`);
+    const a = auth(securityConsistency.detect(ctxOf([...peers, bare]) as any))!;
+    expect(a.deviatingFiles[0].detectedPattern).toBe("POST /x — no Auth middleware");
+    expect(a.recommendation).not.toMatch(/double check/i);
+    expect(a.recommendation).not.toContain("verify_session");
+  });
+
+  it("uniform-auth-gap: the unsure route is hedged; plainly-unauthed peers keep `— no auth`; counts/severity/confidence unchanged", async () => {
+    const flat = (n: number) => pyTree(`src/routes/f${n}.py`, `@app.post("/f${n}")\ndef f${n}():\n    return {}\n`);
+    const flats = await Promise.all([flat(1), flat(2), flat(3)]);
+    const unsure = await unsureRoute();
+    const machinery = await pyTree("src/lib/auth.py", `def login_required():\n    pass\n`);
+    const a = auth(securityConsistency.detect(ctxOf([...flats, unsure, machinery]) as any))!;
+
+    // headline / counts include the unsure route (still counted as not-authed)
+    expect(a.finding).toBe("4 mutating route(s) lack auth while the codebase uses auth elsewhere");
+    expect(a.confidence).toBe(0.6);
+    expect(a.severity).toBe("error");
+    const byPath = new Map(a.deviatingFiles.map((d: any) => [d.path, d.detectedPattern]));
+    expect(byPath.get("src/routes/x.py")).toBe(
+      "POST /x: auth not confirmed, double check hook 'verify_session'",
+    );
+    expect(byPath.get("src/routes/f1.py")).toBe("POST /f1 — no auth");
+    expect(byPath.get("src/routes/f2.py")).toBe("POST /f2 — no auth");
+    expect(a.recommendation.toLowerCase()).toContain("double check");
+    expect(a.recommendation).toContain("verify_session");
+  });
+
+  it("no cross-property leakage: validation and rate-limit findings never carry the hedge for an unsure-auth route", async () => {
+    const peer = (n: number) =>
+      pyTree(
+        `src/routes/p${n}.py`,
+        `@app.post("/p${n}")\n@requires_auth\n@validate_schema\n@limiter.limit("5/min")\ndef p${n}():\n    return {}\n`,
+      );
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4)]);
+    const unsure = await unsureRoute();
+    const findings = securityConsistency.detect(ctxOf([...peers, unsure]) as any);
+
+    const val = findings.find((f: any) => f.subCategory === "Input validation");
+    const rate = findings.find((f: any) => f.subCategory === "Rate limiting");
+    expect(val).toBeDefined();
+    expect(rate).toBeDefined();
+    for (const f of [val!, rate!]) {
+      for (const d of f.deviatingFiles) {
+        expect(d.detectedPattern).not.toMatch(/double check/i);
+        expect(d.detectedPattern).not.toContain("verify_session");
+      }
+      expect(f.recommendation).not.toMatch(/double check/i);
+      expect(f.recommendation).not.toContain("verify_session");
+    }
+    // sanity: the auth finding IS hedged in the same run
+    expect(auth(findings)!.deviatingFiles[0].detectedPattern).toContain("double check hook 'verify_session'");
+  });
+
+  it("field-absence contract: authUnsureHook key is ABSENT on confident py, unsure-but-authed py, and JS routes", async () => {
+    const conf = await pyTree("src/api/c.py", `@app.post("/c")\ndef c():\n    return {}\n`);
+    const confR = extractPythonRoutesAst(conf.tree!, "src/api/c.py");
+    expect("authUnsureHook" in confR[0]).toBe(false);
+
+    // A route that is authed per-route AND has an unsure hook in scope: hasAuth
+    // wins, so the field is omitted entirely (a blessed route never hedges).
+    const unsureAuthed = await pyTree(
+      "src/api/u.py",
+      `from auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/u")\n@requires_auth\ndef u():\n    return {}\n`,
+    );
+    const uR = extractPythonRoutesAst(unsureAuthed.tree!, "src/api/u.py");
+    expect(uR[0].hasAuth).toBe(true);
+    expect("authUnsureHook" in uR[0]).toBe(false);
+
+    // JS extractor never sets the field; the route serializes byte-identically
+    // to the pre-addendum shape.
+    const jsf = await fileWithTree("src/api/x.ts", `router.post("/danger", wipeEverything);\n`, "typescript");
+    const jsRoutes = extractJsRoutesAst(jsf.tree!, "src/api/x.ts", undefined);
+    expect("authUnsureHook" in jsRoutes[0]).toBe(false);
+    expect(JSON.stringify(jsRoutes[0])).toBe(
+      JSON.stringify({
+        method: "POST",
+        path: "/danger",
+        file: "src/api/x.ts",
+        line: 1,
+        hasAuth: false,
+        hasValidation: false,
+        hasRateLimit: false,
+        hasErrorHandler: false,
+      }),
+    );
+  });
+
+  it("copy hygiene: every NEW hedged string says `double check` and contains no em-dash or double hyphen", async () => {
+    const peers = await Promise.all([peerAuth(1), peerAuth(2), peerAuth(3), peerAuth(4)]);
+    const unsure = await unsureRoute();
+    const a = auth(securityConsistency.detect(ctxOf([...peers, unsure]) as any))!;
+
+    // The hedged deviator is a NEW string.
+    const dev = a.deviatingFiles[0].detectedPattern;
+    expect(dev).toMatch(/double check/i);
+    expect(dev).not.toMatch(/—|--/);
+
+    // The appended hedge sentence is a NEW string (the shipped base
+    // recommendation before it is exempt and keeps its em-dash).
+    const m = a.recommendation.match(/\d+ of these could not be confirmed:.*$/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toMatch(/double check/i);
+    expect(m![0]).not.toMatch(/—|--/);
+  });
+
+  it("vote-arithmetic invariance: hedging changes COPY only, never dominantCount/total/consistency/severity/confidence", async () => {
+    const hedgedPeers = await Promise.all([peerAuth(1), peerAuth(2), peerAuth(3), peerAuth(4)]);
+    const unsure = await unsureRoute();
+    const hedged = auth(securityConsistency.detect(ctxOf([...hedgedPeers, unsure]) as any))!;
+
+    // Control: the SAME corpus with the hook-registration line deleted, so /x is
+    // a plainly-unauthed (confident) route instead of unsure.
+    const ctrlPeers = await Promise.all([peerAuth(1), peerAuth(2), peerAuth(3), peerAuth(4)]);
+    const ctrl = await pyTree("src/routes/x.py", `@app.post("/x")\ndef x():\n    return {}\n`);
+    const flat = auth(securityConsistency.detect(ctxOf([...ctrlPeers, ctrl]) as any))!;
+
+    for (const k of ["dominantCount", "totalRelevantFiles", "consistencyScore", "severity", "confidence"] as const) {
+      expect((hedged as any)[k]).toBe((flat as any)[k]);
+    }
+    // The ONLY difference is the deviator copy (and the appended recommendation).
+    expect(hedged.deviatingFiles[0].detectedPattern).not.toBe(flat.deviatingFiles[0].detectedPattern);
   });
 });
