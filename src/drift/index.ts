@@ -53,6 +53,14 @@ export function buildDriftContext(ctx: AnalysisContext): DriftContext {
     hasGitMetadata: ctx.hasGitMetadata ?? false,
     intentHints: ctx.intentHints ?? [],
     projectConfig: ctx.projectConfig,
+    // Go cross-file resolution needs a single module root to map an import
+    // path to an in-repo file. A `replace` directive (remaps a path to another
+    // dir) or a nested go.mod (breaks the root-prefix math) makes that mapping
+    // unsafe, so either forces the path undefined => Go cross-file disabled.
+    goModulePath:
+      ctx.goMod && !ctx.goMod.hasReplace && !ctx.goMod.hasNestedModule
+        ? ctx.goMod.module || undefined
+        : undefined,
   };
 }
 

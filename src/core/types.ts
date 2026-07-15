@@ -120,6 +120,21 @@ export interface GoMod {
   module: string;
   goVersion?: string;
   require: { path: string; version: string }[];
+  /**
+   * True when go.mod declares any `replace` directive (single-line
+   * `replace a => b` or the `replace (` block form). A replace remaps an
+   * import path to a different directory, so the root-module-prefix math that
+   * maps a Go import path back to an in-repo file is unsafe. Consumed by
+   * `buildDriftContext` to DISABLE Go cross-file auth resolution wholesale
+   * (a never-false-bless guard).
+   */
+  hasReplace?: boolean;
+  /**
+   * True when a second `go.mod` exists in a subdirectory under the scan root.
+   * A nested module breaks the single-root-prefix assumption, so — like
+   * `hasReplace` — it disables Go cross-file auth resolution wholesale.
+   */
+  hasNestedModule?: boolean;
 }
 
 export interface CargoToml {

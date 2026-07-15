@@ -138,40 +138,82 @@ export async function loadPackageJson(rootDir: string): Promise<PackageJson | nu
 }
 
 export async function loadGoMod(rootDir: string): Promise<GoMod | null> {
+  let raw: string;
   try {
-    const raw = await readFile(join(rootDir, "go.mod"), "utf-8");
-    const lines = raw.split("\n");
-    const result: GoMod = { module: "", require: [] };
-
-    // State-machine parser: track whether we're inside a `require (` block
-    let inRequire = false;
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("module ")) {
-        result.module = trimmed.slice(7).trim();
-      } else if (trimmed.startsWith("go ")) {
-        result.goVersion = trimmed.slice(3).trim();
-      } else if (trimmed === "require (") {
-        inRequire = true;
-      } else if (trimmed === ")") {
-        inRequire = false;
-      } else if (inRequire && trimmed && !trimmed.startsWith("//")) {
-        const parts = trimmed.split(/\s+/);
-        if (parts.length >= 2) {
-          result.require.push({ path: parts[0], version: parts[1] });
-        }
-      } else if (trimmed.startsWith("require ") && !trimmed.includes("(")) {
-        const parts = trimmed.slice(8).trim().split(/\s+/);
-        if (parts.length >= 2) {
-          result.require.push({ path: parts[0], version: parts[1] });
-        }
-      }
-    }
-
-    return result.module ? result : null;
+    raw = await readFile(join(rootDir, "go.mod"), "utf-8");
   } catch {
     return null;
   }
+
+  const lines = raw.split("\n");
+  const result: GoMod = { module: "", require: [] };
+
+  // State-machine parser: track whether we're inside a `require (` / `replace (`
+  // block. `hasReplace` records ANY replace directive (block or single-line) —
+  // a replace remaps an import path to a different dir, which makes root-prefix
+  // package math unsafe, so it disables Go cross-file resolution downstream.
+  let inRequire = false;
+  let hasReplace = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("module ")) {
+      result.module = trimmed.slice(7).trim();
+    } else if (trimmed.startsWith("go ")) {
+      result.goVersion = trimmed.slice(3).trim();
+    } else if (trimmed === "require (") {
+      inRequire = true;
+    } else if (trimmed === "replace (") {
+      hasReplace = true;
+    } else if (trimmed === ")") {
+      inRequire = false;
+    } else if (inRequire && trimmed && !trimmed.startsWith("//")) {
+      const parts = trimmed.split(/\s+/);
+      if (parts.length >= 2) {
+        result.require.push({ path: parts[0], version: parts[1] });
+      }
+    } else if (trimmed.startsWith("require ") && !trimmed.includes("(")) {
+      const parts = trimmed.slice(8).trim().split(/\s+/);
+      if (parts.length >= 2) {
+        result.require.push({ path: parts[0], version: parts[1] });
+      }
+    } else if (trimmed.startsWith("replace ") && !trimmed.includes("(")) {
+      hasReplace = true; // single-line: `replace a => b`
+    }
+  }
+
+  if (!result.module) return null;
+  if (hasReplace) result.hasReplace = true;
+  if (await hasNestedGoMod(rootDir)) result.hasNestedModule = true;
+  return result;
+}
+
+/**
+ * True when a `go.mod` exists in ANY subdirectory under `rootDir` (the root's
+ * own go.mod does not count). A nested module breaks the single-root-prefix
+ * assumption Go cross-file package resolution relies on, so detecting one
+ * disables that resolution wholesale. Short-circuits on the first hit; skips
+ * the same vendored/ignored dirs the main file walk skips. Over-detection only
+ * ever over-disables (safe); a boolean result is order-independent.
+ */
+async function hasNestedGoMod(rootDir: string): Promise<boolean> {
+  async function walk(dir: string, isRoot: boolean): Promise<boolean> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        if (await walk(join(dir, entry.name), false)) return true;
+      } else if (!isRoot && entry.isFile() && entry.name === "go.mod") {
+        return true;
+      }
+    }
+    return false;
+  }
+  return walk(rootDir, true);
 }
 
 export async function loadCargoToml(rootDir: string): Promise<CargoToml | null> {

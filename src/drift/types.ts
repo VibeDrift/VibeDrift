@@ -61,6 +61,16 @@ export interface DriftContext {
    * MCP/baseline path), in which case that arm no-ops.
    */
   projectConfig?: ProjectConfig;
+  /**
+   * Root go.mod module path, threaded for Go cross-file package resolution;
+   * undefined disables it. Set by `buildDriftContext` from
+   * `AnalysisContext.goMod.module`, but forced to undefined when the module
+   * has a `replace` directive or a nested go.mod exists (both break the
+   * root-prefix math), and whenever no go.mod was loaded (the MCP/baseline
+   * synthetic-context path). Consumers must treat undefined as "Go cross-file
+   * resolution off" — a never-false-bless guard.
+   */
+  goModulePath?: string;
 }
 
 export interface DriftFile {
