@@ -159,6 +159,88 @@ measures a real behavior change, not a tautology.
   route resolves method exactly POST and enters the mutating auth vote.
   Red-first: pre-addendum a `methods=` variable resolved ALL, not POST.
 
+## Go security fixture (the multilang calibration gate)
+
+`go-security-fixture.ts` + `security-go.test.ts` are the enforced
+precision/recall gate for the Go AST security extractor
+(`src/drift/security-ast-go.ts`), mirroring the Python gate above
+function-for-function and running the same way (a normal vitest file,
+checked on every `npm test`).
+
+The corpus is realistic Gin/Gorilla multi-file code (real router
+constructors, `.Use(...)` scoping, wrapped-handler auth, chained
+`.Methods(...)` resolution), split into seven independent roots so each
+corpus roots its own `repoHasAuthMachinery` evidence and its own
+route-directory vote (`routeGroupKey` = dirname):
+
+- `gosrv/routes/` — 8 Gin route files, one mutating route each. Receiver
+  recognition is deliberately split across both of the extractor's paths:
+  four resolve structurally, via an in-file router-constructor assignment or
+  a `Group(...)` derivation (`r := gin.Default()`, `engine := gin.New()`,
+  `app = gin.New()` plain assignment, `api := r.Group("/api")`); four resolve
+  purely by naming convention on a func-param/struct-field receiver with no
+  local constructor at all (`func RegisterX(router *gin.Engine)`, two
+  `*gin.RouterGroup` params, one method-receiver file). Auth idiom is
+  independently split too: four files register `AuthMiddleware()`
+  receiver-scoped via `.Use(...)` before the route, four pass it as a
+  per-route leading arg.
+- `gosrv/middleware/auth.go` / `gosrv/main.go` — support files. `auth.go`
+  carries the repo-global `AuthMiddleware` machinery token (case-sensitive:
+  this is what `repoHasAuthMachinery` matches); `main.go` wires routes and
+  registers none of its own.
+- `muxsrv/routes/` — 5 Gorilla mux route files, one mutating route each,
+  each defining its own in-file `RequireAuth(next http.Handler)
+  http.Handler` and registering via the WRAPPED-HANDLER form
+  (`router.Handle(path, RequireAuth(http.HandlerFunc(h))).Methods("POST")`).
+  Gorilla is the secondary framework (over Echo/chi) specifically because
+  this one idiom puts the plan's two riskiest recognitions — the wrapped-
+  handler bless and the chained `.Methods` resolution — inside the measured
+  gate; Echo and chi stay covered by the unit catalog.
+- `hooks/routes/` — 5 uniformly PUBLIC webhook receivers (Stripe, GitHub,
+  Slack, Twilio, SendGrid), same negative-control shape as the Python row:
+  signature verification happens inside the handler body, never as a `.Use`
+  hook, so it's structurally invisible to the middleware scanner.
+- `bodycol/routes/`, `bodygate/routes/`, `bodyunsure/routes/` — the three
+  body-signature scenarios (S6-S8 below), each its own root for the same
+  machinery-isolation reason.
+
+**Why S0-S5 counts are unchanged despite the body-first rule:** the LOCKED
+decision is that Go never blesses a middleware on its name alone — an
+imported or opaque `AuthMiddleware`/`RequireAuth` now resolves UNSURE, not
+AUTH. So every authed fixture above DEFINES its middleware IN-FILE with a
+body that verifiably rejects (401 on a missing `Authorization` header), and
+blesses through rule 2 (the readable reject), never through the name. That
+keeps the S0-S5 arithmetic byte-identical to the pre-body-first plan while
+actually exercising the tighter rule.
+
+Nine scenarios, mirroring the Python S0-S8 (Go has no S9 analog: Go
+deliberately emits `"ALL"` for a variable-methods form instead of resolving
+it, so there's no same-file-literal-resolution case to pin):
+
+| # | Scenario | Corpus | Asserts |
+|---|----------|--------|---------|
+| S0 | Recognition + no-name-bless pin | gosrv + muxsrv (13 files) | 1 route/file, exact Gorilla POST method, imported selector hedges, in-file reject blesses |
+| S1 | Primary dominance vote, Gin | gosrv (8 files, 1 stripped) | dominantCount 7, score 88, precision/recall 1.0 |
+| S2 | Primary dominance vote, Gorilla | muxsrv (5 files, 1 stripped) | dominantCount 4, score 80, through the wrap-bless path |
+| S3 | Uniform-auth-gap fallback | gosrv (all 8 stripped) + auth.go | gap fires, severity error, precision/recall 1.0 |
+| S4 | Negative control | hooks (5 files) | non-vacuity first, then zero findings |
+| S5 | Uniformly-authed control | full gosrv + muxsrv corpus | non-vacuity first, then zero findings on every axis |
+| S6 | Name-auth-but-body-isnt collision | bodycol (5 files) | flat not-auth, NOT suppressed, no hedge |
+| S7 | Body-is-real-auth positive | bodygate (5 files) | boring `guard()` hook blesses on body alone |
+| S8 | Unresolvable-body UNSURE | bodyunsure (5 files) | hedged copy naming the hook, counts match S6, no leakage into S1 |
+
+**S6-S8 RED-FIRST rationale:** each scenario is a case where a name-only
+classifier gives the WRONG answer, and only resolves once body-first lands.
+S6's `authCheck` reads as auth by name but only logs the request path — a
+name-only path would bless it and the scenario would produce zero findings;
+body-first correctly reads the visible non-enforcing body and flags it. S7's
+`guard()` hook carries no auth-flavored name at all — a name-only path would
+never bless it, so scenario A would fail non-vacuity; body-first reads the
+401-on-missing-header body and blesses it. S8's imported
+`middleware.VerifyToken` has an auth-flavored name but an unreadable body — a
+name-only path would bless it outright (zero findings); body-first resolves
+it UNSURE instead (hedged, still flagged, never a bless).
+
 ## Adding a new injection type
 
 Drop a generator in `generators/`. Signature:

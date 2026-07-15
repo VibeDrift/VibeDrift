@@ -22,6 +22,7 @@ import type { Finding } from "../../src/core/types.js";
 import { generateBaseline, type BaselineFile } from "./baseline.js";
 import { INJECTORS } from "./injectors.js";
 import { flaskAuthedGroup, pyAuthFile, pyAppFile, stripFlaskAuth } from "./python-security-fixture.js";
+import { ginAuthedGroup, goAuthFile, goMainFile, stripGinAuth } from "./go-security-fixture.js";
 import { classify, findingCategory, type CategoryMetrics, type DriftLabel, type ScoredFinding } from "./metrics.js";
 
 // Each injector's expected detector category (what a correct detector emits).
@@ -142,13 +143,32 @@ async function main(): Promise<void> {
     .map((s) => ({ ...s, category: "security_posture_py" }));
   mergeInto(agg, classify(pyScored, pyLabels));
 
+  // 4. Go security corpus (own root, own row label), mirroring the Python row
+  // above verbatim. Exercises the AST extractor's realistic Gin fixture
+  // through the FULL on-disk scan pipeline (not the direct detector call
+  // test/calibration/security-go.test.ts uses), kept out of the TS
+  // baseline/injector loop for the same isolation reason as the Python row:
+  // merging Go files into generateBaseline() would contaminate the
+  // naming/architecture rows and shift the clean-scan FP floor, and merging
+  // this row's counts into the JS "security_posture" category (or the Python
+  // row) would let a Go regression hide behind good JS/Python numbers.
+  const goBase = [...ginAuthedGroup(), goAuthFile, goMainFile];
+  const goVariant = stripGinAuth(goBase, 3); // 3 of 8 unauthed -> ratio 5/8 <= 0.75: primary vote silent, gap path
+  const goLabels = diffLabels(goBase, goVariant, "security_posture_go");
+  const goDir = join(root, "security_go");
+  await writeFixture(goDir, goVariant);
+  const goScored = scored(await scan(goDir))
+    .filter((s) => s.category === "security_posture")
+    .map((s) => ({ ...s, category: "security_posture_go" }));
+  mergeInto(agg, classify(goScored, goLabels));
+
   const allRows = finalize(agg);
   // Only the INJECTED categories have synthetic ground truth — those are the
   // ones we can fairly score. Other categories that fire on the templated
   // baseline (semantic_duplication, dead-code, phantom_scaffolding — the 6
   // near-identical, consumer-less handlers legitimately trip them) have no
   // ground truth here and are reported separately as un-measured.
-  const injectedCats = new Set([...Object.values(INJECTOR_CATEGORY), "security_posture_py"]);
+  const injectedCats = new Set([...Object.values(INJECTOR_CATEGORY), "security_posture_py", "security_posture_go"]);
   const rows = allRows.filter((r) => injectedCats.has(r.category));
   const unmeasured = allRows.filter((r) => !injectedCats.has(r.category) && (r.fp ?? 0) > 0);
 
