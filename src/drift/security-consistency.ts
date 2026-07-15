@@ -255,7 +255,7 @@ function extractRoutes(
   const routes: RouteInfo[] = [];
   for (const file of files) {
     if (!file.language) continue;
-    if (file.language === "go") extractGoRoutes(file, routes, fileMw);
+    if (file.language === "go") extractGoRoutes(file, routes, fileMw, xfile);
     else if (file.language === "javascript" || file.language === "typescript") extractJsRoutes(file, routes, fileMw);
     else if (file.language === "python") extractPythonRoutes(file, routes, fileMw, xfile);
   }
@@ -272,7 +272,7 @@ function inheritedRateLimit(perRoute: boolean, fileMw: FileMiddleware | undefine
   return perRoute || (fileMw?.hasRateLimit ?? false);
 }
 
-function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
+function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>, xfile: CrossFileIndex) {
   // AST only on a CLEAN parse: tree-sitter always returns a tree for broken Go
   // (with ERROR nodes), and error recovery SWALLOWS later valid registrations
   // into a broken call's argument_list as clean-looking nested calls (a
@@ -283,8 +283,11 @@ function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<strin
     // No FileMiddleware argument: the AST path computes receiver-scoped
     // inheritance from the tree itself (a file-level OR would false-bless
     // mixed-receiver files, and the index entry may carry cross-language noise
-    // for non-go files).
-    routes.push(...extractGoRoutesAst(file.tree, file.relativePath));
+    // for non-go files). The cross-file index lets an imported package
+    // middleware selector resolve to its in-repo defining body (blessing still
+    // requires that body to verifiably reject); an unresolved / external / index-
+    // disabled selector stays UNSURE, byte-identical to the in-file-only path.
+    routes.push(...extractGoRoutesAst(file.tree, file.relativePath, xfile));
     return;
   }
   extractGoRoutesRegex(file, routes, fileMw.get(file.relativePath));
@@ -550,7 +553,7 @@ export const securityConsistency: DriftDetector = {
     // ambiguity refuses). Blessing still flows through the existing body-first
     // classifier — a resolved body must verifiably reject. An imported symbol that
     // does not resolve stays UNSURE, byte-identical to today.
-    const xfile = buildXFileIndex(ctx.files);
+    const xfile = buildXFileIndex(ctx.files, ctx.goModulePath);
     // Denominator-removing suppression: a route carrying an inline
     // `// @vibedrift-public` annotation, OR whose file matches a config
     // `security.allowlist` glob (ctx.projectConfig), is dropped BEFORE it

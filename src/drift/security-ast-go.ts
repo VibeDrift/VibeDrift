@@ -140,6 +140,8 @@
 
 import type { Tree, SyntaxNode } from "../core/types.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
+import { resolveGoMiddlewareBody } from "./security-xfile-index.js";
+import type { CrossFileIndex } from "./security-xfile-index.js";
 
 /** A middleware body's three-way behavioral signal. 401-family blesses alone; a
  *  403 blesses only inside a credential-guarded reject; a bare/uncorroborated 403,
@@ -975,6 +977,24 @@ function goMiddlewareName(arg: SyntaxNode): string | null {
   return null;
 }
 
+/** True when `arg` is a RESOLVABLE pure-selector cross-file target: a bare pure
+ *  `selector_expression` (a middleware passed by reference, `mw.Require`), or a
+ *  `call_expression` whose `function` is a pure selector AND which carries AT MOST
+ *  ONE argument (an invoked factory `middleware.AuthMiddleware()`, or a single-arg
+ *  wrap `middleware.RequireAuth(h)`). An arity->=2 call is Go DI — never
+ *  classified (do not resolve it), the SAME rule the single-argument wrap
+ *  recursion applies, kept identical in-file and cross-file so a DI constructor
+ *  can never bless a route through the package-selector path. */
+function isPureSelectorTarget(arg: SyntaxNode): boolean {
+  if (arg.type === "selector_expression") return isPureSelectorChain(arg);
+  if (arg.type === "call_expression") {
+    const fn = arg.childForFieldName("function");
+    if (!fn || fn.type !== "selector_expression" || !isPureSelectorChain(fn)) return false;
+    return goNamed(arg.childForFieldName("arguments")).length <= 1;
+  }
+  return false;
+}
+
 function goNameHasSubsumingVeto(name: string): boolean {
   return nameSegments(name).some((s) => GO_SUBSUMING_VETO_SEGMENTS.has(s));
 }
@@ -1003,6 +1023,7 @@ const goNameIsRate = (n: string) => goNameHasSegment(n, GO_RATE_SEGMENTS, GO_RAT
  *  outer HALTS. Returns the outcome + the resolved name (for authUnsureHook). */
 function classifyGoMiddlewareArg(
   arg: SyntaxNode, defs: Map<string, SyntaxNode | null>, depth = 0,
+  importerRel?: string, index?: CrossFileIndex,
 ): { outcome: GoAuthOutcome; name: string | null } {
   if (depth > 5) return { outcome: "not-auth", name: null };
   const name = goMiddlewareName(arg);
@@ -1017,6 +1038,26 @@ function classifyGoMiddlewareArg(
           : null;
     const def = calleeId ? defs.get(calleeId.text) ?? null : null;
     const body = def ? resolveEffectiveBody(def, defs) : null;
+    // CROSS-FILE (Task 4): a package-qualified selector (middleware.AuthMiddleware)
+    // has calleeId === null, so `def` is null and the in-file classify below would
+    // hedge/decline. When there is NO in-file def AND the repo index is live,
+    // resolve the selector to its in-repo defining body and classify THAT. Every
+    // value-shadow / exported-only / package-name / external / duplicate guard
+    // lives in resolveGoMiddlewareBody — this CALLS it, never bypasses it — and
+    // blessing still requires the resolved body to VERIFIABLY reject. In-file defs
+    // keep precedence (this only fires when def === null); with the index absent
+    // the whole branch is skipped, byte-identical to today. This MUST win before
+    // the in-file early return: an auth-flavored selector's in-file classify is
+    // `unsure` and returns, which would leave a branch placed AFTER it dead.
+    if (def === null && index && importerRel && name !== null && isPureSelectorTarget(arg)) {
+      const x = resolveGoMiddlewareBody(importerRel, name, index);
+      if (x) {
+        const xbody = resolveEffectiveBody(x.def, x.defs);
+        const outcome = classifyGoMiddlewareAuth(name, xbody, x.defs);
+        if (outcome !== "not-auth") return { outcome, name };
+        if (goNameHasSubsumingVeto(name)) return { outcome: "not-auth", name };
+      }
+    }
     const outcome = classifyGoMiddlewareAuth(name, body, defs);
     if (outcome !== "not-auth") return { outcome, name };
     if (goNameHasSubsumingVeto(name)) return { outcome: "not-auth", name };
@@ -1024,7 +1065,7 @@ function classifyGoMiddlewareArg(
   // Wrap recursion: single-arg call, through a transparent/unnamed outer only.
   if (arg.type === "call_expression" && (name === null || goNameIsTransparentWrap(name))) {
     const inner = goNamed(arg.childForFieldName("arguments"));
-    if (inner.length === 1) return classifyGoMiddlewareArg(inner[0], defs, depth + 1);
+    if (inner.length === 1) return classifyGoMiddlewareArg(inner[0], defs, depth + 1, importerRel, index);
   }
   return { outcome: "not-auth", name };
 }
@@ -1049,6 +1090,7 @@ function collectWithArgs(operand: SyntaxNode | null): SyntaxNode[] {
 function goRouteMiddleware(
   named: SyntaxNode[], pathIdx: number, wrapCallee: SyntaxNode | null,
   fnOperand: SyntaxNode | null, defs: Map<string, SyntaxNode | null>,
+  importerRel?: string, index?: CrossFileIndex,
 ): { hasAuth: boolean; hasValidation: boolean; hasRateLimit: boolean; unsureHook: string | undefined } {
   const withArgs = fnOperand ? collectWithArgs(fnOperand) : [];
   const middleArgs: SyntaxNode[] = [];
@@ -1058,7 +1100,7 @@ function goRouteMiddleware(
   let hasAuth = false;
   let unsureHook: string | undefined;
   const consider = (a: SyntaxNode) => {
-    const { outcome, name } = classifyGoMiddlewareArg(a, defs);
+    const { outcome, name } = classifyGoMiddlewareArg(a, defs, 0, importerRel, index);
     if (outcome === "auth") hasAuth = true;
     else if (outcome === "unsure" && unsureHook === undefined && name !== null) unsureHook = name;
   };
@@ -1156,11 +1198,12 @@ function hasConditionalRegistrationAncestor(node: SyntaxNode, scope: SyntaxNode)
  *  sets hasAuth. */
 function lanesFromArgs(
   args: SyntaxNode[], defs: Map<string, SyntaxNode | null>,
+  importerRel?: string, index?: CrossFileIndex,
 ): { lanes: FileMiddleware; unsureHook?: string } {
   let hasAuth = false;
   let unsureHook: string | undefined;
   for (const a of args) {
-    const { outcome, name } = classifyGoMiddlewareArg(a, defs);
+    const { outcome, name } = classifyGoMiddlewareArg(a, defs, 0, importerRel, index);
     if (outcome === "auth") hasAuth = true;
     else if (outcome === "unsure" && unsureHook === undefined && name) unsureHook = name;
   }
@@ -1176,7 +1219,9 @@ function lanesFromArgs(
 
 /** Collect the file's Use marks, group/closure derivations, and (name, scope)
  *  poisoning in one pass set. Receiver-scoped; NO global bucket. */
-function collectGoMiddleware(tree: Tree): GoMiddlewareScopes {
+function collectGoMiddleware(
+  tree: Tree, importerRel?: string, index?: CrossFileIndex,
+): GoMiddlewareScopes {
   const root = tree.rootNode;
   const defs = collectGoFunctionDefs(root);
   const routerNames = collectGoRouterNames(root);
@@ -1199,7 +1244,7 @@ function collectGoMiddleware(tree: Tree): GoMiddlewareScopes {
       const scope = enclosingScope(call, root);
       if (hasConditionalRegistrationAncestor(call, scope)) continue;
       const named = goNamed(call.childForFieldName("arguments"));
-      const { lanes, unsureHook } = lanesFromArgs(named, defs);
+      const { lanes, unsureHook } = lanesFromArgs(named, defs, importerRel, index);
       marks.push({ receiver, scope, row: call.startPosition.row, lanes, unsureHook });
       continue;
     }
@@ -1240,7 +1285,7 @@ function collectGoMiddleware(tree: Tree): GoMiddlewareScopes {
       // On a Group creation call every arg AFTER the path is a middleware
       // candidate INCLUDING the last (no handler position).
       const inlineArgs = goNamed(valueNode.childForFieldName("arguments")).slice(1);
-      const { lanes, unsureHook } = lanesFromArgs(inlineArgs, defs);
+      const { lanes, unsureHook } = lanesFromArgs(inlineArgs, defs, importerRel, index);
       derivations.push({
         child: nameNode.text, childScope: scope,
         parent, parentScope: scope, row, inlineLanes: lanes, inlineUnsureHook: unsureHook,
@@ -1344,12 +1389,15 @@ export function extractGoFileMiddlewareAst(tree: Tree): FileMiddleware {
   };
 }
 
-export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
+export function extractGoRoutesAst(tree: Tree, filePath: string, index?: CrossFileIndex): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const root = tree.rootNode;
   const routerNames = collectGoRouterNames(root);
   const defs = collectGoFunctionDefs(root);
-  const scopes = collectGoMiddleware(tree);
+  // filePath IS the importer's relativePath. With `index` absent (the 2-arg
+  // call — every non-detect caller, and any repo with Go cross-file disabled),
+  // every selector stays in-file-only, byte-identical to today.
+  const scopes = collectGoMiddleware(tree, filePath, index);
   const gated = (r: string | null): r is string =>
     r !== null && (routerNames.has(r) || GO_ROUTER_RECEIVER.test(r));
 
@@ -1407,7 +1455,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       if (arg0Raw === null || !arg0Raw.startsWith("/")) continue; // leading-slash gate
       // Middleware are the args strictly between the path (arg0) and the handler
       // (last); the last arg is the handler and is NEVER classified.
-      emit(directVerb, arg0Raw, call, receiver ?? "", goRouteMiddleware(named, 0, null, fnOperand, defs));
+      emit(directVerb, arg0Raw, call, receiver ?? "", goRouteMiddleware(named, 0, null, fnOperand, defs, filePath, index));
       continue;
     }
 
@@ -1416,7 +1464,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
     if (ANY_FIELDS.has(field)) {
       if (!gated(receiver)) continue;
       if (arg0Raw === null || !arg0Raw.startsWith("/")) continue;
-      emit("ALL", arg0Raw, call, receiver ?? "", goRouteMiddleware(named, 0, null, fnOperand, defs));
+      emit("ALL", arg0Raw, call, receiver ?? "", goRouteMiddleware(named, 0, null, fnOperand, defs, filePath, index));
       continue;
     }
 
@@ -1440,7 +1488,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       if (path === null || !path.startsWith("/")) continue;
       // Verb-first: verb=arg0, path=arg1, so the middleware window starts after
       // arg1; the handler (last arg) is never classified.
-      emit(method, path, call, receiver ?? "", goRouteMiddleware(named, 1, null, fnOperand, defs));
+      emit(method, path, call, receiver ?? "", goRouteMiddleware(named, 1, null, fnOperand, defs, filePath, index));
       continue;
     }
 
@@ -1456,7 +1504,7 @@ export function extractGoRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
       // The handler is the arg right after the path (arg1); for these forms it
       // may be a WRAP callee (auth(handler)) — the only body-first position here.
       const wrapCallee = named.length > 1 ? named[1] : null;
-      emit(method, split.path, call, receiver ?? "", goRouteMiddleware(named, 0, wrapCallee, fnOperand, defs));
+      emit(method, split.path, call, receiver ?? "", goRouteMiddleware(named, 0, wrapCallee, fnOperand, defs, filePath, index));
       continue;
     }
   }
