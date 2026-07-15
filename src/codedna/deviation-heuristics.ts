@@ -89,11 +89,18 @@ function hasAdjacentTest(devPath: string, allFiles: SourceFile[]): boolean {
 
 function hasAdrMention(allFiles: SourceFile[], devPath: string, deviatingPattern: string): boolean {
   const base = devPath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
-  const mentionRe = new RegExp(`\\b${base}\\b|\\b${deviatingPattern.replace("_", "\\s*")}\\b`, "i");
+  const escBase = escapeRegex(base);
+  const escPattern = escapeRegex(deviatingPattern.replace("_", " ")).replace(/ /g, "\\s*");
+  const mentionRe = new RegExp(`\\b${escBase}\\b|\\b${escPattern}\\b`, "i");
   return allFiles.some((f) => {
     if (!/(?:^docs\/|^ADR\.md|^DECISIONS\.md|\/(?:adr|decisions)\/)/i.test(f.relativePath)) return false;
     return mentionRe.test(f.content);
   });
+}
+
+/** Escape regex metacharacters so a literal string can be interpolated into a RegExp. */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function computeSignalScore(
