@@ -480,3 +480,109 @@ export function stripMethodsVarAuth(files: BaselineFile[], count: number): Basel
     return { path: f.path, content: lines.join("\n") };
   });
 }
+
+// ── S10/S11: cross-file auth resolution (imported hook, in-repo vs external) ─
+//
+// S10 proves the POSITIVE: an imported before_request hook whose body lives in
+// a SEPARATE in-repo file (pkg/auth.py) blesses every importing route, because
+// cross-file resolution reads that file's REJECTING body (session read +
+// abort(401), the exact S7 gate() reject signature) — never because the
+// hook's name alone looks like auth. Pre-cross-file (index absent), these
+// same 5 files resolve hasAuth:false with authUnsureHook 'verify_session'
+// (the exact S8 shape) — that prior verdict is what S10 pins as a regression.
+//
+// S11 proves the NEGATIVE: the SAME 5 route files (same paths, same bodies),
+// importing verify_session from an EXTERNAL, absolute package instead, never
+// bless however live cross-file resolution is — an absolute import never
+// populates resolveBinding's relative-target map in security-xfile-index.ts,
+// so resolution refuses deterministically, not merely because a target file
+// happens to be absent. The route stays hedged (UNSURE), identical to the
+// pre-cross-file verdict.
+//
+// Both groups share the SAME 5 relativePaths (pkg/<name>_routes.py), so a
+// test can freely recombine files from either group at the same path to
+// build a mixed corpus (see S11's "mixed with S10" scenario below).
+const S10_ROOT = "pkg";
+const S10_NAMES = ["campaigns", "surveys", "audits", "reviews", "backups"];
+
+function crossFileRouteFile(name: string, importLine: string): BaselineFile {
+  const receiver = `${name}_bp`;
+  return {
+    path: `${S10_ROOT}/${name}_routes.py`,
+    content:
+`"""POST /${name}: create a ${name} record. Auth is enforced by a
+before_request hook imported from elsewhere; the hook is never redefined
+locally, so this route blesses only if the hook's body resolves correctly."""
+from flask import Blueprint, jsonify, request
+${importLine}
+
+${receiver} = Blueprint("${name}", __name__)
+${receiver}.before_request(verify_session)
+
+
+@${receiver}.route("/${name}", methods=["POST"])
+def create_${name}():
+    payload = request.get_json()
+    return jsonify(payload), 201
+`,
+  };
+}
+
+/** S10: 5 route files, each `from .auth import verify_session` — a REAL
+ *  relative import resolvable to the sibling pkg/auth.py below. */
+export function crossFileAuthedGroup(): BaselineFile[] {
+  return S10_NAMES.map((name) => crossFileRouteFile(name, "from .auth import verify_session"));
+}
+
+/** S10 support file: the shared cross-file hook. Its BODY (session read +
+ *  abort(401)) is what blesses the importing routes — never its name.
+ *  Carries no route of its own. */
+export const pkgAuthFile: BaselineFile = {
+  path: `${S10_ROOT}/auth.py`,
+  content:
+`"""Shared session-verification hook, imported by every pkg/*_routes.py
+blueprint (from .auth import verify_session). Its BODY, not its name, is what
+blesses the importing routes cross-file: a missing session 401s before any
+handler runs. Carries no route of its own."""
+from flask import session, abort
+
+
+def verify_session():
+    if not session.get("user_id"):
+        abort(401)
+`,
+};
+
+/** S11: the SAME 5 route files (same paths, same bodies) importing
+ *  verify_session from an EXTERNAL, absolute package instead — no in-repo
+ *  pkg/auth.py needed for THIS group (nothing resolves regardless, since an
+ *  absolute import is never a resolution target in the first place). */
+export function crossFileExternalGroup(): BaselineFile[] {
+  return S10_NAMES.map((name) => crossFileRouteFile(name, "from acme_sso import verify_session"));
+}
+
+/** Sorted pkg/*_routes.py paths in `files` — same predicate for either group
+ *  above, since they share paths. */
+export function sortedCrossFileRoutePaths(files: BaselineFile[]): string[] {
+  return sortedEligiblePaths(files, (p) => p.startsWith(`${S10_ROOT}/`) && p.endsWith("_routes.py"));
+}
+
+/** Deterministically strips the import line AND the before_request
+ *  registration call from the first `count` S10/S11 files, sorted by path,
+ *  leaving a bare (now unauthed, S1-shape) still-mutating route. Matches
+ *  either group's import line, so it works on files pulled from either. */
+export function stripCrossFileAuth(files: BaselineFile[], count: number): BaselineFile[] {
+  const targets = new Set(sortedCrossFileRoutePaths(files).slice(0, count));
+  return files.map((f) => {
+    if (!targets.has(f.path)) return f;
+    const lines = f.content
+      .split("\n")
+      .filter(
+        (line) =>
+          line.trim() !== "from .auth import verify_session" &&
+          line.trim() !== "from acme_sso import verify_session" &&
+          !line.trim().endsWith(".before_request(verify_session)"),
+      );
+    return { path: f.path, content: lines.join("\n") };
+  });
+}

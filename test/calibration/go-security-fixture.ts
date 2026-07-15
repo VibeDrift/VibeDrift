@@ -537,6 +537,118 @@ export function publicByDesignControl(): BaselineFile[] {
   return HOOK_PROVIDERS.map(hookFile);
 }
 
+// ─── S10/S11: cross-file auth resolution (imported middleware, in-repo vs
+// external) ───────────────────────────────────────────────────────────────
+//
+// Mirrors python-security-fixture.ts's S10/S11: S10 proves the POSITIVE (a
+// package-qualified middleware.RequireAuth() call resolves cross-PACKAGE to
+// internal/middleware/auth.go's REJECTING body and blesses every importing
+// route); S11 proves the NEGATIVE (the SAME 5 route files, same call,
+// importing from an out-of-repo package path instead: cross-file resolution
+// runs live and still refuses, because the import path never maps under the
+// root module's prefix — see goImportPathToDir's null return in
+// security-xfile-index.ts). Both groups share the SAME 5 relativePaths
+// (handlers/<name>.go) and bodies; only the import path differs.
+const S10_ROOT = "handlers";
+const S10_NAMES = ["campaigns", "surveys", "audits", "reviews", "backups"];
+
+function xfileRouteFile(name: string, importPath: string): BaselineFile {
+  const cap = capitalize(name);
+  return {
+    path: `${S10_ROOT}/${name}.go`,
+    content:
+`package handlers
+
+import (
+	"${importPath}"
+
+	"github.com/gin-gonic/gin"
+)
+
+${ginRequestStruct(name, [["Name", "string", "name"]])}
+
+func Register${cap}(r *gin.Engine) {
+	r.Use(middleware.RequireAuth())
+	r.POST("/${name}", create${cap})
+}
+
+${ginHandler(name)}`,
+  };
+}
+
+/** S10: 5 route files, each `import "myapp/internal/middleware"` — a REAL
+ *  in-repo package resolvable to internal/middleware/auth.go below. */
+export function goCrossFileAuthedGroup(): BaselineFile[] {
+  return S10_NAMES.map((name) => xfileRouteFile(name, "myapp/internal/middleware"));
+}
+
+/** S10 support: the module root (threads goModulePath) and the shared
+ *  cross-PACKAGE middleware. RequireAuth's BODY (401 on a missing
+ *  Authorization header, the exact GIN_AUTH_BLOCK reject signature) is what
+ *  blesses the importing routes — never its name. */
+export const goCrossFileModFile: BaselineFile = {
+  path: "go.mod",
+  content: `module myapp\n\ngo 1.21\n`,
+};
+export const goCrossFileAuthFile: BaselineFile = {
+  path: "internal/middleware/auth.go",
+  content:
+`package middleware
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+// RequireAuth is the shared cross-PACKAGE auth gate imported by every
+// handlers/*.go route file (import "myapp/internal/middleware"). Its BODY,
+// not its name, is what blesses the importing routes cross-file.
+func RequireAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.GetHeader("Authorization") == "" {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		c.Next()
+	}
+}
+`,
+};
+
+/** S11: the SAME 5 route files (same paths, same call) importing
+ *  middleware.RequireAuth() from an out-of-repo package path instead — no
+ *  internal/middleware dir needed for THIS group (nothing resolves
+ *  regardless: the import path never maps under the root module prefix). */
+export function goCrossFileExternalGroup(): BaselineFile[] {
+  return S10_NAMES.map((name) => xfileRouteFile(name, "github.com/foo/middleware"));
+}
+
+/** Sorted handlers/*.go paths in `files` — same predicate for either group
+ *  above, since they share paths. */
+export function sortedCrossFileGoRoutePaths(files: BaselineFile[]): string[] {
+  return sortedEligiblePaths(files, (p) => p.startsWith(`${S10_ROOT}/`) && p.endsWith(".go"));
+}
+
+/** Deterministically strips the middleware import AND its Use() call from
+ *  the first `count` S10/S11 files, sorted by path, leaving a bare (now
+ *  unauthed, S1-shape) still-mutating route. Matches either group's import
+ *  path, so it works on files pulled from either. */
+export function stripCrossFileGoAuth(files: BaselineFile[], count: number): BaselineFile[] {
+  const targets = new Set(sortedCrossFileGoRoutePaths(files).slice(0, count));
+  return files.map((f) => {
+    if (!targets.has(f.path)) return f;
+    let content = f.content
+      .replace('\t"myapp/internal/middleware"\n\n', "")
+      .replace('\t"github.com/foo/middleware"\n\n', "");
+    content = content
+      .split("\n")
+      .filter((line) => line.trim() !== "r.Use(middleware.RequireAuth())")
+      .join("\n");
+    return { path: f.path, content };
+  });
+}
+
 // ─── S6-S8: body-signature calibration groups ────────────────────────────────
 //
 // Each group roots its own directory so the route-directory vote grouping and

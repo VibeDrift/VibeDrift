@@ -33,6 +33,18 @@
  *   S8  unresolvable-body UNSURE (imported auth-flavored middleware): stays
  *       flagged with HEDGED copy naming the hook; counts match S6; S1 stays
  *       flat in the same run.
+ *
+ * Task 6 addendum (S10-S11) measures cross-file auth resolution (Tasks 1-5):
+ *   S10 a package-qualified middleware call whose body lives in a SEPARATE
+ *       in-repo package blesses via cross-file resolution.
+ *   S11 the SAME shape importing from an out-of-repo package path instead
+ *       stays hedged (UNSURE), never blesses.
+ * INVARIANCE CLAIM: S0-S9 above are single-file / in-file fixtures and
+ * reproduce BYTE-IDENTICALLY on this branch; their dominantCount /
+ * consistencyScore / precision / recall assertions are untouched. Cross-file
+ * resolution runs live in every scenario below (securityConsistency.detect
+ * always builds the index), but it never changes an in-file verdict: local
+ * defs take precedence over any cross-file candidate.
  */
 import { describe, it, expect } from "vitest";
 import { securityConsistency } from "../../src/drift/security-consistency.js";
@@ -43,6 +55,7 @@ import {
   collectGoFunctionDefs,
   classifyGoMiddlewareAuth,
 } from "../../src/drift/security-ast-go.js";
+import { buildXFileIndex } from "../../src/drift/security-xfile-index.js";
 import { fileWithTree } from "../helpers/drift-tree.js";
 import type { BaselineFile } from "./baseline.js";
 import {
@@ -63,10 +76,27 @@ import {
   stripBodyGate,
   bodyUnsureGroup,
   bodyUnsureDeviatorPath,
+  goCrossFileAuthedGroup,
+  goCrossFileAuthFile,
+  goCrossFileModFile,
+  goCrossFileExternalGroup,
+  sortedCrossFileGoRoutePaths,
+  stripCrossFileGoAuth,
 } from "./go-security-fixture.js";
 
 async function toDriftFiles(files: BaselineFile[]): Promise<DriftFile[]> {
   return Promise.all(files.map((f) => fileWithTree(f.path, f.content, "go")));
+}
+
+/** Extracts the `module` path from a go.mod BaselineFile in `files`, if
+ *  present, mirroring how buildDriftContext threads a real repo's go.mod into
+ *  DriftContext.goModulePath. Absent for every S0-S9 fixture (none carries a
+ *  go.mod file), so their ctx.goModulePath stays undefined exactly as before
+ *  (Go cross-file wholesale disabled), byte-identical to today. */
+function goModulePathFrom(files: BaselineFile[]): string | undefined {
+  const goMod = files.find((f) => f.path === "go.mod");
+  const m = goMod ? /^module\s+(\S+)/m.exec(goMod.content) : null;
+  return m ? m[1] : undefined;
 }
 
 async function ctxFor(files: BaselineFile[]) {
@@ -75,6 +105,7 @@ async function ctxFor(files: BaselineFile[]) {
     files: driftFiles,
     totalLines: driftFiles.reduce((s, f) => s + f.lineCount, 0),
     dominantLanguage: "go",
+    goModulePath: goModulePathFrom(files),
   };
 }
 
@@ -115,6 +146,14 @@ describe("Go calibration: S0 recognition self-check (route-loss guard + no-name-
       total += routes.length;
     }
     expect(total).toBe(5);
+  });
+
+  it("the cross-file def-only support files (internal/middleware/auth.go, go.mod) contribute zero routes (S10/S11 recognition guard)", async () => {
+    for (const f of [goCrossFileAuthFile, goCrossFileModFile]) {
+      const driftFile = await fileWithTree(f.path, f.content, "go");
+      const routes = extractGoRoutesAst(driftFile.tree!, driftFile.relativePath);
+      expect(routes, f.path).toHaveLength(0);
+    }
   });
 
   it("no-name-bless classifier pin: an imported selector with no in-file def HEDGES, never blesses; an in-file rejecting body DOES bless", async () => {
@@ -434,6 +473,130 @@ describe("Go calibration: S8 unresolvable-body UNSURE (imported auth-flavored mi
   });
 });
 
+// ─── S10/S11: cross-file auth resolution (Task 6) ─────────────────────────────
+// Measures the cross-file resolution built in Tasks 1-5: a package-qualified
+// middleware.RequireAuth() call resolves cross-PACKAGE when its body verifiably
+// rejects (S10); the SAME shape importing from an out-of-repo package path
+// instead never blesses, only hedges (S11). Both groups share the same 5
+// relativePaths (handlers/<name>.go), so S11's second test recombines files
+// from both to build a mixed corpus without a new fixture helper.
+
+describe("Go calibration: S10 cross-file positive (imported middleware blesses via cross-package resolution)", () => {
+  it("non-vacuity FIRST: every route resolves hasAuth true with authUnsureHook ABSENT via cross-file resolution; pre-cross-file (index absent) the SAME files resolve hasAuth false with authUnsureHook 'middleware.RequireAuth' (the exact S8 shape, the regression S10 pins)", async () => {
+    const group = goCrossFileAuthedGroup();
+    const files = [...group, goCrossFileAuthFile, goCrossFileModFile];
+    const driftFiles = await toDriftFiles(files);
+    const index = buildXFileIndex(driftFiles, goModulePathFrom(files));
+    let total = 0;
+    for (const f of group) {
+      const driftFile = driftFiles.find((d) => d.relativePath === f.path)!;
+      const withIndex = extractGoRoutesAst(driftFile.tree!, driftFile.relativePath, index);
+      expect(withIndex, f.path).toHaveLength(1);
+      expect(withIndex[0].hasAuth, f.path).toBe(true);
+      expect("authUnsureHook" in withIndex[0], f.path).toBe(false);
+
+      const withoutIndex = extractGoRoutesAst(driftFile.tree!, driftFile.relativePath);
+      expect(withoutIndex[0].hasAuth, f.path).toBe(false);
+      expect(withoutIndex[0].authUnsureHook, f.path).toBe("middleware.RequireAuth");
+      total += withIndex.length;
+    }
+    expect(total).toBe(5);
+  });
+
+  it("uniform corpus: zero security_posture findings", async () => {
+    const ctx = await ctxFor([...goCrossFileAuthedGroup(), goCrossFileAuthFile, goCrossFileModFile]);
+    const findings = securityConsistency.detect(ctx as any);
+    expect(findings.filter((f) => f.driftCategory === "security_posture")).toEqual([]);
+  });
+
+  it("STRIP variant: stripping the first sorted file's cross-file auth flags exactly it (dominantCount 4, score 80), precision 1 recall 1", async () => {
+    const strippedPath = sortedCrossFileGoRoutePaths(goCrossFileAuthedGroup())[0];
+    const files = [...stripCrossFileGoAuth(goCrossFileAuthedGroup(), 1), goCrossFileAuthFile, goCrossFileModFile];
+    const ctx = await ctxFor(files);
+    const auth = authFindings(securityConsistency.detect(ctx as any));
+    expect(auth).toHaveLength(1);
+    const finding = auth[0];
+
+    expect(finding.dominantCount).toBe(4);
+    expect(finding.totalRelevantFiles).toBe(5);
+    expect(finding.consistencyScore).toBe(80);
+    expect(finding.severity).toBe("warning");
+    expect(finding.confidence).toBe(0.75);
+    expect(finding.deviatingFiles.map((d) => d.path)).toEqual([strippedPath]);
+
+    const flagged = new Set(auth.flatMap((f) => f.deviatingFiles.map((d) => d.path)));
+    const planted = new Set([strippedPath]);
+    const tp = [...flagged].filter((p) => planted.has(p)).length;
+    expect(tp / flagged.size).toBe(1); // precision
+    expect(tp / planted.size).toBe(1); // recall
+  });
+});
+
+describe("Go calibration: S11 cross-file external stays unsure (never blesses)", () => {
+  it("non-vacuity FIRST: every route hedges (hasAuth false, authUnsureHook 'middleware.RequireAuth'), byte-identical with and without the index (cross-file resolution runs live and still refuses the out-of-repo import path)", async () => {
+    const group = goCrossFileExternalGroup();
+    const files = [...group, goCrossFileModFile];
+    const driftFiles = await toDriftFiles(files);
+    const index = buildXFileIndex(driftFiles, goModulePathFrom(files));
+    let total = 0;
+    for (const f of group) {
+      const driftFile = driftFiles.find((d) => d.relativePath === f.path)!;
+      const withIndex = extractGoRoutesAst(driftFile.tree!, driftFile.relativePath, index);
+      const withoutIndex = extractGoRoutesAst(driftFile.tree!, driftFile.relativePath);
+      expect(withIndex, f.path).toEqual(withoutIndex);
+      expect(withIndex, f.path).toHaveLength(1);
+      expect(withIndex[0].hasAuth, f.path).toBe(false);
+      expect(withIndex[0].authUnsureHook, f.path).toBe("middleware.RequireAuth");
+      total += withIndex.length;
+    }
+    expect(total).toBe(5);
+  });
+
+  it("mixed with the S10 in-repo group (4 resolve, 1 external): flags the hedged file, dominantCount 4, score 80, no em-dash copy; counts match the S8 control", async () => {
+    const authed = goCrossFileAuthedGroup();
+    const external = goCrossFileExternalGroup();
+    const deviatorPath = sortedCrossFileGoRoutePaths(authed)[0];
+    const files = [
+      ...authed.filter((f) => f.path !== deviatorPath),
+      external.find((f) => f.path === deviatorPath)!,
+      goCrossFileAuthFile,
+      goCrossFileModFile,
+    ];
+    const ctx = await ctxFor(files);
+    const auth = authFindings(securityConsistency.detect(ctx as any));
+    expect(auth).toHaveLength(1);
+    const finding = auth[0];
+
+    expect(finding.dominantCount).toBe(4);
+    expect(finding.totalRelevantFiles).toBe(5);
+    expect(finding.consistencyScore).toBe(80);
+    expect(finding.deviatingFiles.map((d) => d.path)).toEqual([deviatorPath]);
+
+    const dp = finding.deviatingFiles[0].detectedPattern;
+    expect(dp).toContain("middleware.RequireAuth");
+    expect(dp.toLowerCase()).toContain("double check");
+    expect(dp).not.toMatch(/—|--/); // hedged deviator copy carries no em-dash / double hyphen
+
+    expect(finding.recommendation).toContain("Double check");
+    expect(finding.recommendation).toContain("middleware.RequireAuth");
+
+    const flagged = new Set(auth.flatMap((f) => f.deviatingFiles.map((d) => d.path)));
+    const planted = new Set([deviatorPath]);
+    const tp = [...flagged].filter((p) => planted.has(p)).length;
+    expect(tp / flagged.size).toBe(1); // precision
+    expect(tp / planted.size).toBe(1); // recall
+  });
+
+  it("NO-LEAK cross-check: an S1-shape plain stripped-auth deviator stays FLAT (not hedged) in the same run", async () => {
+    const s1Path = sortedGinRoutePaths(ginAuthedGroup())[0];
+    const s1Files = [...stripGinAuth(ginAuthedGroup(), 1), goAuthFile, goMainFile];
+    const s1Auth = authFindings(securityConsistency.detect((await ctxFor(s1Files)) as any));
+    expect(s1Auth).toHaveLength(1);
+    expect(s1Auth[0].deviatingFiles.map((d) => d.path)).toEqual([s1Path]);
+    expect(s1Auth[0].deviatingFiles[0].detectedPattern.toLowerCase()).not.toContain("double check");
+  });
+});
+
 // ─── Fixture self-check ───────────────────────────────────────────────────────
 // Every strip*() helper is exercised at its maximal count (every eligible file
 // in the group stripped at once), proving the deterministic string surgery
@@ -471,6 +634,18 @@ describe("Go calibration: fixture self-check (every strip*() output stays parsea
       const driftFile = await fileWithTree(f.path, f.content, "go");
       expect(driftFile.tree?.rootNode.hasError, f.path).toBe(false);
       expect(f.content, f.path).not.toContain("func guard(");
+      const routes = extractGoRoutesAst(driftFile.tree!, driftFile.relativePath);
+      expect(routes, f.path).toHaveLength(1);
+      expect(routes[0].hasAuth, f.path).toBe(false);
+      expect(routes[0].method, f.path).toBe("POST");
+    }
+  });
+
+  it("stripCrossFileGoAuth(goCrossFileAuthedGroup(), 5): every file parses error-free, one unauthed route, no leftover middleware import", async () => {
+    for (const f of stripCrossFileGoAuth(goCrossFileAuthedGroup(), 5)) {
+      const driftFile = await fileWithTree(f.path, f.content, "go");
+      expect(driftFile.tree?.rootNode.hasError, f.path).toBe(false);
+      expect(f.content, f.path).not.toContain("middleware");
       const routes = extractGoRoutesAst(driftFile.tree!, driftFile.relativePath);
       expect(routes, f.path).toHaveLength(1);
       expect(routes[0].hasAuth, f.path).toBe(false);

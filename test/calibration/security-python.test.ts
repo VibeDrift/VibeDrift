@@ -26,12 +26,25 @@
  *       with HEDGED copy naming the hook; counts match S6; S1 stays flat.
  *   S9  methods=variable resolved from a same-file ("POST",) literal: every
  *       route resolves POST. RED-FIRST: pre-addendum they resolved ALL.
+ *
+ * Task 6 addendum (S10-S11) measures cross-file auth resolution (Tasks 1-5):
+ *   S10 an imported before_request hook whose body lives in a SEPARATE
+ *       in-repo file blesses via cross-file resolution.
+ *   S11 the SAME shape importing from an EXTERNAL package instead stays
+ *       hedged (UNSURE), never blesses.
+ * INVARIANCE CLAIM: S0-S9 above are single-file / in-file fixtures and
+ * reproduce BYTE-IDENTICALLY on this branch; their dominantCount /
+ * consistencyScore / precision / recall assertions are untouched. Cross-file
+ * resolution runs live in every scenario below (securityConsistency.detect
+ * always builds the index), but it never changes an in-file verdict: local
+ * defs take precedence over any cross-file candidate.
  */
 import { describe, it, expect } from "vitest";
 import { securityConsistency } from "../../src/drift/security-consistency.js";
 import { SECURITY_SUBCATEGORIES } from "../../src/drift/types.js";
 import type { DriftFile } from "../../src/drift/types.js";
 import { extractPythonRoutesAst } from "../../src/drift/security-ast-python.js";
+import { buildXFileIndex } from "../../src/drift/security-xfile-index.js";
 import { fileWithTree } from "../helpers/drift-tree.js";
 import type { BaselineFile } from "./baseline.js";
 import {
@@ -55,6 +68,11 @@ import {
   methodsVarGroup,
   sortedMethodsVarRoutePaths,
   stripMethodsVarAuth,
+  crossFileAuthedGroup,
+  pkgAuthFile,
+  crossFileExternalGroup,
+  sortedCrossFileRoutePaths,
+  stripCrossFileAuth,
 } from "./python-security-fixture.js";
 
 async function toDriftFiles(files: BaselineFile[]): Promise<DriftFile[]> {
@@ -99,6 +117,12 @@ describe("Python calibration: S0 recognition self-check (route-loss guard)", () 
       total += routes.length;
     }
     expect(total).toBe(5);
+  });
+
+  it("the cross-file def-only support file (pkg/auth.py) contributes zero routes (S10/S11 recognition guard)", async () => {
+    const driftFile = await fileWithTree(pkgAuthFile.path, pkgAuthFile.content, "python");
+    const routes = extractPythonRoutesAst(driftFile.tree!, driftFile.relativePath);
+    expect(routes).toHaveLength(0);
   });
 });
 
@@ -404,5 +428,138 @@ describe("Python calibration: S9 methods=variable resolved from a same-file lite
     const tp = [...flagged].filter((p) => planted.has(p)).length;
     expect(tp / flagged.size).toBe(1); // precision
     expect(tp / planted.size).toBe(1); // recall
+  });
+});
+
+// ─── S10/S11: cross-file auth resolution (Task 6) ─────────────────────────────
+// Measures the cross-file resolution built in Tasks 1-5: a before_request hook
+// imported from a SEPARATE in-repo file blesses when its body verifiably
+// rejects (S10); the SAME shape importing from an EXTERNAL package instead
+// never blesses, only hedges (S11). Both groups share the same 5 relativePaths
+// (pkg/<name>_routes.py), so S11's second test recombines files from both to
+// build a mixed corpus without a new fixture helper.
+
+describe("Python calibration: S10 cross-file positive (imported hook blesses via cross-file resolution)", () => {
+  it("non-vacuity FIRST: every route resolves hasAuth true with authUnsureHook ABSENT via cross-file resolution; pre-cross-file (index absent) the SAME files resolve hasAuth false with authUnsureHook 'verify_session' (the exact S8 shape, the regression S10 pins)", async () => {
+    const group = crossFileAuthedGroup();
+    const files = [...group, pkgAuthFile];
+    const driftFiles = await toDriftFiles(files);
+    const index = buildXFileIndex(driftFiles);
+    let total = 0;
+    for (const f of group) {
+      const driftFile = driftFiles.find((d) => d.relativePath === f.path)!;
+      const withIndex = extractPythonRoutesAst(driftFile.tree!, driftFile.relativePath, index);
+      expect(withIndex, f.path).toHaveLength(1);
+      expect(withIndex[0].hasAuth, f.path).toBe(true);
+      expect("authUnsureHook" in withIndex[0], f.path).toBe(false);
+
+      const withoutIndex = extractPythonRoutesAst(driftFile.tree!, driftFile.relativePath);
+      expect(withoutIndex[0].hasAuth, f.path).toBe(false);
+      expect(withoutIndex[0].authUnsureHook, f.path).toBe("verify_session");
+      total += withIndex.length;
+    }
+    expect(total).toBe(5);
+  });
+
+  it("uniform corpus: zero security_posture findings", async () => {
+    const ctx = await ctxFor([...crossFileAuthedGroup(), pkgAuthFile]);
+    const findings = securityConsistency.detect(ctx as any);
+    expect(findings.filter((f) => f.driftCategory === "security_posture")).toEqual([]);
+  });
+
+  it("STRIP variant: stripping the first sorted file's cross-file auth flags exactly it (dominantCount 4, score 80), precision 1 recall 1", async () => {
+    const strippedPath = sortedCrossFileRoutePaths(crossFileAuthedGroup())[0];
+    const files = [...stripCrossFileAuth(crossFileAuthedGroup(), 1), pkgAuthFile];
+    const ctx = await ctxFor(files);
+    const auth = authFindings(securityConsistency.detect(ctx as any));
+    expect(auth).toHaveLength(1);
+    const finding = auth[0];
+
+    expect(finding.dominantCount).toBe(4);
+    expect(finding.totalRelevantFiles).toBe(5);
+    expect(finding.consistencyScore).toBe(80);
+    expect(finding.severity).toBe("warning");
+    expect(finding.confidence).toBe(0.75);
+    expect(finding.deviatingFiles.map((d) => d.path)).toEqual([strippedPath]);
+
+    const flagged = new Set(auth.flatMap((f) => f.deviatingFiles.map((d) => d.path)));
+    const planted = new Set([strippedPath]);
+    const tp = [...flagged].filter((p) => planted.has(p)).length;
+    expect(tp / flagged.size).toBe(1); // precision
+    expect(tp / planted.size).toBe(1); // recall
+  });
+
+  it("self-check: pkg/auth.py yields ZERO routes, and stripCrossFileAuth's output still parses cleanly with an unauthed route", async () => {
+    const authDriftFile = await fileWithTree(pkgAuthFile.path, pkgAuthFile.content, "python");
+    expect(extractPythonRoutesAst(authDriftFile.tree!, authDriftFile.relativePath)).toHaveLength(0);
+
+    for (const f of stripCrossFileAuth(crossFileAuthedGroup(), 5)) {
+      const driftFile = await fileWithTree(f.path, f.content, "python");
+      expect(driftFile.tree?.rootNode.hasError, f.path).toBe(false);
+      expect(f.content, f.path).not.toContain("verify_session");
+      const routes = extractPythonRoutesAst(driftFile.tree!, driftFile.relativePath);
+      expect(routes, f.path).toHaveLength(1);
+      expect(routes[0].hasAuth, f.path).toBe(false);
+    }
+  });
+});
+
+describe("Python calibration: S11 cross-file external stays unsure (never blesses)", () => {
+  it("non-vacuity FIRST: every route hedges (hasAuth false, authUnsureHook 'verify_session'), byte-identical with and without the index (cross-file resolution runs live and still refuses the absolute import)", async () => {
+    const group = crossFileExternalGroup();
+    const driftFiles = await toDriftFiles(group);
+    const index = buildXFileIndex(driftFiles);
+    let total = 0;
+    for (const f of group) {
+      const driftFile = driftFiles.find((d) => d.relativePath === f.path)!;
+      const withIndex = extractPythonRoutesAst(driftFile.tree!, driftFile.relativePath, index);
+      const withoutIndex = extractPythonRoutesAst(driftFile.tree!, driftFile.relativePath);
+      expect(withIndex, f.path).toEqual(withoutIndex);
+      expect(withIndex, f.path).toHaveLength(1);
+      expect(withIndex[0].hasAuth, f.path).toBe(false);
+      expect(withIndex[0].authUnsureHook, f.path).toBe("verify_session");
+      total += withIndex.length;
+    }
+    expect(total).toBe(5);
+  });
+
+  it("mixed with the S10 in-repo group (4 resolve, 1 external): flags the hedged file, dominantCount 4, score 80, no em-dash copy; counts match the S8 control", async () => {
+    const authed = crossFileAuthedGroup();
+    const external = crossFileExternalGroup();
+    const deviatorPath = sortedCrossFileRoutePaths(authed)[0];
+    const files = [
+      ...authed.filter((f) => f.path !== deviatorPath),
+      external.find((f) => f.path === deviatorPath)!,
+      pkgAuthFile,
+    ];
+    const ctx = await ctxFor(files);
+    const auth = authFindings(securityConsistency.detect(ctx as any));
+    expect(auth).toHaveLength(1);
+    const finding = auth[0];
+
+    expect(finding.dominantCount).toBe(4);
+    expect(finding.totalRelevantFiles).toBe(5);
+    expect(finding.consistencyScore).toBe(80);
+    expect(finding.deviatingFiles.map((d) => d.path)).toEqual([deviatorPath]);
+
+    const dp = finding.deviatingFiles[0].detectedPattern;
+    expect(dp).toContain("verify_session");
+    expect(dp.toLowerCase()).toContain("double check");
+    expect(dp).not.toMatch(/—|--/); // hedged deviator copy carries no em-dash / double hyphen
+
+    const flagged = new Set(auth.flatMap((f) => f.deviatingFiles.map((d) => d.path)));
+    const planted = new Set([deviatorPath]);
+    const tp = [...flagged].filter((p) => planted.has(p)).length;
+    expect(tp / flagged.size).toBe(1); // precision
+    expect(tp / planted.size).toBe(1); // recall
+  });
+
+  it("NO-LEAK cross-check: an S1-shape plain stripped-auth deviator stays FLAT (not hedged) in the same run", async () => {
+    const s1Path = sortedFlaskRoutePaths(flaskAuthedGroup())[0];
+    const s1Files = [...stripFlaskAuth(flaskAuthedGroup(), 1), pyAuthFile, pyAppFile];
+    const s1Auth = authFindings(securityConsistency.detect((await ctxFor(s1Files)) as any));
+    expect(s1Auth).toHaveLength(1);
+    expect(s1Auth[0].deviatingFiles.map((d) => d.path)).toEqual([s1Path]);
+    expect(s1Auth[0].deviatingFiles[0].detectedPattern.toLowerCase()).not.toContain("double check");
   });
 });

@@ -241,6 +241,41 @@ never bless it, so scenario A would fail non-vacuity; body-first reads the
 name-only path would bless it outright (zero findings); body-first resolves
 it UNSURE instead (hedged, still flagged, never a bless).
 
+## Cross-file auth resolution (S10-S11)
+
+Both `security-python.test.ts` and `security-go.test.ts` add two more
+scenarios, appended after S9/S8 respectively, measuring the cross-file
+resolution work: an imported before_request hook (Python) or a
+package-qualified middleware call (Go) whose body lives in a SEPARATE
+in-repo file, rather than in the route file itself. S0-S9 are single-file /
+in-file and reproduce byte-identically; cross-file resolution runs live in
+every scenario in both suites (it is always built by
+`securityConsistency.detect`), but it never changes an in-file verdict,
+since local defs take precedence over any cross-file candidate.
+
+- **S10** the cross-file POSITIVE: 5 route files each import a hook/middleware
+  from one shared, separate in-repo file (`pkg/auth.py` in Python,
+  `internal/middleware/auth.go` in Go), whose body verifiably rejects
+  (a 401 on a missing session/header). Non-vacuity is asserted first
+  (every route resolves `hasAuth: true`, no `authUnsureHook`), then a
+  uniform corpus produces zero findings, then stripping the import + call
+  from one file flags exactly it (dominantCount 4, score 80, precision/recall
+  1.0). Pre-cross-file (index absent), the same files resolve
+  `hasAuth: false` with a hedged `authUnsureHook` — the exact shape S8
+  measures — which is the regression S10 pins.
+- **S11** the cross-file NEGATIVE: the SAME 5 route files and bodies,
+  importing the identical hook/middleware from an out-of-repo source instead
+  (an absolute Python package, or a Go import path outside the module root).
+  Cross-file resolution runs live and still refuses, because an absolute
+  import is never a relative-resolution target (Python) and an out-of-repo
+  import path never maps under the module prefix (Go) — never because the
+  target merely doesn't exist. Every route stays hedged, byte-identical with
+  and without the index. Mixing 4 files from the S10 group with 1 from the
+  S11 group (same paths) reproduces the S8 shape exactly (dominantCount 4,
+  score 80, hedged copy naming the hook, no em-dash/double-hyphen), and a
+  plain S1-shape stripped deviator run in the same test stays flat, not
+  hedged (no leakage between the two failure modes).
+
 ## Adding a new injection type
 
 Drop a generator in `generators/`. Signature:
