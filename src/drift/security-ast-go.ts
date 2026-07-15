@@ -898,7 +898,7 @@ export function collectGoFunctionDefs(root: SyntaxNode): Map<string, SyntaxNode 
  *  `return http.HandlerFunc(func(w,r){...})`) or a one-hop returned bare
  *  identifier. NEVER prunes the returned handler closure (else mass false
  *  not-auth); scanGoBody prunes FURTHER-nested closures inside it. */
-function resolveEffectiveBody(fnNode: SyntaxNode, defs: Map<string, SyntaxNode | null>): SyntaxNode | null {
+export function resolveEffectiveBody(fnNode: SyntaxNode, defs: Map<string, SyntaxNode | null>): SyntaxNode | null {
   const body = fnNode.childForFieldName("body");
   if (!body) return null;
   const stmts = goNamed(body);

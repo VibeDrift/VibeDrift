@@ -26,16 +26,21 @@
  * the caller's file ordering. It never re-parses — it reuses each DriftFile's
  * pre-parsed tree — so a symbol maps to the SAME node reference across builds.
  *
- * SCOPE (Task 1). This task ships the Python half + the index skeleton. The Go
- * half of the index is stubbed (empty maps, module path stored) and
- * `resolveGoMiddlewareBody` returns null; both are populated in a later task.
- * Nothing here is wired into the classifiers yet — with the index absent, the
- * extractors behave exactly as today (byte-identical).
+ * SCOPE. This module ships both language halves of the index. The Python half
+ * (Task 1) resolves a relative import to its defining file's body. The Go half
+ * (Task 3) resolves a `pkg.Symbol` selector to a cross-PACKAGE
+ * `function_declaration` body: a package import path maps to a repo directory via
+ * the root go.mod module path, that directory's exported function_declaration
+ * bodies are collected, and `resolveGoMiddlewareBody` returns the single exact
+ * match (or null on any ambiguity). Nothing here is wired into the classifiers by
+ * THIS module — with the index absent, the extractors behave exactly as today
+ * (byte-identical); the wiring lives at each classifier's call site.
  */
 
 import type { SyntaxNode } from "../core/types.js";
 import type { DriftFile } from "./types.js";
 import { collectFunctionDefs } from "./security-ast-python.js";
+import { collectGoFunctionDefs } from "./security-ast-go.js";
 
 /** Per-language cross-file lookup tables. */
 export interface CrossFileIndex {
@@ -52,14 +57,60 @@ export interface CrossFileIndex {
     roots: Map<string, SyntaxNode>;
   };
   go: {
-    /** Root go.mod module path; undefined disables Go cross-file wholesale. */
+    /** Root go.mod module path; falsy (undefined / null / "") disables Go
+     *  cross-file wholesale — no go.mod, a `replace` directive, or a nested
+     *  go.mod all collapse it upstream, leaving every Go map below empty. */
     modulePath?: string;
-    /** Stub in Task 1 — populated with per-package data in a later task. */
+    /** Every Go file's relativePath (parse-broken files included, for parity
+     *  with `py.files`). Not itself a resolution surface — resolution is
+     *  package-directory based via `packages`. */
     files: Set<string>;
-    /** Stub in Task 1 — per-package function_declaration maps (NOT
-     *  method_declaration) come in a later task. */
-    packageFuncs: Map<string, Map<string, SyntaxNode | null>>;
+    /** pkgDir (a repo directory) -> its package. `defs` is
+     *  `function_declaration`-ONLY (never `method_declaration`), merged across the
+     *  package's NON-test .go files, sticky-null on a name defined twice. Each
+     *  per-symbol entry carries its OWN defining file's both-kinds defs so the
+     *  target body's in-file one-hop resolves against the right file. */
+    packages: Map<string, GoPackage>;
+    /** importer relativePath -> (qualifier -> pkgDir | null). The qualifier is
+     *  the import alias when present, else the target package's DECLARED name
+     *  (only USUALLY the import path's last segment). Two specs yielding one
+     *  qualifier -> null (ambiguous). */
+    fileImports: Map<string, Map<string, string | null>>;
+    /** importer relativePath -> identifiers bound as a VALUE anywhere in the file
+     *  (`:=`, `var`, `const`, params, method RECEIVERS, named RETURNS, func_literal
+     *  params, range targets, type-switch guards). A qualifier in this set is a
+     *  local value, not the package — refuse (the killer Go value-shadow vector). */
+    valueBound: Map<string, Set<string>>;
+    /** importer relativePaths that contain a `. "..."` dot-import; any selector in
+     *  such a file is refused (unqualified injection is ambiguous with in-file
+     *  identifiers). */
+    dotImports: Set<string>;
   };
+}
+
+/** One cross-package `function_declaration` entry: the def node, its defining
+ *  file's relativePath, and that file's OWN both-kinds defs (for the resolved
+ *  body's single in-file hop — never a pkgDir-arbitrary sibling's). */
+export interface GoPackageEntry {
+  def: SyntaxNode;
+  file: string;
+  fileDefs: Map<string, SyntaxNode | null>;
+}
+
+/** One Go package (= one directory). `pkgName` is the DECLARED `package` clause
+ *  name, or null when two non-test files in the dir disagree (a broken package,
+ *  refused wholesale). `defs` is function_declaration-only, sticky-null on a name
+ *  defined twice across the package's non-test files. */
+export interface GoPackage {
+  pkgName: string | null;
+  defs: Map<string, GoPackageEntry | null>;
+}
+
+/** A resolved cross-package middleware: the def node and its OWN defining-file
+ *  both-kinds defs (for the target body's in-file one-hop). */
+export interface GoResolvedMiddleware {
+  def: SyntaxNode;
+  defs: Map<string, SyntaxNode | null>;
 }
 
 /** A resolved cross-file hook: the DEFINING file's body node, that file's
@@ -77,10 +128,19 @@ export interface PyResolvedHook {
  * half (undefined disables Go cross-file); the Go maps are stubbed empty in
  * Task 1.
  */
-export function buildXFileIndex(files: DriftFile[], goModulePath?: string): CrossFileIndex {
+export function buildXFileIndex(files: DriftFile[], goModulePath?: string | null): CrossFileIndex {
   const index: CrossFileIndex = {
     py: { files: new Set(), fileDefs: new Map(), roots: new Map() },
-    go: { modulePath: goModulePath, files: new Set(), packageFuncs: new Map() },
+    go: {
+      // Normalize every falsy module path (null / "" / undefined) to undefined:
+      // the single "Go disabled" signal `resolveGoMiddlewareBody` gates on.
+      modulePath: goModulePath || undefined,
+      files: new Set(),
+      packages: new Map(),
+      fileImports: new Map(),
+      valueBound: new Map(),
+      dotImports: new Set(),
+    },
   };
 
   // Deterministic iteration: a stable code-unit sort of relativePath so the
@@ -108,7 +168,196 @@ export function buildXFileIndex(files: DriftFile[], goModulePath?: string): Cros
     }
   }
 
+  buildGoHalf(index, sorted, index.go.modulePath);
   return index;
+}
+
+// ─── Go index construction ───────────────────────────────────────────────────
+
+/** Fill the Go half of the index. `go.files` holds every Go file's relativePath
+ *  (parse-broken included). The resolution maps (packages / fileImports /
+ *  valueBound / dotImports) are built ONLY when a single-root module path is
+ *  supplied; otherwise Go cross-file stays disabled (all maps empty). */
+function buildGoHalf(index: CrossFileIndex, sorted: DriftFile[], goModulePath: string | undefined): void {
+  for (const f of sorted) {
+    if (f.language === "go") index.go.files.add(f.relativePath);
+  }
+  if (!goModulePath) return; // no go.mod / replace / nested module => Go disabled
+
+  // Non-test, clean-tree Go files only: a `*_test.go` co-locates a `package
+  // foo_test` clause (nulls pkgName) and in-test helpers (duplicate-null real
+  // defs), and a broken tree can never contribute a bless.
+  const goFiles = sorted.filter(
+    (f) => f.language === "go" && f.tree && !f.tree.rootNode.hasError && !isGoTestFile(f.relativePath),
+  );
+
+  // Build every package (= one directory) FIRST, so a plain import can key its
+  // qualifier by the target dir's declared package name.
+  const byDir = new Map<string, DriftFile[]>();
+  for (const f of goFiles) {
+    const dir = goDir(f.relativePath);
+    const bucket = byDir.get(dir);
+    if (bucket) bucket.push(f);
+    else byDir.set(dir, [f]);
+  }
+  for (const [dir, filesInDir] of byDir) {
+    index.go.packages.set(dir, buildGoPackage(filesInDir));
+  }
+
+  for (const f of goFiles) {
+    const root = f.tree!.rootNode;
+    const { imports, hasDot } = buildGoFileImports(root, goModulePath, index.go.packages);
+    index.go.fileImports.set(f.relativePath, imports);
+    if (hasDot) index.go.dotImports.add(f.relativePath);
+    index.go.valueBound.set(f.relativePath, collectGoValueBound(root));
+  }
+}
+
+/** True for a Go external-test / test file, excluded wholesale from the package
+ *  index (a co-located `package foo_test` clause or an in-test helper must never
+ *  perturb `pkgName` or duplicate-null a real def). */
+function isGoTestFile(rel: string): boolean {
+  return /_test\.go$/.test(rel);
+}
+
+/** Directory of a repo-relative path ("" for a root-level file). */
+function goDir(rel: string): string {
+  const i = rel.lastIndexOf("/");
+  return i < 0 ? "" : rel.slice(0, i);
+}
+
+/** Declared `package` name of a Go file (package_clause has NO name field; the
+ *  declared name is `namedChild(0)`), or null. */
+function goPackageName(root: SyntaxNode): string | null {
+  for (const child of root.namedChildren) {
+    if (child?.type === "package_clause") {
+      const id = child.namedChild(0);
+      return id?.type === "package_identifier" ? id.text : null;
+    }
+  }
+  return null;
+}
+
+/** Build one package from its non-test clean files: the agreed `pkgName` (null on
+ *  disagreement) and a function_declaration-only def map, sticky-null on any name
+ *  defined twice across the package's files. Each surviving entry carries its OWN
+ *  defining file's both-kinds defs. */
+function buildGoPackage(filesInDir: DriftFile[]): GoPackage {
+  let pkgName: string | null | undefined = undefined;
+  for (const f of filesInDir) {
+    const name = goPackageName(f.tree!.rootNode);
+    if (pkgName === undefined) pkgName = name;
+    else if (pkgName !== name) pkgName = null; // two non-test files disagree => refuse the pkg
+  }
+
+  const defs = new Map<string, GoPackageEntry | null>();
+  for (const f of filesInDir) {
+    const root = f.tree!.rootNode;
+    let fileDefs: Map<string, SyntaxNode | null> | null = null;
+    for (const decl of root.descendantsOfType("function_declaration")) {
+      if (!decl || decl.hasError) continue; // a parse-errored def never contributes
+      const name = decl.childForFieldName("name")?.text;
+      if (!name) continue;
+      if (defs.has(name)) {
+        defs.set(name, null); // sticky-null: a second definition (this file or a sibling)
+        continue;
+      }
+      if (fileDefs === null) fileDefs = collectGoFunctionDefs(root); // both kinds, for the in-file hop
+      defs.set(name, { def: decl, file: f.relativePath, fileDefs });
+    }
+  }
+  return { pkgName: pkgName ?? null, defs };
+}
+
+/** The importer's import surface: qualifier -> pkgDir (or null on ambiguity), and
+ *  whether the file carries any dot-import. A plain import keys by the target
+ *  dir's DECLARED package name; an alias is authoritative; a `dot` sets the poison
+ *  flag; a `blank_identifier` (side-effect import) is ignored. Two specs yielding
+ *  one qualifier collapse to null. */
+function buildGoFileImports(
+  root: SyntaxNode,
+  modulePath: string,
+  packages: Map<string, GoPackage>,
+): { imports: Map<string, string | null>; hasDot: boolean } {
+  const imports = new Map<string, string | null>();
+  const seen = new Set<string>();
+  let hasDot = false;
+  const add = (qualifier: string, dir: string | null) => {
+    if (seen.has(qualifier)) {
+      imports.set(qualifier, null); // two specs -> one qualifier -> ambiguous
+      return;
+    }
+    seen.add(qualifier);
+    imports.set(qualifier, dir);
+  };
+
+  for (const spec of root.descendantsOfType("import_spec")) {
+    if (!spec) continue;
+    const importPath = goStringLiteralText(spec.childForFieldName("path"));
+    if (importPath === null) continue;
+    const dir = goImportPathToDir(importPath, modulePath); // null => external
+    const nameNode = spec.childForFieldName("name");
+    if (nameNode) {
+      if (nameNode.type === "dot") {
+        hasDot = true;
+        continue;
+      }
+      if (nameNode.type === "blank_identifier") continue; // side-effect only
+      if (nameNode.type === "package_identifier") {
+        add(nameNode.text, dir); // alias is the authoritative qualifier
+      }
+      continue;
+    }
+    // Plain import: the qualifier is the target dir's DECLARED package name.
+    if (dir === null) continue; // external, unresolvable
+    const pkgName = packages.get(dir)?.pkgName ?? null;
+    if (pkgName === null) continue; // no known/agreeing package => no usable qualifier
+    add(pkgName, dir);
+  }
+  return { imports, hasDot };
+}
+
+/** Strip the delimiters of a Go string literal node (both kinds include them). */
+function goStringLiteralText(node: SyntaxNode | null): string | null {
+  if (!node) return null;
+  if (node.type !== "interpreted_string_literal" && node.type !== "raw_string_literal") return null;
+  return node.text.slice(1, -1);
+}
+
+/** Repo dir for an import path under `modulePath`, or null (external). Correct
+ *  only for a single root module with no path remapping — the plumbing forces
+ *  `modulePath` off on a `replace` or a nested go.mod. */
+function goImportPathToDir(importPath: string, modulePath: string): string | null {
+  if (importPath === modulePath) return "";
+  if (importPath.startsWith(modulePath + "/")) return importPath.slice(modulePath.length + 1);
+  return null;
+}
+
+/** Identifiers bound as a VALUE anywhere in the file. Over-collection is safe (it
+ *  only ADDS refusals): a qualifier that is also a local value must never be
+ *  attributed to a package function. Covers `:=`, `var`, `const`, all params
+ *  (including method receivers and named returns, which are `parameter_declaration`
+ *  nodes in the `receiver`/`result` fields), range targets, and type-switch guards. */
+function collectGoValueBound(root: SyntaxNode): Set<string> {
+  const bound = new Set<string>();
+  const addId = (n: SyntaxNode | null) => {
+    if (n && n.type === "identifier") bound.add(n.text);
+  };
+  const addList = (n: SyntaxNode | null) => {
+    if (!n) return;
+    if (n.type === "expression_list") for (const c of n.namedChildren) addId(c);
+    else addId(n);
+  };
+  for (const d of root.descendantsOfType("short_var_declaration")) if (d) addList(d.childForFieldName("left"));
+  for (const d of root.descendantsOfType("range_clause")) if (d) addList(d.childForFieldName("left"));
+  for (const d of root.descendantsOfType("type_switch_statement")) if (d) addList(d.childForFieldName("alias"));
+  for (const t of ["var_spec", "const_spec", "parameter_declaration"] as const) {
+    for (const d of root.descendantsOfType(t)) {
+      if (!d) continue;
+      for (const nm of d.childrenForFieldName("name")) addId(nm);
+    }
+  }
+  return bound;
 }
 
 // ─── Python resolution ───────────────────────────────────────────────────────
@@ -405,13 +654,54 @@ function isTopLevelDef(def: SyntaxNode, root: SyntaxNode): boolean {
   return true;
 }
 
-// ─── Go resolution (stub — populated in a later task) ────────────────────────
+// ─── Go resolution ───────────────────────────────────────────────────────────
 
 /**
- * Stub for Go cross-file middleware body resolution. Task 1 ships only the
- * index skeleton (module path stored, maps empty); Go resolution arrives in a
- * later task. Returns null so the Go extractor's behavior is unchanged today.
+ * Resolve a Go `qualifier.Symbol` selector to its cross-PACKAGE
+ * `function_declaration` body, or null (refuse). `selectorText` is a PURE
+ * selector's text (the caller guarantees purity via `goMiddlewareName`), so the
+ * structural split is a single-dot split. Every refuse path (see the module
+ * invariant + the Go refuse table) returns null:
+ *   - Go disabled (no/replaced/nested go.mod => falsy modulePath);
+ *   - not a simple `pkg.Symbol` (no dot, or a deeper field chain);
+ *   - the importer carries a dot-import (blanket refuse);
+ *   - the qualifier is bound as a LOCAL VALUE in the importer (the value-shadow
+ *     vector: a receiver/param/`:=`/var/const named like the package);
+ *   - the qualifier is not an import of the importer, or maps to null (ambiguous);
+ *   - the target package is unknown, or its files disagree on `pkgName`;
+ *   - the symbol is unexported (lowercase — a real cross-package ref is Capitalized);
+ *   - the symbol is undefined in the package, or defined twice (sticky-null),
+ *     or is a `method_declaration` (never in the function_declaration-only defs).
+ * On success returns the def plus the def's OWN defining-file both-kinds defs.
  */
-export function resolveGoMiddlewareBody(): null {
-  return null;
+export function resolveGoMiddlewareBody(
+  importerRel: string,
+  selectorText: string,
+  index: CrossFileIndex,
+): GoResolvedMiddleware | null {
+  if (!index.go.modulePath) return null; // Go cross-file disabled wholesale
+
+  // Structural split of a pure `qualifier.symbol`: exactly one dot.
+  const dot = selectorText.indexOf(".");
+  if (dot <= 0) return null; // no qualifier, or a leading dot
+  const qualifier = selectorText.slice(0, dot);
+  const symbol = selectorText.slice(dot + 1);
+  if (symbol.length === 0 || symbol.includes(".")) return null; // deeper chain, not pkg.Symbol
+
+  if (index.go.dotImports.has(importerRel)) return null; // dot-import blanket refuse
+  if (index.go.valueBound.get(importerRel)?.has(qualifier)) return null; // local value shadows the package
+
+  const dir = index.go.fileImports.get(importerRel)?.get(qualifier);
+  if (dir === undefined || dir === null) return null; // not imported here, or ambiguous qualifier
+
+  const pkg = index.go.packages.get(dir);
+  if (!pkg || pkg.pkgName === null) return null; // no package, or files disagree on pkgName
+
+  // EXPORTED-only (conservative v1): a cross-package reference is always Capitalized.
+  const first = symbol[0];
+  if (first < "A" || first > "Z") return null;
+
+  const entry = pkg.defs.get(symbol);
+  if (!entry) return null; // undefined (not defined) or null (duplicate across the package's files)
+  return { def: entry.def, defs: entry.fileDefs };
 }
