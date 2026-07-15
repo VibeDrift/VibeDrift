@@ -73,6 +73,8 @@
 
 import type { Tree, SyntaxNode } from "../core/types.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
+import type { CrossFileIndex } from "./security-xfile-index.js";
+import { resolvePyHookBody } from "./security-xfile-index.js";
 
 /** Three-way verdict for a before_request-style hook. `unsure` never blesses
  *  (hasAuth stays false); it only hedges the finding copy so the user is told
@@ -1265,7 +1267,12 @@ function isAuthDecorator(dec: SyntaxNode): boolean {
  *  SAME-FILE def body raises a verified reject (Depends(load_actor) where
  *  load_actor 401s) blesses. Bare Depends() or an unresolvable target resolves
  *  false. */
-function callsWithAuthDependency(scope: SyntaxNode, defs: Map<string, SyntaxNode | null>): boolean {
+function callsWithAuthDependency(
+  scope: SyntaxNode,
+  defs: Map<string, SyntaxNode | null>,
+  importerRel?: string,
+  index?: CrossFileIndex,
+): boolean {
   for (const call of scope.descendantsOfType("call")) {
     if (!call) continue;
     const fn = call.childForFieldName("function");
@@ -1282,6 +1289,24 @@ function callsWithAuthDependency(scope: SyntaxNode, defs: Map<string, SyntaxNode
     if (def) {
       const body = def.childForFieldName("body");
       if (body && bodyAuthSignature(body, defs) === "reject") return true;
+    } else if (!defs.has(name) && index && importerRel) {
+      // Imported dependency (NOT an in-file `defs.get(name) === null` duplicate,
+      // which the `!defs.has(name)` guard still refuses): resolve its in-repo
+      // defining body cross-file. The optional/settings veto is re-run on the
+      // RESOLVED ORIGINAL name (not the call-site alias), so an aliased optional
+      // dependency (load_actor -> get_current_user_optional) can never rule-2
+      // bless. The TARGET file's own defs (x.defs) back the body so its one-hop
+      // helpers resolve in the target, not the importer. Blessing still requires
+      // the resolved body to VERIFIABLY reject — no new bless path is introduced.
+      const x = resolvePyHookBody(index, importerRel, name);
+      if (
+        x &&
+        x.body &&
+        !nameSegments(x.originalName).some((s) => DEPENDS_VETO_SEGMENTS.has(s)) &&
+        bodyAuthSignature(x.body, x.defs) === "reject"
+      ) {
+        return true;
+      }
     }
   }
   return false;
@@ -1291,14 +1316,24 @@ function callsWithAuthDependency(scope: SyntaxNode, defs: Map<string, SyntaxNode
  *  node covers plain defaults (default_parameter), typed defaults
  *  (typed_default_parameter), and Annotated[T, Depends(...)] (typed_parameter,
  *  where the call nests under the TYPE field's generic_type). */
-function paramsHaveAuthDependency(definition: SyntaxNode, defs: Map<string, SyntaxNode | null>): boolean {
+function paramsHaveAuthDependency(
+  definition: SyntaxNode,
+  defs: Map<string, SyntaxNode | null>,
+  importerRel?: string,
+  index?: CrossFileIndex,
+): boolean {
   const params = definition.childForFieldName("parameters");
-  return params ? callsWithAuthDependency(params, defs) : false;
+  return params ? callsWithAuthDependency(params, defs, importerRel, index) : false;
 }
 
 /** Route-decorator-level dependencies kwarg:
  *  @router.post("/x", dependencies=[Depends(verify_token)]). */
-function routeCallHasAuthDependency(call: SyntaxNode, defs: Map<string, SyntaxNode | null>): boolean {
+function routeCallHasAuthDependency(
+  call: SyntaxNode,
+  defs: Map<string, SyntaxNode | null>,
+  importerRel?: string,
+  index?: CrossFileIndex,
+): boolean {
   const args = call.childForFieldName("arguments");
   if (!args) return false;
   const kw = args.namedChildren.find(
@@ -1308,7 +1343,7 @@ function routeCallHasAuthDependency(call: SyntaxNode, defs: Map<string, SyntaxNo
       n.childForFieldName("name")?.text === "dependencies",
   );
   const value = kw?.childForFieldName("value");
-  return value ? callsWithAuthDependency(value, defs) : false;
+  return value ? callsWithAuthDependency(value, defs, importerRel, index) : false;
 }
 
 /** Middleware scopes for one python file. Python file-level middleware attaches
@@ -1333,7 +1368,12 @@ interface PyMiddlewareScopes {
 
 const APP_SCOPED_RECEIVER = /^(?:app|application)$/;
 
-function collectPyMiddleware(tree: Tree, defs: Map<string, SyntaxNode | null>): PyMiddlewareScopes {
+function collectPyMiddleware(
+  tree: Tree,
+  defs: Map<string, SyntaxNode | null>,
+  importerRel?: string,
+  index?: CrossFileIndex,
+): PyMiddlewareScopes {
   const scopes: PyMiddlewareScopes = {
     global: { hasAuth: false, hasValidation: false, hasRateLimit: false },
     byReceiver: new Map(),
@@ -1367,8 +1407,12 @@ function collectPyMiddleware(tree: Tree, defs: Map<string, SyntaxNode | null>): 
     hookName: string,
     body: SyntaxNode | null,
     nameIsSimpleIdentifier: boolean,
+    // The defs the body's own one-hop helper calls resolve against. Defaults to
+    // THIS file's defs (the in-file path); a cross-file body MUST pass the TARGET
+    // file's defs so its helpers resolve in the target, not the importer.
+    defsForBody: Map<string, SyntaxNode | null> = defs,
   ) => {
-    const outcome = classifyHookAuth(hookName, body, defs, nameIsSimpleIdentifier);
+    const outcome = classifyHookAuth(hookName, body, defsForBody, nameIsSimpleIdentifier);
     if (outcome === "auth") mark(receiver, appWide, "hasAuth");
     else if (outcome === "unsure") markUnsure(receiver, appWide, hookName);
     // Validation / rate-limit lanes stay NAME-based and independent of the body:
@@ -1429,9 +1473,29 @@ function collectPyMiddleware(tree: Tree, defs: Map<string, SyntaxNode | null>): 
       if (!arg0) continue; // decorator-form empty call, or before_request() with no target
       const appWide = fn.childForFieldName("attribute")?.text === "before_app_request";
       if (arg0.type === "identifier") {
-        // Same-file def -> classify its body; imported (not in defs) -> name-tier.
-        const def = defs.get(arg0.text) ?? null;
-        applyHookOutcome(receiver, appWide, arg0.text, def ? def.childForFieldName("body") : null, true);
+        if (defs.has(arg0.text)) {
+          // In-file def (or an in-file duplicate mapping to null) takes precedence:
+          // classify its LOCAL body. A same-named cross-file def NEVER overrides a
+          // local one, and this branch is byte-identical to today's behavior.
+          const def = defs.get(arg0.text) ?? null;
+          applyHookOutcome(receiver, appWide, arg0.text, def ? def.childForFieldName("body") : null, true);
+        } else if (index && importerRel) {
+          // Imported hook: resolve its in-repo body cross-file, then classify via
+          // the SAME body-first classifier — no new bless path. The optional-auth
+          // veto is re-run on the RESOLVED ORIGINAL name (not the call-site alias),
+          // so an aliased optional hook (check -> get_current_user_optional) can
+          // never rule-2 bless: on a veto we supply a null body (name-tier only).
+          // The TARGET file's defs (x.defs) back the body so its one-hop helpers
+          // resolve in the target file, not the importer.
+          const x = resolvePyHookBody(index, importerRel, arg0.text);
+          const vetoed =
+            x !== null && nameSegments(x.originalName).some((s) => OPTIONAL_AUTH_VETO.has(s));
+          const body = vetoed ? null : (x?.body ?? null);
+          applyHookOutcome(receiver, appWide, arg0.text, body, true, vetoed ? undefined : x?.defs);
+        } else {
+          // Imported, no index: name-tier only (today's byte-identical behavior).
+          applyHookOutcome(receiver, appWide, arg0.text, null, true);
+        }
       } else if (arg0.type === "attribute") {
         applyHookOutcome(receiver, appWide, arg0.text, null, false); // Cls.method: hedge only
       } else if (arg0.type === "lambda") {
@@ -1479,7 +1543,7 @@ function collectPyMiddleware(tree: Tree, defs: Map<string, SyntaxNode | null>): 
     if (!fn || fn.type !== "identifier") continue;
     if (fn.text !== "APIRouter" && fn.text !== "FastAPI") continue;
     const value = kwargValue(right, "dependencies");
-    if (value && callsWithAuthDependency(value, defs)) mark(left.text, false, "hasAuth");
+    if (value && callsWithAuthDependency(value, defs, importerRel, index)) mark(left.text, false, "hasAuth");
   }
   return scopes;
 }
@@ -1498,12 +1562,19 @@ export function extractPythonFileMiddlewareAst(tree: Tree): FileMiddleware {
   };
 }
 
-export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
+export function extractPythonRoutesAst(
+  tree: Tree,
+  filePath: string,
+  index?: CrossFileIndex,
+): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const routerNames = collectRouterNames(tree.rootNode);
   const methodsVars = collectMethodsVars(tree.rootNode);
   const defs = collectFunctionDefs(tree.rootNode);
-  const scopes = collectPyMiddleware(tree, defs);
+  // filePath IS the importer's relativePath. With `index` absent (the 2-arg
+  // call), every cross-file branch below is skipped, so the whole path is
+  // byte-identical to today's in-file-only behavior.
+  const scopes = collectPyMiddleware(tree, defs, filePath, index);
   for (const dd of tree.rootNode.descendantsOfType("decorated_definition")) {
     // Error recovery can merge adjacent handlers' decorators into one dd;
     // blessing (or even extracting) across that boundary is forbidden.
@@ -1532,7 +1603,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
     const permissionClassRows = decorators
       .filter(isAuthPermissionClasses)
       .map((d) => d.startPosition.row);
-    const paramAuth = paramsHaveAuthDependency(definition, defs);
+    const paramAuth = paramsHaveAuthDependency(definition, defs, filePath, index);
     // Validation / rate-limit lanes match NON-ROUTE decorator CALLEE NAMES only
     // (@limiter.limit -> "limiter.limit", @validate_schema -> "validate_schema"),
     // never argument or path text: @app.post("/validate") is a path, not
@@ -1562,7 +1633,7 @@ export function extractPythonRoutesAst(tree: Tree, filePath: string): RouteInfo[
         (fromApiView &&
           permissionClassRows.some((row) => row > dec.startPosition.row)) ||
         paramAuth ||
-        routeCallHasAuthDependency(route.call, defs) ||
+        routeCallHasAuthDependency(route.call, defs, filePath, index) ||
         scopes.global.hasAuth ||
         (scopes.byReceiver.get(route.receiver)?.hasAuth ?? false);
       // A route is hedged "unsure" ONLY when it is not otherwise authed AND an

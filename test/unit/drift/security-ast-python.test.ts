@@ -8,12 +8,22 @@ import {
   SECURITY_AST_PY,
 } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
+import { buildXFileIndex } from "../../../src/drift/security-xfile-index.js";
 import { securityConsistency } from "../../../src/drift/security-consistency.js";
 import { SECURITY_SUBCATEGORIES } from "../../../src/drift/types.js";
 import type { SyntaxNode } from "../../../src/core/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 
 const py = (path: string, src: string) => fileWithTree(path, src, "python");
+
+/** Build a virtual multi-file python repo (DriftFiles with parsed trees) from
+ *  [relativePath, source] pairs. Parsed SEQUENTIALLY — web-tree-sitter is not
+ *  safe to drive concurrently. */
+async function repo(files: [string, string][]) {
+  const out = [];
+  for (const [path, src] of files) out.push(await py(path, src));
+  return out;
+}
 
 describe("py() test helper (harness prerequisites)", () => {
   it("parses a Python source file into a usable, error-free tree", async () => {
@@ -3341,5 +3351,201 @@ describe("Depends additive-only body bless", () => {
       "/x1 auth=true",
       "/x2 auth=false",
     ]);
+  });
+});
+
+describe("extractPythonRoutesAst: cross-file imported hook / dependency resolution", () => {
+  // HEADLINE — an imported before_request hook whose in-repo body verifiably
+  // rejects blesses every route on its receiver; without the index it stays UNSURE
+  // (never blesses), byte-identical to today.
+  it("imported rejecting before_request hook: unsure -> auth (with index)", async () => {
+    const files = await repo([
+      ["pkg/routes.py",
+        `from .auth import verify_session\n` +
+        `app.before_request(verify_session)\n\n` +
+        `@app.post("/orders")\ndef create_order():\n    return {}\n`],
+      ["pkg/auth.py",
+        `def verify_session():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "pkg/routes.py")!;
+
+    const withIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index);
+    expect(withIdx.map((r) => `${r.method} ${r.path} auth=${r.hasAuth}`)).toEqual([
+      "POST /orders auth=true",
+    ]);
+    expect(withIdx.every((r) => r.authUnsureHook === undefined)).toBe(true);
+
+    // Index absent: today's behavior — unsure, never blessed (byte-identity guard).
+    const noIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath);
+    expect(noIdx.map((r) => `${r.path} auth=${r.hasAuth} hook=${r.authUnsureHook ?? ""}`)).toEqual([
+      "/orders auth=false hook=verify_session",
+    ]);
+  });
+
+  // Boring-named imported Depends: not a name-lexicon hit; blesses ONLY via the
+  // resolved rejecting body (rule 2), never a new name path.
+  it("boring-named imported Depends whose in-repo body rejects blesses", async () => {
+    const files = await repo([
+      ["routes.py",
+        `from .deps import load_actor\n\n` +
+        `@router.get("/me")\ndef me(user=Depends(load_actor)):\n    return user\n`],
+      ["deps.py",
+        `def load_actor():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    expect(extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/me auth=true"]);
+    // Index absent: load_actor is no lexicon hit -> stays not-auth (byte-identity).
+    expect(extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/me auth=false"]);
+  });
+
+  // Direct optional dependency: the CALL-SITE veto short-circuits before any body
+  // or cross-file resolution.
+  it("direct imported Depends(get_current_user_optional) stays not-auth (name veto)", async () => {
+    const files = await repo([
+      ["routes.py",
+        `from .deps import get_current_user_optional\n\n` +
+        `@router.get("/me")\ndef me(user=Depends(get_current_user_optional)):\n    return user\n`],
+      ["deps.py",
+        `def get_current_user_optional():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    expect(extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/me auth=false"]);
+  });
+
+  // ALIASED optional Depends (never-false-bless): the alias hides "optional"; the
+  // veto MUST run on the RESOLVED ORIGINAL name or the rejecting body false-blesses.
+  it("aliased imported Depends(load_actor -> get_current_user_optional) stays not-auth", async () => {
+    const files = await repo([
+      ["routes.py",
+        `from .deps import get_current_user_optional as load_actor\n\n` +
+        `@router.get("/me")\ndef me(user=Depends(load_actor)):\n    return user\n`],
+      ["deps.py",
+        `def get_current_user_optional():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    expect(extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/me auth=false"]);
+  });
+
+  // ALIASED optional before_request hook (never-false-bless): resolved-name veto on
+  // the hook path. Alias `check` has no "optional" segment; the resolved original
+  // does, so the rejecting body must NOT bless.
+  it("aliased imported before_request(check -> get_current_user_optional) stays not-auth", async () => {
+    const files = await repo([
+      ["routes.py",
+        `from .auth import get_current_user_optional as check\n` +
+        `app.before_request(check)\n\n` +
+        `@app.post("/x")\ndef x():\n    return {}\n`],
+      ["auth.py",
+        `def get_current_user_optional():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    const routes = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index);
+    expect(routes.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  // TARGET-file defs: the resolved body's one-hop helper must resolve in the TARGET
+  // file, not the importer. The importer defines a same-named _check that does NOT
+  // reject; the target's _check does. Blessing proves the TARGET defs were supplied.
+  it("resolved body's one-hop helper resolves against the TARGET file's defs", async () => {
+    const files = await repo([
+      ["routes.py",
+        `from .auth import verify_session\n\n` +
+        `def _check():\n    return None\n\n` +
+        `app.before_request(verify_session)\n\n` +
+        `@app.post("/x")\ndef x():\n    return {}\n`],
+      ["auth.py",
+        `def verify_session():\n    _check()\n\n` +
+        `def _check():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    expect(extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index)
+      .map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=true"]);
+  });
+
+  // IN-FILE precedence / byte-identity: a locally-defined verify_session (visible
+  // non-enforcing body) classifies from the LOCAL def; a same-named cross-file
+  // rejecting def never overrides it. Index present === index absent.
+  it("in-file def takes precedence over a same-named cross-file def", async () => {
+    const files = await repo([
+      ["routes.py",
+        `def verify_session():\n    return None\n\n` +
+        `app.before_request(verify_session)\n\n` +
+        `@app.post("/x")\ndef x():\n    return {}\n`],
+      ["auth.py",
+        `def verify_session():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    const withIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index);
+    const noIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath);
+    expect(withIdx.map((r) => `${r.path} auth=${r.hasAuth}`)).toEqual(["/x auth=false"]);
+    expect(withIdx).toEqual(noIdx); // cross-file never consulted
+  });
+
+  // External / not-in-repo symbol: no candidate file -> refuse -> stays UNSURE,
+  // byte-identical to the pre-change serialization.
+  it("imported-from-nonexistent-module hook stays unsure (byte-identical)", async () => {
+    const files = await repo([
+      ["routes.py",
+        `from external_auth import verify_session\n` +
+        `app.before_request(verify_session)\n\n` +
+        `@app.post("/x")\ndef x():\n    return {}\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    const withIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index);
+    const noIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath);
+    expect(withIdx.map((r) => `${r.path} auth=${r.hasAuth} hook=${r.authUnsureHook ?? ""}`))
+      .toEqual(["/x auth=false hook=verify_session"]);
+    expect(withIdx).toEqual(noIdx);
+  });
+
+  // Target with a parse error: resolvePyHookBody refuses (no fileDefs entry) -> the
+  // route stays UNSURE. A broken target must never contribute a bless.
+  it("broken target file never blesses (stays unsure)", async () => {
+    const files = await repo([
+      ["routes.py",
+        `from .auth import verify_session\n` +
+        `app.before_request(verify_session)\n\n` +
+        `@app.post("/x")\ndef x():\n    return {}\n`],
+      // Deliberately unparseable.
+      ["auth.py", `def verify_session(\n    if if if\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    expect(extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index)
+      .map((r) => `${r.path} auth=${r.hasAuth} hook=${r.authUnsureHook ?? ""}`))
+      .toEqual(["/x auth=false hook=verify_session"]);
+  });
+
+  // Aliased-module ATTRIBUTE target (module-qualified form is DEFERRED in v1):
+  // a.check_user is an attribute arg0, never resolved cross-file, byte-identical,
+  // never blessed.
+  it("aliased-module attribute hook target is not resolved cross-file (byte-identical)", async () => {
+    const files = await repo([
+      ["routes.py",
+        `import myapp.auth as a\n` +
+        `app.before_request(a.check_user)\n\n` +
+        `@app.post("/x")\ndef x():\n    return {}\n`],
+      ["myapp/auth.py",
+        `def check_user():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const routeFile = files.find((f) => f.relativePath === "routes.py")!;
+    const withIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath, index);
+    const noIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath);
+    expect(withIdx.every((r) => r.hasAuth === false)).toBe(true);
+    expect(withIdx).toEqual(noIdx);
   });
 });
