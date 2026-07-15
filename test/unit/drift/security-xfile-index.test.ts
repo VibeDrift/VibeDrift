@@ -7,8 +7,10 @@ import {
   resolvePyHookBody,
   resolveGoMiddlewareBody,
 } from "../../../src/drift/security-xfile-index.js";
-import { bodyAuthSignature } from "../../../src/drift/security-ast-python.js";
-import { bodyAuthSignatureGo, resolveEffectiveBody } from "../../../src/drift/security-ast-go.js";
+import { bodyAuthSignature, extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
+import {
+  bodyAuthSignatureGo, resolveEffectiveBody, extractGoRoutesAst,
+} from "../../../src/drift/security-ast-go.js";
 
 /** Build a virtual Go repo (array of DriftFiles with parsed trees) from
  *  [relativePath, source] pairs. Parsed SEQUENTIALLY (web-tree-sitter is not
@@ -533,5 +535,97 @@ describe("resolveGoMiddlewareBody — determinism (order-independence)", () => {
     expect(a.go.packages.get("internal/middleware")!.defs.get("AuthMiddleware")).toBeNull();
     expect(b.go.packages.get("internal/middleware")!.defs.get("AuthMiddleware")).toBeNull();
     expect(a.go.packages.get("internal/middleware")!.defs.get("LegacyOnly")).not.toBeNull();
+  });
+});
+
+// ─── Task 5 catalog completion: remaining Go value-shadow binding forms ─────
+//
+// The REFUSE loop above (":=", "method RECEIVER", "const", "named RETURN")
+// predates the Task 5 adversarial catalog, which additionally requires "var",
+// a plain "param", and a "type-switch guard" binding form. Appended here
+// (rather than edited into the existing loop) to keep this file's prior pins
+// untouched. Same shape and same positive-control discipline: the middleware
+// package DOES define a genuinely rejecting AuthMiddleware, so the ONLY
+// reason each of these refuses is the value-shadowed qualifier.
+describe("resolveGoMiddlewareBody — REFUSE cases (value-shadow catalog completion)", () => {
+  for (const [label, importer] of [
+    ["var (var_spec)", `package handlers\n\nimport "myapp/internal/middleware"\n\nvar middleware int\n`],
+    ["param (parameter_declaration)", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(middleware int) {}\n`],
+    ["type-switch guard", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(x interface{}) {\n\tswitch middleware := x.(type) {\n\tdefault:\n\t\t_ = middleware\n\t}\n}\n`],
+  ] as const) {
+    it(`refuses a VALUE-SHADOWED qualifier — ${label}`, async () => {
+      const index = buildXFileIndex(await goRepo([
+        ["handlers/routes.go", importer],
+        ["internal/middleware/auth.go", GO_REJECT_FACTORY],
+      ]), "myapp");
+      expect(index.go.valueBound.get("handlers/routes.go")!.has("middleware")).toBe(true);
+      expect(resolveGoMiddlewareBody("handlers/routes.go", "middleware.AuthMiddleware", index)).toBeNull();
+    });
+  }
+});
+
+// ─── Task 5: DETERMINISM (route-level, cross-file positives) ────────────────
+//
+// Step 5 of the adversarial sweep: for a Python cross-file positive and a Go
+// cross-file positive, permute the DriftFile order (def-before-route,
+// route-before-def, and a third fixed shuffle — a reverse-permutation is
+// enough to prove order-independence without RNG flakiness, matching this
+// file's own `reversed()` convention) and confirm the EXTRACTED ROUTES
+// (hasAuth / authUnsureHook included) are identical in every order, and that
+// an UNRELATED duplicate def in the same repo resolves to null in every order
+// too (poisoned, never first-wins).
+
+describe("DETERMINISM (route-level, cross-file positives)", () => {
+  it("Python: permuted file order yields identical routes; an unrelated duplicate stays null in every order", async () => {
+    const spec: [string, string][] = [
+      ["pkg/routes.py",
+        `from .auth import verify_session\n` +
+        `app.before_request(verify_session)\n\n` +
+        `@app.post("/orders")\ndef create_order():\n    return {}\n`],
+      ["pkg/auth.py",
+        `def verify_session():\n    if session.get("user_id") is None:\n        abort(401)\n`],
+      // Unrelated to the route: a same-file duplicate def, must poison to null
+      // in every permutation (never first-wins).
+      ["pkg/other.py", `def dup():\n    return 1\n\ndef dup():\n    return 2\n`],
+    ];
+    const orders = [spec, reversed(spec), [spec[1], spec[2], spec[0]]];
+    let prevRoutes: unknown;
+    for (const order of orders) {
+      const files = await repo(order);
+      const index = buildXFileIndex(files);
+      const rf = files.find((f) => f.relativePath === "pkg/routes.py")!;
+      const routes = extractPythonRoutesAst(rf.tree!, rf.relativePath, index);
+      expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth} hook=${r.authUnsureHook ?? ""}`)).toEqual([
+        "POST /orders auth=true hook=",
+      ]);
+      if (prevRoutes !== undefined) expect(routes).toEqual(prevRoutes);
+      prevRoutes = routes;
+      expect(index.py.fileDefs.get("pkg/other.py")!.get("dup")).toBeNull();
+    }
+  });
+
+  it("Go: permuted file order yields identical routes; an unrelated duplicate stays null in every order", async () => {
+    const spec: [string, string][] = [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", GO_REJECT_FACTORY],
+      // Unrelated to the route: a same-package duplicate def, must poison to
+      // null in every permutation.
+      ["internal/dup/a.go", `package dup\n\nfunc Dup() {}\n`],
+      ["internal/dup/b.go", `package dup\n\nfunc Dup() {}\n`],
+    ];
+    const orders = [spec, reversed(spec), [spec[2], spec[3], spec[0], spec[1]]];
+    let prevRoutes: unknown;
+    for (const order of orders) {
+      const files = await goRepo(order);
+      const index = buildXFileIndex(files, "myapp");
+      const rf = files.find((f) => f.relativePath === "handlers/routes.go")!;
+      const routes = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+      expect(routes.map((r) => `${r.method} ${r.path} auth=${r.hasAuth} hook=${r.authUnsureHook ?? ""}`)).toEqual([
+        "POST /x auth=true hook=",
+      ]);
+      if (prevRoutes !== undefined) expect(routes).toEqual(prevRoutes);
+      prevRoutes = routes;
+      expect(index.go.packages.get("internal/dup")!.defs.get("Dup")).toBeNull();
+    }
   });
 });

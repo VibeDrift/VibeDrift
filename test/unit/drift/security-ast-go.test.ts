@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   extractGoRoutesAst, extractGoFileMiddlewareAst, SECURITY_AST_GO,
   bodyAuthSignatureGo, classifyGoMiddlewareAuth, collectGoFunctionDefs,
+  resolveEffectiveBody,
 } from "../../../src/drift/security-ast-go.js";
 import { SECURITY_AST } from "../../../src/drift/security-ast.js";
-import { buildXFileIndex } from "../../../src/drift/security-xfile-index.js";
+import { buildXFileIndex, resolveGoMiddlewareBody } from "../../../src/drift/security-xfile-index.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 import type { SyntaxNode } from "../../../src/core/types.js";
 import type { DriftFile } from "../../../src/drift/types.js";
@@ -2533,5 +2534,279 @@ describe("Task 4: Go cross-file wiring — byte-identity pins (external + in-fil
     const withoutIndex = extractGoRoutesAst(rf.tree!, rf.relativePath);
     expect(withIndex).toEqual(withoutIndex);
     expect(withIndex[0].hasAuth).toBe(false);
+  });
+});
+
+// ─── Task 5: adversarial never-false-bless sweep (cross-file, Go) ───────────
+//
+// GOVERNING INVARIANT — a WRONG cross-file attribution is a false-bless.
+// Every entry below registers a REAL rejecting body somewhere in the repo, so
+// a broken refuse guard would visibly bless the route; the sweep asserts it
+// never does. classifyGoMiddlewareAuth never blesses on name alone (unlike
+// the Python module), so no CORE-name trap exists here — every refusal is
+// driven by cross-file resolution / the arity gate, not a name shortcut.
+
+interface GoXFileSweepEntry {
+  name: string;
+  files: [string, string][];
+  routeFile: string;
+  goMod: string | null;
+  groundTruth: Array<{ path: string; method: string; authed: boolean }>;
+}
+
+// The seven Go value-shadow binding forms (Task 5 required catalog), each
+// combined with a REAL r.POST(...) route selecting `middleware.AuthMiddleware`
+// — the shadow lives in an UNRELATED function/decl in the SAME file (valueBound
+// is file-wide, not scope-aware, so this still poisons the qualifier).
+const GO_VALUE_SHADOW_FORMS: Array<[string, string]> = [
+  [":=", `func helper() {\n\tmiddleware := 0\n\t_ = middleware\n}\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+  ["var", `var middleware int\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+  ["const", `const middleware = 0\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+  ["param", `func helper(middleware int) {}\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+  ["RECEIVER", `type Server struct{}\n\nfunc (middleware *Server) Helper() {}\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+  ["named-return", `func helper() (middleware int) {\n\treturn\n}\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+  ["type-switch guard", `func helper(x interface{}) {\n\tswitch middleware := x.(type) {\n\tdefault:\n\t\t_ = middleware\n\t}\n}\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+];
+
+const NEVER_FALSE_BLESS_XFILE_GO: GoXFileSweepEntry[] = [
+  {
+    name: "external package (not under module path)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "github.com/foo/mw"\n\nfunc Register(r Router) {\n\tr.POST("/x", mw.Auth(), createX)\n}\n`],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "no go.mod (Go cross-file disabled wholesale)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", XFILE_REJECT_FACTORY],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: null,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    // The plumbing collapses goModulePath to null on a `replace` directive; at
+    // this layer that is simply a null module path, mechanically identical to
+    // "no go.mod" — pinned separately per the catalog for documentation.
+    name: "replace directive present (goModulePath forced null upstream)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", XFILE_REJECT_FACTORY],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: null,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "dot-import blanket refuse",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport (\n\t"myapp/internal/middleware"\n\t. "myapp/helpers"\n)\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", XFILE_REJECT_FACTORY],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  ...GO_VALUE_SHADOW_FORMS.map(([label, body]) => ({
+    name: `value-shadow — ${label}`,
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\n${body}`],
+      ["internal/middleware/auth.go", XFILE_REJECT_FACTORY],
+    ] as [string, string][],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  })),
+  {
+    name: "package-name mismatch (plain import, declared package != qualifier)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", `package authpkg\n\nfunc AuthMiddleware() Handler {\n\treturn func(c *Ctx) {\n\t\tc.AbortWithStatus(401)\n\t}\n}\n`],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "method-target (selector points at a method_declaration, not a function)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.Use(middleware.RequireAuth)\n\tr.POST("/x", createX)\n}\n`],
+      ["internal/middleware/auth.go", `package middleware\n\nimport "net/http"\n\ntype Mw struct{}\n\nfunc (m *Mw) RequireAuth(c *Ctx) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\treturn\n\t}\n\tc.Next()\n}\n`],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "duplicate-across-package-files (sticky-null)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", XFILE_REJECT_FACTORY],
+      ["internal/middleware/legacy.go", `package middleware\n\nfunc AuthMiddleware() Handler {\n\treturn nil\n}\n`],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "two-dir same-package-name (ambiguous qualifier)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport (\n\t"myapp/pkgA"\n\t"myapp/pkgB"\n)\n\nfunc Register(r Router) {\n\tr.POST("/x", foo.AuthMiddleware(), createX)\n}\n`],
+      ["pkgA/a.go", `package foo\n\nimport "net/http"\n\nfunc AuthMiddleware() Handler {\n\treturn func(c *Ctx) {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t}\n}\n`],
+      ["pkgB/b.go", `package foo\n\nfunc Other() {}\n`],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "wrong-dir same-symbol: imported dir lacks it, a DIFFERENT dir defines a rejecting one (WRONG-FILE)",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/other.go", `package middleware\n\nfunc Other() {}\n`],
+      ["internal/authz/guard.go", `package middleware\n\nimport "net/http"\n\nfunc AuthMiddleware() Handler {\n\treturn func(c *Ctx) {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t}\n}\n`],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "multi-file package: one-hop resolves against the def's OWN file, never a sibling's rejecting helper",
+    files: [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      // AuthMiddleware's OWN file's authImpl does NOT reject.
+      ["internal/middleware/auth.go", `package middleware\n\nfunc AuthMiddleware() Handler {\n\treturn func(c *Ctx) {\n\t\tauthImpl(c)\n\t}\n}\n\nfunc authImpl(c *Ctx) {\n\tc.Next()\n}\n`],
+      // A DIFFERENT sibling file's SAME-NAMED authImpl DOES reject — must never
+      // drive the verdict.
+      ["internal/middleware/helpers.go", `package middleware\n\nimport "net/http"\n\nfunc authImpl(c *Ctx) {\n\tc.AbortWithStatus(http.StatusUnauthorized)\n}\n`],
+    ],
+    routeFile: "handlers/routes.go",
+    goMod: "myapp",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+];
+
+describe("NEVER-FALSE-BLESS adversarial sweep (cross-file, Go)", () => {
+  it("no ground-truth-unauthed route is ever emitted hasAuth:true (cross-file)", async () => {
+    for (const e of NEVER_FALSE_BLESS_XFILE_GO) {
+      const files = await goRepo(e.files);
+      const index = buildXFileIndex(files, e.goMod);
+      const rf = files.find((f) => f.relativePath === e.routeFile)!;
+      const routes = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+      for (const gt of e.groundTruth.filter((g) => !g.authed)) {
+        const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
+        // Non-vacuous: the route must actually have been extracted (the
+        // classifier genuinely ran).
+        expect(emitted, `${e.name}: route was never extracted`).toBeDefined();
+        expect(emitted?.hasAuth ?? false, `${e.name}: ${gt.method} ${gt.path}`).toBe(false);
+      }
+    }
+  });
+});
+
+describe("EXTERNAL-PARITY (cross-file adds zero blesses for out-of-repo Go symbols)", () => {
+  const EXTERNAL_FIXTURES_GO: Array<[string, [string, string][]]> = [
+    ["external package (github.com/...)", [
+      ["handlers/routes.go", `package handlers\n\nimport "github.com/foo/mw"\n\nfunc Register(r Router) {\n\tr.Use(mw.Auth)\n\tr.POST("/x", createX)\n}\n`],
+    ]],
+    ["method-target (never a function_declaration)", [
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.Use(middleware.RequireAuth)\n\tr.POST("/x", createX)\n}\n`],
+      ["internal/middleware/auth.go", `package middleware\n\nimport "net/http"\n\ntype Mw struct{}\n\nfunc (m *Mw) RequireAuth(c *Ctx) {\n\tif c.GetHeader("Authorization") == "" {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\treturn\n\t}\n\tc.Next()\n}\n`],
+    ]],
+    ["dot-import blanket refuse", [
+      ["handlers/routes.go", `package handlers\n\nimport (\n\t"myapp/internal/middleware"\n\t. "myapp/helpers"\n)\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", XFILE_REJECT_FACTORY],
+    ]],
+  ];
+
+  it("index-present and index-absent RouteInfo arrays are byte-identical for every external Go fixture", async () => {
+    for (const [name, spec] of EXTERNAL_FIXTURES_GO) {
+      const files = await goRepo(spec);
+      const index = buildXFileIndex(files, "myapp");
+      const rf = files.find((f) => f.relativePath === "handlers/routes.go")!;
+      const withIndex = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+      const withoutIndex = extractGoRoutesAst(rf.tree!, rf.relativePath);
+      expect(withIndex, name).toEqual(withoutIndex);
+    }
+  });
+});
+
+describe("WRONG-FILE guard (Go, the single most important cross-file pin)", () => {
+  it("imported dir lacking the symbol never falls back to a different dir's rejecting same-name def", async () => {
+    const files = await goRepo([
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/other.go", `package middleware\n\nfunc Other() {}\n`],
+      ["internal/authz/guard.go", `package middleware\n\nimport "net/http"\n\nfunc AuthMiddleware() Handler {\n\treturn func(c *Ctx) {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t}\n}\n`],
+    ]);
+    const index = buildXFileIndex(files, "myapp");
+    const rf = routeFile(files);
+    const routes = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasAuth).toBe(false);
+
+    // Direct proof: resolution is PATH-ANCHORED to the imported dir only —
+    // there is no repo-wide name-search fallback.
+    expect(resolveGoMiddlewareBody("handlers/routes.go", "middleware.AuthMiddleware", index)).toBeNull();
+  });
+});
+
+describe("ONE-HOP-CEILING (Go): a second cross-package hop is never followed", () => {
+  it("a resolved factory whose reject lives behind a cross-PACKAGE call stays not-auth", async () => {
+    const files = await goRepo([
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      // AuthMiddleware's body calls a DIFFERENT imported package's function — a
+      // SECOND cross-file (cross-package) hop the body scanner never walks.
+      ["internal/middleware/auth.go", `package middleware\n\nimport "myapp/internal/other"\n\nfunc AuthMiddleware() Handler {\n\treturn func(c *Ctx) {\n\t\tother.Helper(c)\n\t}\n}\n`],
+      ["internal/other/helper.go", `package other\n\nimport "net/http"\n\nfunc Helper(c *Ctx) {\n\tc.AbortWithStatus(http.StatusUnauthorized)\n}\n`],
+    ]);
+    const index = buildXFileIndex(files, "myapp");
+    const rf = routeFile(files);
+    const routes = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasAuth).toBe(false);
+
+    // Non-vacuous: the FIRST hop resolves fine (AuthMiddleware's body IS
+    // found); the reject lives behind a SECOND, cross-package call the body
+    // scanner never walks (bodyAuthSignatureGo's hop is a same-file bare
+    // identifier only — a selector call to another package is invisible).
+    const resolved = resolveGoMiddlewareBody("handlers/routes.go", "middleware.AuthMiddleware", index);
+    expect(resolved).not.toBeNull();
+    const effective = resolveEffectiveBody(resolved!.def, resolved!.defs);
+    expect(effective).not.toBeNull();
+    expect(bodyAuthSignatureGo(effective!, resolved!.defs)).not.toBe("reject");
+  });
+});
+
+// ─── Task 4 review — required arity-gate pin (mandatory addition) ───────────
+//
+// The shipped Task 4 DI test (NewGuardedHandler, above) passes via a NAME
+// VETO ("handler" is a GO_AUTH_VETO_SEGMENTS member baked into the callee
+// name "NewGuardedHandler"), which fires at classifyGoMiddlewareAuth's rule 1
+// BEFORE the arity gate is ever relevant — so that test alone does not prove
+// isPureSelectorTarget's `arity <= 1` gate is doing anything. This pin uses a
+// callee name ("Protect") carrying NO veto segment and NO GO_AUTH_SEGMENTS
+// flavor, wired to a body that genuinely 401s unconditionally, so ONLY the
+// arity gate can be preventing the bless. Verified to fail RED with the gate
+// removed (see task-5-report.md for the evidence).
+
+describe("Task 4 review — required arity-gate pin (protects isPureSelectorTarget's arity<=1 gate)", () => {
+  it("a non-veto, non-flavored arity-2 imported factory never blesses cross-file", async () => {
+    const files = await goRepo([
+      ["handlers/routes.go", `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(mux Router) {\n\tmux.Handle("/x", middleware.Protect(handler, cfg))\n}\n`],
+      ["internal/middleware/auth.go", `package middleware\n\nfunc Protect(next Handler, cfg Config) Handler {\n\treturn func(c *Ctx) {\n\t\tc.AbortWithStatus(401)\n\t}\n}\n`],
+    ]);
+    const index = buildXFileIndex(files, "myapp");
+    const rf = routeFile(files);
+    const routes = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(routes).toHaveLength(1);
+    // "Protect" carries no veto segment and no auth-flavor segment, and the
+    // resolved body genuinely rejects unconditionally — the ONLY thing
+    // stopping a false-bless here is the arity<=1 gate refusing to even
+    // ATTEMPT cross-file resolution of a 2-argument call.
+    expect(routes[0].hasAuth).toBe(false);
   });
 });

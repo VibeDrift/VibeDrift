@@ -8,7 +8,7 @@ import {
   SECURITY_AST_PY,
 } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
-import { buildXFileIndex } from "../../../src/drift/security-xfile-index.js";
+import { buildXFileIndex, resolvePyHookBody } from "../../../src/drift/security-xfile-index.js";
 import { securityConsistency } from "../../../src/drift/security-consistency.js";
 import { SECURITY_SUBCATEGORIES } from "../../../src/drift/types.js";
 import type { SyntaxNode } from "../../../src/core/types.js";
@@ -3547,5 +3547,325 @@ describe("extractPythonRoutesAst: cross-file imported hook / dependency resoluti
     const noIdx = extractPythonRoutesAst(routeFile.tree!, routeFile.relativePath);
     expect(withIdx.every((r) => r.hasAuth === false)).toBe(true);
     expect(withIdx).toEqual(noIdx);
+  });
+});
+
+// ─── Task 5: adversarial never-false-bless sweep (cross-file, Python) ────────
+//
+// GOVERNING INVARIANT — a WRONG cross-file attribution (a route blessed from
+// the wrong body, or blessed when resolution should have refused) is a
+// false-bless. Every entry below registers a REAL rejecting body somewhere in
+// the repo, so a broken refuse guard would visibly bless the route; the sweep
+// asserts it never does. Hook names use "verify_session" (never "authenticate"
+// or another AUTH_CORE_SEGMENTS/DEPENDS_AUTH_SEGMENTS member) so no entry is
+// accidentally satisfied by the PRE-EXISTING name-only CORE bless
+// (classifyHookAuth rule 5) or the Depends name-lexicon hit — every refusal
+// here is driven by cross-file resolution, not a name shortcut.
+
+interface PyXFileSweepEntry {
+  name: string;
+  files: [string, string][];
+  routeFile: string;
+  groundTruth: Array<{ path: string; method: string; authed: boolean }>;
+}
+
+const REJECT = (name: string) =>
+  `def ${name}():\n    if session.get("user_id") is None:\n        abort(401)\n`;
+
+const PY_NEVER_FALSE_BLESS_XFILE: PyXFileSweepEntry[] = [
+  {
+    name: "absolute (dotted) import — never a resolvable target",
+    files: [
+      ["app/routes.py", `from app.auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "relative import beyond the repo root",
+    files: [
+      ["routes.py", `from ..auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["auth.py", REJECT("verify_session")],
+    ],
+    routeFile: "routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "multi-candidate: module.py AND package/__init__.py both exist",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+      ["app/auth/__init__.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "duplicate def in the target file",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", `${REJECT("verify_session")}\ndef verify_session():\n    return None\n`],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "symbol absent in target, defined only by a sibling (WRONG-FILE)",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", `def helpers():\n    return 1\n`],
+      ["app/other.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "wildcard import binds the used name directly (wildcard-name)",
+    files: [
+      ["app/routes.py", `from .auth import *\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "wildcard elsewhere + explicit co-import (WILDCARD-PRESENT blanket refuse)",
+    files: [
+      ["app/routes.py", `from .other import *\nfrom .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+      ["app/other.py", `def other():\n    return 1\n`],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "re-export chain deeper than one hop (depth exceeded)",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth/__init__.py", `from .a import verify_session\n`],
+      ["app/auth/a.py", `from .b import verify_session\n`],
+      ["app/auth/b.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "target file has a parse error",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", `def verify_session(\n    if if if\n`],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "module-scope assignment shadows the imported name (local-shadow)",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\nverify_session = None\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "poisoned: two RELATIVE imports bind the same name",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\nfrom .other_auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+      ["app/other_auth.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "poisoned: relative + ABSOLUTE import bind the same name",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\nfrom thirdparty import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "poisoned: relative + `import x as name` bind the same name",
+    files: [
+      ["app/routes.py", `from .auth import verify_session\nimport thirdparty as verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "ALIASED-OPTIONAL: alias hides the optional-auth veto name",
+    files: [
+      ["app/routes.py", `from .auth import get_current_user_optional as check\napp.before_request(check)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("get_current_user_optional")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+  {
+    name: "attribute (module-qualified) hook target is never resolved cross-file",
+    files: [
+      ["app/routes.py", `import myapp.auth as a\napp.before_request(a.check_user)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["myapp/auth.py", REJECT("check_user")],
+    ],
+    routeFile: "app/routes.py",
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  },
+];
+
+describe("NEVER-FALSE-BLESS adversarial sweep (cross-file, Python)", () => {
+  it("no ground-truth-unauthed route is ever emitted hasAuth:true (cross-file)", async () => {
+    for (const e of PY_NEVER_FALSE_BLESS_XFILE) {
+      const files = await repo(e.files);
+      const index = buildXFileIndex(files);
+      const rf = files.find((f) => f.relativePath === e.routeFile)!;
+      const routes = extractPythonRoutesAst(rf.tree!, rf.relativePath, index);
+      for (const gt of e.groundTruth.filter((g) => !g.authed)) {
+        const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
+        // Non-vacuous: the route must actually have been extracted (the
+        // classifier genuinely ran) — a route that silently vanished would
+        // trivially satisfy the hasAuth assertion below without proving anything.
+        expect(emitted, `${e.name}: route was never extracted`).toBeDefined();
+        expect(emitted?.hasAuth ?? false, `${e.name}: ${gt.method} ${gt.path}`).toBe(false);
+      }
+    }
+  });
+});
+
+describe("EXTERNAL-PARITY (cross-file adds zero blesses for out-of-repo Python symbols)", () => {
+  const EXTERNAL_FIXTURES: Array<[string, [string, string][]]> = [
+    ["import from a module that does not exist in-repo", [
+      ["app/routes.py", `from .external_auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+    ]],
+    ["absolute (dotted) import of an in-repo-looking module", [
+      ["app/routes.py", `from app.auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+    ]],
+    ["attribute (module-qualified) target", [
+      ["app/routes.py", `import myapp.auth as a\napp.before_request(a.check_user)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["myapp/auth.py", REJECT("check_user")],
+    ]],
+    ["wildcard import present", [
+      ["app/routes.py", `from .auth import *\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("verify_session")],
+    ]],
+  ];
+
+  it("index-present and index-absent RouteInfo arrays are byte-identical for every external fixture", async () => {
+    for (const [name, spec] of EXTERNAL_FIXTURES) {
+      const files = await repo(spec);
+      const index = buildXFileIndex(files);
+      const rf = files.find((f) => f.relativePath === "app/routes.py")!;
+      const withIndex = extractPythonRoutesAst(rf.tree!, rf.relativePath, index);
+      const withoutIndex = extractPythonRoutesAst(rf.tree!, rf.relativePath);
+      expect(withIndex, name).toEqual(withoutIndex);
+    }
+  });
+});
+
+describe("WRONG-FILE guard (Python, the single most important cross-file pin)", () => {
+  it("a boring TARGET-file body wins over a rejecting SIBLING with the same name", async () => {
+    const files = await repo([
+      ["app/routes.py", `from .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      // The EXACT import target: boring, visible, non-enforcing.
+      ["app/auth.py", `def verify_session():\n    return None\n`],
+      // A sibling with the SAME name that DOES reject — must never be consulted.
+      ["app/other.py", REJECT("verify_session")],
+    ]);
+    const index = buildXFileIndex(files);
+    const rf = files.find((f) => f.relativePath === "app/routes.py")!;
+    const routes = extractPythonRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(routes).toHaveLength(1);
+    // The TARGET file's own boring body drives the verdict: a visible
+    // non-enforcing body is flat not-auth (rule 3), never hedged, and the
+    // sibling's reject is NEVER consulted — there is no repo-wide name search.
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+
+    // Direct proof: resolvePyHookBody resolves to the TARGET's own boring
+    // body specifically, never the sibling's rejecting one.
+    const resolved = resolvePyHookBody(index, "app/routes.py", "verify_session");
+    expect(resolved).not.toBeNull();
+    expect(bodyAuthSignature(resolved!.body!, resolved!.defs)).toBe("none");
+  });
+});
+
+describe("ONE-HOP-CEILING (Python): a second cross-file hop is never followed", () => {
+  it("a resolved hook whose reject needs a SECOND cross-file hop stays not-auth", async () => {
+    const files = await repo([
+      ["app/routes.py", `from .auth import verify_session\napp.before_request(verify_session)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      // The FIRST hop's target: verify_session calls a helper that is itself
+      // IMPORTED (a second cross-file hop), never defined in auth.py.
+      ["app/auth.py", `from .helpers import _check\n\ndef verify_session():\n    _check()\n`],
+      ["app/helpers.py", REJECT("_check")],
+    ]);
+    const index = buildXFileIndex(files);
+    const rf = files.find((f) => f.relativePath === "app/routes.py")!;
+    const routes = extractPythonRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasAuth).toBe(false);
+
+    // Non-vacuous: the FIRST hop resolves fine (auth.py's verify_session IS
+    // found); the reject only lives two hops away (helpers.py's _check), which
+    // classification never reaches — it uses ONLY the defining file's own defs.
+    const resolved = resolvePyHookBody(index, "app/routes.py", "verify_session");
+    expect(resolved).not.toBeNull();
+    expect(resolved!.defs.has("_check")).toBe(false); // _check is not in auth.py's own defs
+    expect(bodyAuthSignature(resolved!.body!, resolved!.defs)).not.toBe("reject");
+  });
+});
+
+// ─── Task 2 review — required Python coverage pins (mandatory additions) ─────
+
+describe("Task 2 review — required Python coverage pins", () => {
+  it("DIRECT (non-aliased) imported optional HOOK stays not-auth via the resolved-name veto", async () => {
+    const files = await repo([
+      ["app/routes.py", `from .auth import get_current_user_optional\napp.before_request(get_current_user_optional)\n\n@app.post("/x")\ndef x():\n    return {}\n`],
+      ["app/auth.py", REJECT("get_current_user_optional")],
+    ]);
+    const index = buildXFileIndex(files);
+    const rf = files.find((f) => f.relativePath === "app/routes.py")!;
+
+    // Non-vacuous: resolution DOES succeed (the target body IS the rejecting
+    // one) — the optional-auth veto is what stops the bless, not a resolution
+    // failure.
+    const resolved = resolvePyHookBody(index, "app/routes.py", "get_current_user_optional");
+    expect(resolved).not.toBeNull();
+    expect(bodyAuthSignature(resolved!.body!, resolved!.defs)).toBe("reject");
+
+    const routes = extractPythonRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBeUndefined();
+  });
+
+  it("a TARGET body calling a helper that exists ONLY in the importer does not bless (helper-only-in-importer inverse)", async () => {
+    const files = await repo([
+      ["app/routes.py",
+        `from .auth import verify_session\n\n` +
+        `def _check():\n    if session.get("user_id") is None:\n        abort(401)\n\n` +
+        `app.before_request(verify_session)\n\n` +
+        `@app.post("/x")\ndef x():\n    return {}\n`],
+      // The TARGET file's verify_session calls _check — but _check exists
+      // ONLY in the importer above, never here.
+      ["app/auth.py", `def verify_session():\n    _check()\n`],
+    ]);
+    const index = buildXFileIndex(files);
+    const rf = files.find((f) => f.relativePath === "app/routes.py")!;
+
+    // Non-vacuous: resolution DOES succeed (the target body IS found) — but
+    // `_check` exists ONLY in the importer (routes.py), never in the target's
+    // (auth.py) own defs, so the one-hop MUST NOT reach across to it.
+    const resolved = resolvePyHookBody(index, "app/routes.py", "verify_session");
+    expect(resolved).not.toBeNull();
+    expect(resolved!.defs.has("_check")).toBe(false);
+    expect(bodyAuthSignature(resolved!.body!, resolved!.defs)).not.toBe("reject");
+
+    const routes = extractPythonRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(routes).toHaveLength(1);
+    expect(routes[0].hasAuth).toBe(false);
   });
 });
