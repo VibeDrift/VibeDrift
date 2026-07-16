@@ -7,9 +7,11 @@ import { fileWithTree } from "../../helpers/drift-tree.js";
 import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
 import { extractGoFileMiddlewareAst, extractGoRoutesAst } from "../../../src/drift/security-ast-go.js";
+import { extractRustRoutesAst } from "../../../src/drift/security-ast-rust.js";
 import {
   SECURITY_SUPPRESSION_SUBCATEGORY,
   SECURITY_SUPPRESSION_ANALYZER_ID,
+  applyRouteSuppressions,
 } from "../../../src/drift/security-suppression.js";
 import { renderTerminalOutput } from "../../../src/output/terminal.js";
 import type { ScanResult, Finding } from "../../../src/core/types.js";
@@ -1998,5 +2000,157 @@ describe("Rust AST wiring (Task 4)", () => {
     // Meaningful: the non-rust findings actually present (the JS deviator fires),
     // so this is a real byte-for-byte comparison, not two empty arrays.
     expect(withoutRust.length).toBeGreaterThan(0);
+  });
+});
+
+// ── Task 5 (Rust): malformed input at dispatch (G9) ───────────────────────────
+//
+// The whole-file clean-tree gate (`file.tree && !file.tree.rootNode.hasError`)
+// lives in security-consistency.ts's `extractRustRoutes` DISPATCH wrapper, not
+// inside `extractRustRoutesAst` itself (see the companion per-construct pin in
+// security-ast-rust.test.ts, "malformed and adversarial input (G8)"). These
+// pins prove the dispatch gate is unconditional on rootNode.hasError, covering
+// several distinct kinds of syntax error, and is STRICTER than the raw
+// extractor (which can still find an isolated clean construct).
+describe("Task 5 (Rust): malformed input at dispatch (G9)", () => {
+  const rsTree = (p: string, c: string) => fileWithTree(p, c, "rust");
+  const requireAuthFn =
+    `async fn require_auth(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+    `    let t = req.headers().get("Authorization");\n` +
+    `    if t.is_none() { return Err(StatusCode::UNAUTHORIZED); }\n` +
+    `    Ok(next.run(req).await)\n}\n`;
+  const sevenAuthedThen = (lastPath: string) =>
+    requireAuthFn +
+    `fn app() -> Router {\n    Router::new()\n` +
+    ["/a", "/b", "/c", "/d", "/e", "/f", "/g"].map((p) => `        .route("${p}", post(h))\n`).join("") +
+    `        .layer(middleware::from_fn(require_auth))\n` +
+    `        .route("${lastPath}", post(h))\n}\n`;
+
+  it("a hand-built errored tree contributes ZERO routes through the dispatch gate, even though extractRustRoutesAst alone would find one", async () => {
+    // Non-vacuous companion to the G8 per-construct pin: the SAME source (an
+    // earlier clean route followed by a syntactically broken trailing fn) is
+    // proven elsewhere to yield a route when extractRustRoutesAst is called
+    // directly. Through the full dispatch + vote pipeline, with 7 authed peers
+    // that WOULD flag a deviator if /x's route were counted unauthed, nothing
+    // fires: the dispatch gate discards the whole broken file outright.
+    const peers = await rsTree("src/g9peers/api.rs", sevenAuthedThen("/stripped"));
+    const broken = await rsTree("src/g9broken/api.rs",
+      `fn app() -> Router {\n    Router::new().route("/x", post(h))\n}\n` +
+      `fn broken( {{{ .route(\n`);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    const findings = securityConsistency.detect(mkCtx([peers, broken]));
+    const auths = findings.filter((x) => x.subCategory === SECURITY_SUBCATEGORIES.auth);
+    // Only /stripped (from the clean peers file) deviates; /x from the broken
+    // file never enters the vote at all.
+    expect(auths).toHaveLength(1);
+    expect(auths[0].deviatingFiles.map((d: any) => d.evidence[0].code)).toEqual(["POST /stripped"]);
+  });
+
+  it.each([
+    ["unbalanced brace", `fn oops() { let x = 1;\n`],
+    ["unterminated string literal", `fn oops() { let x = "never closes;\n}\n`],
+    ["garbage token stream", `fn oops() { @@@ ### $$$ }\n`],
+  ])("ANY syntax error (%s) yields zero routes through detect, vs a clean control that fires", async (_label, brokenSuffix) => {
+    const cleanSrc = sevenAuthedThen("/stripped");
+    const clean = await rsTree("src/g9m/clean.rs", cleanSrc);
+    expect(clean.tree!.rootNode.hasError).toBe(false);
+    const cleanFindings = securityConsistency.detect(mkCtx([clean]));
+    // Non-vacuous control: the clean version of this exact source DOES fire.
+    expect(cleanFindings.some((x) => x.subCategory === SECURITY_SUBCATEGORIES.auth)).toBe(true);
+
+    const broken = await rsTree("src/g9m/broken.rs", cleanSrc + brokenSuffix);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    expect(securityConsistency.detect(mkCtx([broken]))).toHaveLength(0);
+  });
+});
+
+// ── Task 5 (Rust): suppression pins ────────────────────────────────────────────
+//
+// DISCOVERED GAP (documented, not fixed here — out of this task's scope, which
+// is test-only plus security-ast-rust.ts). `applyRouteSuppressions`'s AST path
+// (`annotationCommentRows`) recognizes an annotation only inside a node of type
+// "comment" (security-suppression.ts). Go, Python, and JS/TS tree-sitter
+// grammars all name their comment nodes "comment" — verified directly against
+// the pinned grammars, both here and by the passing Task 6 (Go) suppression
+// pins above. Rust's grammar does NOT: a Rust line comment is a "line_comment"
+// node and a block comment is a "block_comment" node (probe-verified against
+// the pinned tree-sitter-wasms rust grammar), neither of which is type
+// "comment". Since a Rust route only ever reaches `applyRouteSuppressions` with
+// a real (non-error) tree attached (there is no regex fallback for Rust — see
+// `extractRustRoutes` in security-consistency.ts), the AST resolver is always
+// used and NEVER finds a match, so `// @vibedrift-public` currently has NO
+// effect on a Rust route, in any position (its own line or the line above),
+// for either a builder or an attribute-macro route.
+//
+// This is the "under-matching" failure direction, which the suppression
+// module's own header names as the deliberately safe one: the annotated route
+// simply stays in the vote instead of being silently hidden from it — a false
+// "not suppressed" reads as a normal deviator, never as a false "authed" or a
+// disappeared route. These two tests PIN the actual current behavior (an
+// annotation is a no-op for Rust) so a future grammar or suppression-module
+// change that silently alters it is caught here, not discovered in the field.
+describe("Task 5 (Rust): suppression pins (documented gap: annotation is a no-op for Rust)", () => {
+  const rsTree = (p: string, c: string) => fileWithTree(p, c, "rust");
+  const auth = (fs: any[]) => fs.find((f: any) => f.subCategory === SECURITY_SUBCATEGORIES.auth);
+  const audit = (fs: any[]) => fs.find((f: any) => f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY);
+  const requireAuthFn =
+    `async fn require_auth(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+    `    let t = req.headers().get("Authorization");\n` +
+    `    if t.is_none() { return Err(StatusCode::UNAUTHORIZED); }\n` +
+    `    Ok(next.run(req).await)\n}\n`;
+  const sevenAuthed =
+    requireAuthFn +
+    `fn app() -> Router {\n    Router::new()\n` +
+    ["/a", "/b", "/c", "/d", "/e", "/f", "/g"].map((p) => `        .route("${p}", post(h))\n`).join("") +
+    `        .layer(middleware::from_fn(require_auth))\n`;
+
+  it("// @vibedrift-public directly ABOVE a builder route's .route call does not suppress it (actual behavior, not the naively-expected one)", async () => {
+    const src = sevenAuthed +
+      `        // @vibedrift-public\n` +
+      `        .route("/public", post(h))\n}\n`;
+    const f = await rsTree("src/rustsuppress1/api.rs", src);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+
+    // Unit-level: applyRouteSuppressions itself keeps the route and suppresses
+    // nothing, even though the annotation sits on the line directly above it.
+    const routes = extractRustRoutesAst(f.tree!, f.relativePath);
+    const { kept, suppressed } = applyRouteSuppressions(routes, [f]);
+    expect(suppressed).toEqual([]);
+    expect(kept.map((r) => `${r.method} ${r.path}`)).toContain("POST /public");
+
+    // End-to-end: /public (added after the layer, so genuinely unauthed) stays
+    // in the vote and is flagged as the deviator; no suppression-audit finding.
+    const findings = securityConsistency.detect(mkCtx([f]));
+    expect(audit(findings)).toBeUndefined();
+    const a = auth(findings);
+    expect(a).toBeDefined();
+    expect(a!.deviatingFiles.map((d: any) => d.evidence[0].code)).toEqual(["POST /public"]);
+  });
+
+  it("// @vibedrift-public directly ABOVE an attribute-macro route's attribute_item does not suppress it (actual behavior)", async () => {
+    const fullSrc =
+      requireAuthFn +
+      `fn app() -> Router {\n    Router::new()\n` +
+      ["/a", "/b", "/c", "/d", "/e", "/f", "/g"].map((p) => `        .route("${p}", post(h))\n`).join("") +
+      `        .layer(middleware::from_fn(require_auth))\n}\n` +
+      `// @vibedrift-public\n` +
+      `#[post("/public")]\n` +
+      `fn public_h(){}\n`;
+    const f = await rsTree("src/rustsuppress2/api.rs", fullSrc);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+
+    const routes = extractRustRoutesAst(f.tree!, f.relativePath);
+    const { kept, suppressed } = applyRouteSuppressions(routes, [f]);
+    expect(suppressed).toEqual([]);
+    expect(kept.map((r) => `${r.method} ${r.path}`)).toContain("POST /public");
+
+    // Attribute-macro routes never carry a covering-layer auth signal at all
+    // (no builder chain), so /public is unauthed regardless; it stays in the
+    // vote and is cited as the deviator, with no suppression-audit finding.
+    const findings = securityConsistency.detect(mkCtx([f]));
+    expect(audit(findings)).toBeUndefined();
+    const a = auth(findings);
+    expect(a).toBeDefined();
+    expect(a!.deviatingFiles.map((d: any) => d.evidence[0].code)).toEqual(["POST /public"]);
   });
 });

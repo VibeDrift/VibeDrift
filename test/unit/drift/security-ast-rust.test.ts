@@ -887,3 +887,334 @@ describe("auth extractor-typed → UNSURE (LOCKED no-type-bless)", () => {
     ]);
   });
 });
+
+// ─── Task 5: adversarial hardening + never-false-bless sweep ─────────────────
+// GOVERNING INVARIANT: still NEVER-FALSE-BLESS. Most pins below are EXTRACTION
+// correctness (should this construct be recognized as a route at all) rather
+// than auth signal: a route the extractor never emits trivially never blesses,
+// so a recall gap here is safe by construction — each case still documents the
+// actual observed behavior rather than an assumed one (every fixture below was
+// run against the real module before being pinned).
+
+describe("malformed and adversarial input (G8)", () => {
+  it("extractRustRoutesAst on a hand-built errored tree skips only the broken construct, never a whole-file gate (defense-in-depth)", async () => {
+    // The whole-file clean-tree gate (file.tree && !file.tree.rootNode.hasError)
+    // lives at DISPATCH, in security-consistency.ts's extractRustRoutes wrapper —
+    // NOT inside extractRustRoutesAst itself (see the companion dispatch-level
+    // pin in security-consistency.test.ts, "Task 5 (Rust): malformed input at
+    // dispatch"). Calling extractRustRoutesAst DIRECTLY on a hand-built tree
+    // whose ONLY error is a syntactically broken TRAILING fn still finds the
+    // earlier, syntactically clean route: the broken construct's hasError does
+    // not propagate to an EARLIER sibling's own subtree, and inErroredContext's
+    // per-node ancestor walk stops at source_file (it never consults the root's
+    // own hasError). Non-vacuous: rootNode.hasError is true, yet a route IS
+    // still emitted — proving the skip is per-construct, not whole-file.
+    const f = await rs("errctx.rs",
+      `fn app() -> Router {\n    Router::new().route("/x", post(h))\n}\n` +
+      `fn broken( {{{ .route(\n`);
+    expect(f.tree!.rootNode.hasError).toBe(true);
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /x"]);
+  });
+
+  it("does not extract #[post(...)] written inside a // line comment or /* block */ comment", async () => {
+    const line = await rs("attrlinecomment.rs", `// #[post("/x")]\nfn h(){}\n`);
+    expect(line.tree!.rootNode.hasError).toBe(false);
+    expect(extractRustRoutesAst(line.tree!, line.relativePath)).toEqual([]);
+    const block = await rs("attrblockcomment.rs", `/* #[post("/x")] */\nfn h(){}\n`);
+    expect(block.tree!.rootNode.hasError).toBe(false);
+    expect(extractRustRoutesAst(block.tree!, block.relativePath)).toEqual([]);
+  });
+
+  it("does not extract #[post(...)] text embedded in a string literal", async () => {
+    const f = await rs("attrstringtext.rs", `fn f() {\n    let s = "#[post(\\"/x\\")]";\n}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("terminates without stack blowup on a 100-link chained .route fluent chain, in source order", async () => {
+    let chain = "Router::new()";
+    for (let i = 0; i < 100; i++) chain += `\n        .route("/r${i}", post(h${i}))`;
+    const f = await rs("deepchain.rs", `fn app() -> Router {\n    ${chain}\n}\n`);
+    const routes = extractRustRoutesAst(f.tree!, f.relativePath);
+    expect(routes).toHaveLength(100);
+    expect(routes.map((r) => r.path)).toEqual(Array.from({ length: 100 }, (_, i) => `/r${i}`));
+    // Each link's own line, ascending in source order (grammar trap 5's re-sort
+    // holds over a 100-link chain, not just the 2-link case pinned earlier).
+    expect(routes.map((r) => r.line)).toEqual(Array.from({ length: 100 }, (_, i) => i + 3));
+  });
+
+  it("emits nothing for #[post(...)] with a malformed token tree (no string_literal, a bare const)", async () => {
+    const f = await rs("attrbadtoken.rs", `#[post(SOME_CONST)]\nfn h(){}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("accepts a non-ASCII handler identifier with no gate on its content (language-agnostic arg1-method-call gate)", async () => {
+    const f = await rs("unicodehandler.rs", `fn app() -> Router {\n    Router::new().route("/x", post(café))\n}\n`);
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /x"]);
+  });
+
+  it("recognizes a route whose handler is an unresolvable closure: hasAuth false, no extractor-type signal", async () => {
+    const f = await rs("closurehandler.rs", `fn app() -> Router {\n    Router::new().route("/x", post(|| async {}))\n}\n`);
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+});
+
+describe("v1 boundary (deferred scope)", () => {
+  it("Actix .wrap(HttpAuthentication::bearer(validator)) never blesses (library closure body unread)", async () => {
+    const f = await rs("v1bearer.rs",
+      `fn app() -> Router {\n    Router::new().route("/x", get(h)).wrap(HttpAuthentication::bearer(validator))\n}\n`);
+    // Not a from_fn callee, so its body is never read (rule 5). The callee NAME
+    // "bearer" is itself auth-flavored (in RUST_AUTH_SEGMENTS), so it hedges to
+    // UNSURE rather than resolving cleanly to not-auth — still never a bless.
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["GET /x auth=false hook=bearer"]);
+  });
+
+  it("a Rocket-style typed AuthUser param imported from another crate (no in-file FromRequest) resolves UNSURE, never bless", async () => {
+    const f = await rs("v1rocket.rs",
+      `use other_crate::AuthUser;\n` +
+      `async fn h(user: AuthUser) -> Response { todo!() }\n` +
+      `fn app() -> Router {\n    Router::new().route("/x", post(h))\n}\n`);
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual([
+      "POST /x auth=false hook=AuthUser",
+    ]);
+  });
+
+  it(".route_layer(from_fn(auth)) covers only earlier chain links, never a route added after it", async () => {
+    const chain =
+      `Router::new()\n` +
+      `        .route("/early", post(a))\n` +
+      `        .route_layer(middleware::from_fn(auth))\n` +
+      `        .route("/late", post(b))`;
+    const f = await rs("v1routelayer.rs", withMw(rejBody("auth"), chain));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual([
+      "POST /early auth=true hook=-", "POST /late auth=false hook=-",
+    ]);
+  });
+
+  it("multi-statement router assembly does not connect a separate-statement .layer to an earlier route (documented recall gap)", async () => {
+    const chain =
+      `let app = Router::new().route("/x", post(h));\n` +
+      `    let app = app.layer(middleware::from_fn(auth));\n` +
+      `    app`;
+    const f = await rs("v1multistatement.rs", withMw(rejBody("auth"), chain));
+    // The route IS recognized (non-vacuous); the .layer sits in a SEPARATE
+    // let-statement, so it never becomes an ancestor of the .route call node —
+    // coveringLayerArgs finds nothing, and hasAuth stays false. Safe over-flag,
+    // not a false-bless.
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it(".nest(prefix, subrouter()) sub-router routes are recognized un-prefixed in their own expression; the nest call itself emits zero routes", async () => {
+    const f = await rs("v1nest.rs",
+      `fn api_routes() -> Router {\n    Router::new().route("/users", get(list_users))\n}\n` +
+      `fn app() -> Router {\n    Router::new().nest("/api", api_routes())\n}\n`);
+    // Only /users is emitted (un-prefixed) — the outer nest() call and its "/api"
+    // prefix contribute NOTHING; there is no phantom "/api" route.
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["GET /users"]);
+  });
+
+  it("on(MethodFilter::POST, h) resolves method ALL; the route still enters the mutating vote", async () => {
+    const f = await rs("v1on.rs", `fn app() -> Router {\n    Router::new().route("/x", on(MethodFilter::POST, h))\n}\n`);
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["ALL /x auth=false hook=-"]);
+  });
+});
+
+// ─── Never-false-bless sweep ──────────────────────────────────────────────────
+// Registers every AUTH-relevant Rust fixture exercised across Tasks 3-5 (the
+// axis this invariant governs — Task 1/2's pure method/path-resolution fixtures
+// carry no auth machinery at all, so they are not repeated here). New fixtures
+// that exercise the auth signal must be added as a new entry in this table, not
+// left as a standalone test only.
+
+// Module-scope twin of the handlerRoute() helper defined inside the
+// "extractor-typed" describe above (that one is block-scoped to its own
+// describe callback and not reachable here).
+const handlerRoute = (params: string) =>
+  `async fn h(${params}) -> Response { todo!() }\n` +
+  `fn app() -> Router {\n    Router::new().route("/x", post(h))\n}\n`;
+
+const NEVER_FALSE_BLESS_SWEEP: Array<{
+  name: string; source: string; groundTruth: Array<{ path: string; method: string; authed: boolean }>;
+}> = [
+  // ── reject catalogue: not a bless ──
+  { name: "logs_only", source: withMw(
+      `async fn auth_check(req: Request, next: Next) -> Response {\n    tracing::info!("saw a request");\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(auth_check))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "bare_403_unguarded", source: withMw(
+      `async fn mw(req: Request, next: Next) -> Result<Response, StatusCode> {\n    if maintenance_mode() { return Err(StatusCode::FORBIDDEN); }\n    Ok(next.run(req).await)\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(mw))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "reject_404", source: withMw(
+      `async fn mw(req: Request, next: Next) -> Result<Response, StatusCode> {\n    if bad(&req) { return Err(StatusCode::NOT_FOUND); }\n    Ok(next.run(req).await)\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(mw))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "reject_500", source: withMw(
+      `async fn mw(req: Request, next: Next) -> Result<Response, StatusCode> {\n    if bad(&req) { return Err(StatusCode::INTERNAL_SERVER_ERROR); }\n    Ok(next.run(req).await)\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(mw))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "bare_int_401", source: withMw(
+      `async fn mw(req: Request, next: Next) -> Result<Response, StatusCode> {\n    if bad(&req) { return Err(401); }\n    Ok(next.run(req).await)\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(mw))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "from_u16_401", source: withMw(
+      `async fn mw(req: Request, next: Next) -> Result<Response, StatusCode> {\n    if bad(&req) { return Err(StatusCode::from_u16(401).unwrap()); }\n    Ok(next.run(req).await)\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(mw))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "never_returned_let", source: withMw(
+      `async fn mw(req: Request, next: Next) -> Response {\n    let _code = StatusCode::UNAUTHORIZED;\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(mw))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "nested_closure_pruned", source: withMw(
+      `async fn mw(req: Request, next: Next) -> Response {\n    let _f = || -> Result<(), StatusCode> { return Err(StatusCode::UNAUTHORIZED); };\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(mw))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "mention_comparison", source: withMw(
+      `async fn tap(req: Request, next: Next) -> Response {\n    let resp = next.run(req).await;\n    if resp.status() == StatusCode::UNAUTHORIZED {\n        tracing::warn!("downstream returned 401");\n    }\n    resp\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(tap))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "mention_header_insert", source: withMw(
+      `async fn add_header(req: Request, next: Next) -> Response {\n    let mut resp = next.run(req).await;\n    if resp.status() == StatusCode::UNAUTHORIZED {\n        resp.headers_mut().insert("WWW-Authenticate", HeaderValue::from_static("Bearer"));\n    }\n    resp\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(add_header))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "mention_match_pattern", source: withMw(
+      `async fn observe(req: Request, next: Next) -> Response {\n    let resp = next.run(req).await;\n    match resp.status() {\n        StatusCode::UNAUTHORIZED => metrics::incr("downstream_401"),\n        _ => {}\n    }\n    resp\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(observe))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  // ── REQUIRED T3 fix-#2 residual regression pins (non-produce 401 positions) ──
+  { name: "residual_comparison_err", source: withMw(
+      `async fn tap(req: Request, next: Next) -> Response {\n    let resp = next.run(req).await;\n    if resp == Err(StatusCode::UNAUTHORIZED) {\n        tracing::warn!("downstream 401");\n    }\n    resp\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(tap))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "residual_call_arg", source: withMw(
+      `async fn record(req: Request, next: Next) -> Response {\n    record_metric(Err(StatusCode::UNAUTHORIZED));\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(record))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "residual_never_returned_err", source: withMw(
+      `async fn build(req: Request, next: Next) -> Response {\n    let _e = Err(StatusCode::UNAUTHORIZED);\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "residual_struct_field", source: withMw(
+      `async fn build(req: Request, next: Next) -> Response {\n    let _cfg = Config { fallback: Err(StatusCode::UNAUTHORIZED) };\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "residual_builder_arg", source: withMw(
+      `async fn build(req: Request, next: Next) -> Response {\n    let _svc = Handler::new().default_error(Err(StatusCode::UNAUTHORIZED));\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "residual_ok_or_else_403", source: withMw(
+      `async fn build(req: Request, next: Next) -> Result<Response, StatusCode> {\n    let _t = maybe(&req).ok_or_else(|| {\n        if flag() == StatusCode::UNAUTHORIZED { log(); }\n        StatusCode::FORBIDDEN\n    })?;\n    Ok(next.run(req).await)\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  // ── non-from_fn layers: never auth ──
+  { name: "trace_layer", source: `fn app() -> Router {\n    Router::new().route("/x", get(h)).layer(TraceLayer::new_for_http())\n}\n`,
+    groundTruth: [{ path: "/x", method: "GET", authed: false }] },
+  { name: "actix_logger_wrap", source: `fn app() -> Router {\n    Router::new().route("/x", get(h)).wrap(Logger::default())\n}\n`,
+    groundTruth: [{ path: "/x", method: "GET", authed: false }] },
+  // ── layer scoping (the crux) ──
+  { name: "layer_scoping_below_route", source: withMw(rejBody("auth"),
+      `Router::new().layer(middleware::from_fn(auth)).route("/late", post(h))`),
+    groundTruth: [{ path: "/late", method: "POST", authed: false }] },
+  { name: "route_layer_after", source: withMw(rejBody("auth"),
+      `Router::new()\n        .route("/early", post(a))\n        .route_layer(middleware::from_fn(auth))\n        .route("/late", post(b))`),
+    groundTruth: [{ path: "/early", method: "POST", authed: true }, { path: "/late", method: "POST", authed: false }] },
+  // ── imported / opaque from_fn -> unsure, never bless ──
+  { name: "imported_from_fn", source: `fn app() -> Router {\n    Router::new().route("/x", post(h)).layer(middleware::from_fn(require_auth))\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "opaque_external_validator", source: withMw(
+      `async fn require_auth(req: Request, next: Next) -> Response {\n    let _ = validate_session(&req);\n    next.run(req).await\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(require_auth))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "wrap_bearer", source: `fn app() -> Router {\n    Router::new().route("/x", get(h)).wrap(HttpAuthentication::bearer(v))\n}\n`,
+    groundTruth: [{ path: "/x", method: "GET", authed: false }] },
+  { name: "wrap_bare_mw", source: `fn app() -> Router {\n    Router::new().route("/x", get(h)).wrap(auth_mw)\n}\n`,
+    groundTruth: [{ path: "/x", method: "GET", authed: false }] },
+  // ── extractor-typed: UNSURE, no type-name bless ──
+  ...["AuthUser", "Claims", "RequireAuth", "Identity", "Bearer"].map((ty) => ({
+    name: `extractor_${ty}`, source: handlerRoute(`user: ${ty}`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  })),
+  ...([["Option<AuthUser>", "opt_option"], ["MaybeAuth", "opt_maybe"], ["OptionalUser", "opt_optional"]] as const).map(([params, nm]) => ({
+    name: nm, source: handlerRoute(`user: ${params}`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  })),
+  ...([["body: Json<Order>", "nonauth_json"], ["id: Path<u32>", "nonauth_path"], ["state: State<AppState>", "nonauth_state"],
+      ["q: Query<Params>", "nonauth_query"], ["form: Form<Data>", "nonauth_form"]] as const).map(([params, nm]) => ({
+    name: nm, source: handlerRoute(params),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }],
+  })),
+  { name: "v1_fromrequest_impl_not_read", source:
+      `struct AuthUser;\n` +
+      `impl FromRequest for AuthUser {\n    type Rejection = StatusCode;\n` +
+      `    async fn from_request(req: Request, s: &S) -> Result<Self, StatusCode> {\n        return Err(StatusCode::UNAUTHORIZED);\n    }\n}\n` +
+      `async fn h(user: AuthUser) -> Response { todo!() }\n` +
+      `fn app() -> Router {\n    Router::new().route("/x", post(h))\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "extractor_imported_authuser", source:
+      `use other_crate::AuthUser;\nasync fn h(user: AuthUser) -> Response { todo!() }\nfn app() -> Router {\n    Router::new().route("/x", post(h))\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  // ── veto beats even a real reject ──
+  { name: "veto_skip_auth", source: withMw(rejBody("skip_auth"),
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(skip_auth))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  // ── Task 5 new adversarial / v1-boundary fixtures ──
+  { name: "multistatement_separate_layer", source: withMw(rejBody("auth"),
+      `let app = Router::new().route("/x", post(h));\n    let app = app.layer(middleware::from_fn(auth));\n    app`),
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "nest_inner_unprefixed", source:
+      `fn api_routes() -> Router {\n    Router::new().route("/users", get(list_users))\n}\n` +
+      `fn app() -> Router {\n    Router::new().nest("/api", api_routes())\n}\n`,
+    groundTruth: [{ path: "/users", method: "GET", authed: false }] },
+  { name: "unicode_path", source: `fn app() -> Router {\n    Router::new().route("/café", post(h))\n}\n`,
+    groundTruth: [{ path: "/café", method: "POST", authed: false }] },
+  { name: "closure_handler", source: `fn app() -> Router {\n    Router::new().route("/x", post(|| async {}))\n}\n`,
+    groundTruth: [{ path: "/x", method: "POST", authed: false }] },
+  { name: "on_method_filter", source: `fn app() -> Router {\n    Router::new().route("/x", on(MethodFilter::POST, h))\n}\n`,
+    groundTruth: [{ path: "/x", method: "ALL", authed: false }] },
+  // ── positive blessing controls (proves the sweep can also see a real bless;
+  //    kept to exactly PC1 + PC2 per the brief) ──
+  { name: "pc1_match_arm_tail", source: withMw(
+      `async fn gate(req: Request, next: Next) -> Result<Response, StatusCode> {\n    match check(&req) {\n        None => Err(StatusCode::UNAUTHORIZED),\n        Some(_u) => Ok(next.run(req).await),\n    }\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: true }] },
+  { name: "pc2_if_else_tail", source: withMw(
+      `async fn gate(req: Request, next: Next) -> Result<Response, StatusCode> {\n    if bad(&req) { Err(StatusCode::UNAUTHORIZED) } else { Ok(next.run(req).await) }\n}\n`,
+      `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`),
+    groundTruth: [{ path: "/x", method: "POST", authed: true }] },
+];
+
+describe("never-false-bless sweep", () => {
+  it("every sweep entry is NON-VACUOUS: every ground-truth route is actually emitted", async () => {
+    // Guards against the exact trap the governing invariant warns about: the
+    // main sweep assertion below uses `emitted?.hasAuth ?? false`, which would
+    // PASS TRIVIALLY if route recognition silently failed (no route == "not
+    // blessed"). This companion test proves every ground-truth route really is
+    // extracted, so the main assertion is exercising the auth axis, not hiding
+    // a recognition regression.
+    for (const entry of NEVER_FALSE_BLESS_SWEEP) {
+      const f = await rs(`sweep/${entry.name}.rs`, entry.source);
+      expect(f.tree!.rootNode.hasError, `${entry.name}: unexpected parse error`).toBe(false);
+      const routes = extractRustRoutesAst(f.tree!, f.relativePath);
+      for (const gt of entry.groundTruth) {
+        const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
+        expect(emitted, `${entry.name}: ${gt.method} ${gt.path} was not emitted at all`).toBeDefined();
+      }
+    }
+  });
+
+  it("no route with ground truth authed:false is ever emitted hasAuth:true", async () => {
+    for (const entry of NEVER_FALSE_BLESS_SWEEP) {
+      const f = await rs(`sweep/${entry.name}.rs`, entry.source);
+      const routes = extractRustRoutesAst(f.tree!, f.relativePath);
+      for (const gt of entry.groundTruth.filter((g) => !g.authed)) {
+        const emitted = routes.find((r) => r.path === gt.path && r.method === gt.method);
+        expect(emitted?.hasAuth ?? false, `${entry.name}: ${gt.method} ${gt.path}`).toBe(false);
+      }
+    }
+  });
+});
