@@ -68,7 +68,13 @@ function securityFinding(recommendation: string): Finding {
 
 const HEDGED_REC =
   "4 of 5 routes have Auth middleware. Review 1 unprotected routes — apply per-route middleware or move them under a router that does. " +
-  "1 of these could not be confirmed: an auth hook (verify_session) may authenticate them but its body could not be verified. " +
+  "1 of these could not be confirmed: a middleware (verify_session) may authenticate them but its body could not be verified. " +
+  "Double check those hooks before treating the routes as unauthenticated.";
+
+// A finding spanning multiple languages falls back to the neutral noun.
+const HEDGED_REC_NEUTRAL =
+  "4 of 5 routes have Auth middleware. Review 1 unprotected routes — apply per-route middleware or move them under a router that does. " +
+  "1 of these could not be confirmed: an auth hook (guard) may authenticate them but its body could not be verified. " +
   "Double check those hooks before treating the routes as unauthenticated.";
 
 const CONFIDENT_REC =
@@ -81,6 +87,15 @@ describe("terminal hedge visibility", () => {
     expect(out).not.toContain("Unprotected routes may be exposed in production");
     // The hedge MUST reach the user: the exact hook and "double check".
     expect(out).toContain("verify_session");
+    expect(out.toLowerCase()).toContain("double check");
+    // Language-aware noun is read back from the recommendation, not hardcoded.
+    expect(out).toContain("The middleware (verify_session)");
+    expect(out).not.toContain("auth hook");
+  });
+
+  it("neutral noun (multi-language finding) still renders the hook name and 'double check'", () => {
+    const out = renderTerminalOutput(mkResult([securityFinding(HEDGED_REC_NEUTRAL)]));
+    expect(out).toContain("The auth hook (guard)");
     expect(out.toLowerCase()).toContain("double check");
   });
 

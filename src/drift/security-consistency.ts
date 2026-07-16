@@ -66,15 +66,39 @@ function hedgedDeviatorPattern(r: RouteInfo): string {
   return `${r.method} ${r.path}: auth not confirmed, double check hook '${r.authUnsureHook}'`;
 }
 
+// Language-appropriate noun (with article) for the unverified auth mechanism the
+// hedge names — a hedge only arises on the Python/Go/Rust AST paths. A finding
+// whose hedged hooks span MORE than one language falls back to the neutral phrase.
+const HOOK_PHRASE: Record<string, string> = {
+  python: "a before_request hook",
+  go: "a middleware",
+  rust: "an extractor or layer",
+};
+const NEUTRAL_HOOK_PHRASE = "an auth hook";
+
+/** Source language of a route's file, by extension. Null when unknown. */
+function langOfFile(file: string): string | null {
+  if (file.endsWith(".py")) return "python";
+  if (file.endsWith(".go")) return "go";
+  if (file.endsWith(".rs")) return "rust";
+  return null;
+}
+
 /** Sentence appended to an auth finding's recommendation when some deviators are
  *  unsure (their hook body could not be verified). Empty string when none are
- *  hedged, so a confident finding's recommendation is byte-identical. `names` is
- *  the sorted distinct set of hook names. */
+ *  hedged, so a confident finding's recommendation is byte-identical. The noun is
+ *  language-aware (a before_request hook / a middleware / an extractor or layer),
+ *  falling back to the neutral "an auth hook" when the hedged hooks span multiple
+ *  languages. `names` is the sorted distinct set of hook names. The terminal reads
+ *  the noun + names back out of this sentence (noun-agnostic), so its shape —
+ *  "could not be confirmed: <a|an> <noun> (<names>)" — must stay stable. */
 function hedgeRecommendationSuffix(deviators: RouteInfo[]): string {
   const hedged = deviators.filter((r) => r.authUnsureHook);
   if (hedged.length === 0) return "";
   const names = [...new Set(hedged.map((r) => r.authUnsureHook!))].sort().join(", ");
-  return ` ${hedged.length} of these could not be confirmed: an auth hook (${names}) may authenticate them but its body could not be verified. Double check those hooks before treating the routes as unauthenticated.`;
+  const langs = [...new Set(hedged.map((r) => langOfFile(r.file)))];
+  const phrase = langs.length === 1 && langs[0] ? (HOOK_PHRASE[langs[0]] ?? NEUTRAL_HOOK_PHRASE) : NEUTRAL_HOOK_PHRASE;
+  return ` ${hedged.length} of these could not be confirmed: ${phrase} (${names}) may authenticate them but its body could not be verified. Double check those hooks before treating the routes as unauthenticated.`;
 }
 
 // Does the codebase use auth machinery anywhere? If it does, a mutating route

@@ -1139,6 +1139,8 @@ describe("Task 4: hedged unsure-auth finding copy", () => {
     expect(a.recommendation).toMatch(/\d+ of these could not be confirmed/);
     expect(a.recommendation.toLowerCase()).toContain("double check");
     expect(a.recommendation).toContain("verify_session");
+    // Language-aware noun: a Python hook hedges as a "before_request hook".
+    expect(a.recommendation).toContain("a before_request hook (verify_session)");
   });
 
   it("confident sibling: a plainly-unauthed route (no unsure hook) keeps today's exact flat deviator byte-for-byte", async () => {

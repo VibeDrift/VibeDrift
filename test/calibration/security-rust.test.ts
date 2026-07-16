@@ -428,6 +428,8 @@ describe("Rust calibration: S8 unresolvable-body UNSURE (imported require_auth)"
 
     expect(finding.recommendation).toContain("Double check");
     expect(finding.recommendation).toContain("require_auth");
+    // Language-aware noun: a Rust hook hedges as "an extractor or layer".
+    expect(finding.recommendation).toContain("an extractor or layer (require_auth)");
 
     // Vote-arithmetic invariance: S8's counts equal the S6 control (5 files, 1 deviator).
     expect(finding.dominantCount).toBe(4);

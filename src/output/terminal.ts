@@ -140,7 +140,8 @@ function scoreColorFn(score: number, max: number): typeof chalk {
 /**
  * True when this is an auth-consistency finding the Python, Go, or Rust
  * body-signature analyzer could not confirm: its recommendation carries the
- * appended "Double check" hedge naming an auth hook. For such a finding the flat
+ * appended "Double check" hedge naming the unverified auth mechanism (a
+ * before_request hook, a middleware, or an extractor/layer). For such a finding the flat
  * confident "unprotected routes" consequence is a FALSE claim, so the terminal
  * must hedge instead. Confident security findings never carry this marker, so
  * their output is byte-identical.
@@ -151,20 +152,24 @@ function isHedgedAuthFinding(f: Finding): boolean {
   return isSecurity && !!rec && /Double check/.test(rec);
 }
 
-/** The auth hook name(s) the appended hedge sentence named, read back out of the
- *  recommendation so the terminal can point at the exact hook. */
-function hedgedHookNames(f: Finding): string | null {
-  const m = f.metadata?.recommendation?.match(/auth hook \(([^)]+)\)/);
-  return m ? m[1] : null;
+/** The auth-mechanism NOUN and hook name(s) the appended hedge sentence named,
+ *  read back out of the recommendation so the terminal can render a language-aware
+ *  "double check" line. Noun-agnostic: anchored on the stable
+ *  "could not be confirmed: <a|an> <noun> (<names>)" shape the producer emits, so
+ *  it matches "a before_request hook", "a middleware", "an extractor or layer",
+ *  and the neutral "an auth hook" alike. */
+function hedgedHook(f: Finding): { noun: string; names: string } | null {
+  const m = f.metadata?.recommendation?.match(/could not be confirmed: (?:an? )([^(]+) \(([^)]+)\)/);
+  return m ? { noun: m[1].trim(), names: m[2] } : null;
 }
 
 /** Hedged replacement for the confident security consequence. Names the hook(s)
  *  to verify and says "double check" instead of asserting the routes are
  *  unprotected. No em-dash / double hyphen (commas/periods only). */
 function hedgedSecurityConsequence(f: Finding): string {
-  const names = hedgedHookNames(f);
-  return names
-    ? `An auth hook (${names}) may already authenticate some of these routes, double check it before treating them as unprotected`
+  const h = hedgedHook(f);
+  return h
+    ? `The ${h.noun} (${h.names}) may already authenticate some of these routes, double check it before treating them as unprotected`
     : `An auth hook may already authenticate some of these routes, double check before treating them as unprotected`;
 }
 

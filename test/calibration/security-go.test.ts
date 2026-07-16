@@ -451,6 +451,8 @@ describe("Go calibration: S8 unresolvable-body UNSURE (imported auth-flavored mi
 
     expect(finding.recommendation).toContain("Double check");
     expect(finding.recommendation).toContain("middleware.VerifyToken");
+    // Language-aware noun: a Go hook hedges as "a middleware".
+    expect(finding.recommendation).toContain("a middleware (middleware.VerifyToken)");
 
     // Vote-arithmetic invariance: S8's counts equal the S6 control (5 files, 1 deviator).
     expect(finding.dominantCount).toBe(4);
