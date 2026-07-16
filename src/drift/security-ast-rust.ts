@@ -162,10 +162,6 @@ const RECOGNIZED_VERBS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 // Mirrors the Go/Python modules' own constant.
 const MUTATING_VERBS = new Set(["POST", "PUT", "PATCH", "DELETE", "ALL"]);
 
-export const SECURITY_AST_RUST = {
-  VERB_CALLEES, ANY_CALLEES, ON_CALLEES, ATTR_ROUTE_METHODS, ROUTE_FIELD, MUTATING_VERBS,
-};
-
 // ─── Body-first auth classification (Task 3) ─────────────────────────────────
 //
 // GOVERNING INVARIANT — NEVER-FALSE-BLESS. A route blesses ONLY when a covering

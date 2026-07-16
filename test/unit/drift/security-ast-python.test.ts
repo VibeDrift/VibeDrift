@@ -2930,8 +2930,11 @@ describe("classifyHookAuth: precedence", () => {
     expect(await cls("require_login", `def hook():\n    abort(404)\n`, true)).toBe("not-auth");
   });
 
-  it("opaque + CORE carve-out: authenticate_request delegating to _do_auth() -> auth", async () => {
-    expect(await cls("authenticate_request", `def hook():\n    _do_auth()\n`, true)).toBe("auth");
+  it("opaque + CORE name never blesses: authenticate_request delegating to _do_auth() -> unsure", async () => {
+    // Reconciled with the Go/Rust LOCKED decision: an opaque body hedges on ANY
+    // name (including a CORE auth name), it never blesses. Only a VERIFIED reject
+    // (rule 2) blesses.
+    expect(await cls("authenticate_request", `def hook():\n    _do_auth()\n`, true)).toBe("unsure");
   });
 
   it("opaque + tier-2 name: require_login -> check_session() -> unsure", async () => {
@@ -2946,8 +2949,10 @@ describe("classifyHookAuth: precedence", () => {
     expect(await cls("setup", `def hook():\n    check_session()\n`, true)).toBe("unsure");
   });
 
-  it("body null + CORE simple: authenticate -> auth", () => {
-    expect(classifyHookAuth("authenticate", null, new Map(), true)).toBe("auth");
+  it("body null + CORE simple never blesses: authenticate -> unsure", () => {
+    // An unreadable body never blesses on name (Go/Rust parity); a CORE auth name
+    // hedges to unsure, double check.
+    expect(classifyHookAuth("authenticate", null, new Map(), true)).toBe("unsure");
   });
 
   it("body null + tier-2 simple: verify_session -> unsure", () => {
@@ -3242,10 +3247,11 @@ describe("unsure hooks (extractor level)", () => {
     expect(routes[0].authUnsureHook).toBe("verify_session");
   });
 
-  it("call-form CORE name blesses: app.before_request(authenticate) -> auth=true, key absent", async () => {
+  it("call-form CORE name never blesses: app.before_request(authenticate) -> unsure, hook 'authenticate'", async () => {
+    // Reconciled: an unreadable before_request hook hedges on name, never blesses.
     const { routes } = await routesOf(`app.before_request(authenticate)\n` + ROUTE);
-    expect(routes[0].hasAuth).toBe(true);
-    expect(routes[0].authUnsureHook).toBeUndefined();
+    expect(routes[0].hasAuth).toBe(false);
+    expect(routes[0].authUnsureHook).toBe("authenticate");
   });
 
   it("call-form lambda: app.before_request(lambda: abort(401)) -> auth=true", async () => {

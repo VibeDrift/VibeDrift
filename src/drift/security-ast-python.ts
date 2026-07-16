@@ -157,16 +157,17 @@ const RATE_NAMES = /(?:rate_?limit|throttle|limiter|slowapi|slowdown)/i;
 // real hooks that do not authenticate. Whole-segment matching makes substring
 // blessing structurally impossible.
 //
-// BODY-FIRST (addendum): the hook path no longer blesses on NAME alone.
-// classifyHookAuth classifies by BODY behavior first; a name token only ever acts
-// as a SECOND tier, and only when the body is UNRESOLVABLE (opaque). A CORE token
-// (auth/authenticate, or an AUTH_DECORATORS name) with an opaque body blesses; an
-// ENFORCE+SUBJECT token (verify_user_email, protect_user_data, enforce_session)
-// with an opaque/absent body resolves UNSURE (a hedge, never a bless), and with a
-// VISIBLE non-enforcing body resolves flat not-auth. So the old ENFORCE+SUBJECT
-// attributive false-bless is closed: those names can hedge, never bless, and a
-// visible email/scrub body is plainly not-auth. (verify_token also appears in
-// AUTH_DECORATORS as a ROUTE decorator, unaffected here.)
+// BODY-FIRST (addendum): the hook path NEVER blesses on NAME. classifyHookAuth
+// blesses a before_request / middleware hook ONLY when its body carries a VERIFIED
+// reject (401-family, or a credential-guarded 403). An UNRESOLVABLE (opaque) or
+// absent body HEDGES to unsure when the name is auth-flavored — a CORE token
+// (auth/authenticate) or an ENFORCE+SUBJECT token (verify_user_email,
+// protect_user_data) — and resolves flat not-auth otherwise. A VISIBLE
+// non-enforcing body is plainly not-auth. So a name (even a strong one like
+// authenticate or login_required) can HEDGE but never BLESS, matching the Go/Rust
+// LOCKED decision. (Route DECORATORS such as @login_required / verify_token are a
+// SEPARATE curated allowlist, applied per-route, and DO still bless by name — a
+// stronger, higher-confidence signal than a broadly-applied hook.)
 const AUTH_CORE_SEGMENTS = new Set(["auth", "authenticate", "authenticated"]);
 const AUTH_ENFORCE_SEGMENTS = new Set([
   "require", "required", "requires", "verify", "verified", "ensure",
@@ -1164,26 +1165,29 @@ export function bodyAuthSignature(
   return "none";
 }
 
-/** Precedence layer over `bodyAuthSignature`. `nameIsSimpleIdentifier` is false
- *  for attribute targets (AuthGate.check), which can hedge but never bless. */
+/** Precedence layer over `bodyAuthSignature`. A hook blesses ONLY on a VERIFIED
+ *  body reject (rule 2); every unreadable/opaque/absent body hedges or resolves
+ *  not-auth — a name never blesses (Go/Rust parity). The 4th arg (whether the
+ *  name is a simple identifier vs an attribute target like AuthGate.check) is
+ *  retained on the signature for callers but no longer affects the outcome now
+ *  that no name blesses, so it is underscore-marked unused. */
 export function classifyHookAuth(
   hookName: string,
   body: SyntaxNode | null,
   defs: Map<string, SyntaxNode | null>,
-  nameIsSimpleIdentifier: boolean,
+  _nameIsSimpleIdentifier: boolean,
 ): HookAuthOutcome {
   const segs = nameSegments(hookName);
   if (segs.some((s) => OPTIONAL_AUTH_VETO.has(s))) return "not-auth"; // rule 1
-  const isCore =
-    nameIsSimpleIdentifier &&
-    (segs.some((s) => AUTH_CORE_SEGMENTS.has(s)) || AUTH_DECORATORS.has(hookName));
   if (body) {
     const sig = bodyAuthSignature(body, defs);
-    if (sig === "reject") return "auth"; // rule 2: behavior beats name
+    if (sig === "reject") return "auth"; // rule 2: a VERIFIED reject is the only bless
     if (sig === "none") return "not-auth"; // rule 3: a visible non-enforcing body, name never rescues
-    return isCore ? "auth" : "unsure"; // rule 4: opaque -> CORE carve-out, else hedge
+    return "unsure"; // rule 4: an opaque body hedges — a name never blesses (matches Go/Rust)
   }
-  if (isCore) return "auth"; // rule 5: resolved simple CORE name
+  // rule 5: no readable body -> never bless on name (the Go/Rust LOCKED decision).
+  // A strong decorator name (@login_required) or any auth-flavored name HEDGES to
+  // "unsure, double check"; a non-auth name stays not-auth.
   const flavored = segs.some((s) => AUTH_CORE_SEGMENTS.has(s)) || nameHasAuthToken(hookName);
   return flavored ? "unsure" : "not-auth";
 }

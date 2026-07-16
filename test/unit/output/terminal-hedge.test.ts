@@ -68,7 +68,7 @@ function securityFinding(recommendation: string): Finding {
 
 const HEDGED_REC =
   "4 of 5 routes have Auth middleware. Review 1 unprotected routes — apply per-route middleware or move them under a router that does. " +
-  "1 of these could not be confirmed: a before_request hook (verify_session) may authenticate them but its body could not be verified. " +
+  "1 of these could not be confirmed: an auth hook (verify_session) may authenticate them but its body could not be verified. " +
   "Double check those hooks before treating the routes as unauthenticated.";
 
 const CONFIDENT_REC =
