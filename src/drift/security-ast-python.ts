@@ -1167,14 +1167,15 @@ export function bodyAuthSignature(
 
 /** Precedence layer over `bodyAuthSignature`. A hook blesses ONLY on a VERIFIED
  *  body reject (rule 2); every unreadable/opaque/absent body hedges or resolves
- *  not-auth — a name never blesses (Go/Rust parity). `nameIsSimpleIdentifier`
- *  (false for attribute targets like AuthGate.check) is retained on the signature
- *  for callers; it no longer affects the outcome now that no name blesses. */
+ *  not-auth — a name never blesses (Go/Rust parity). The 4th arg (whether the
+ *  name is a simple identifier vs an attribute target like AuthGate.check) is
+ *  retained on the signature for callers but no longer affects the outcome now
+ *  that no name blesses, so it is underscore-marked unused. */
 export function classifyHookAuth(
   hookName: string,
   body: SyntaxNode | null,
   defs: Map<string, SyntaxNode | null>,
-  nameIsSimpleIdentifier: boolean,
+  _nameIsSimpleIdentifier: boolean,
 ): HookAuthOutcome {
   const segs = nameSegments(hookName);
   if (segs.some((s) => OPTIONAL_AUTH_VETO.has(s))) return "not-auth"; // rule 1
