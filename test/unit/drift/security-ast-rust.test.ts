@@ -553,6 +553,33 @@ describe("auth POSITIVE: covering from_fn body reject blesses", () => {
       "POST /a auth=true hook=-", "PUT /b auth=true hook=-", "DELETE /c auth=true hook=-",
     ]);
   });
+
+  // LOAD-BEARING (produce-position gating must NOT delete the branch-tail walk):
+  // a 401 that is the TAIL of a match arm / if branch (an implicit-return produce
+  // position) blesses even under a boring name. These bless ONLY through the
+  // produce-position recursion into branch tails — a naive "returns/tail only"
+  // scan of the block's own tail node would miss them (tree-sitter wraps a
+  // trailing match/if in an expression_statement).
+  it("PC1: a from_fn whose body tail is a match arm `None => Err(401)` blesses", async () => {
+    const mw =
+      `async fn gate(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+      `    match check(&req) {\n` +
+      `        None => Err(StatusCode::UNAUTHORIZED),\n` +
+      `        Some(_u) => Ok(next.run(req).await),\n` +
+      `    }\n}\n`;
+    const f = await rs("pc1.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=true hook=-"]);
+  });
+
+  it("PC2: a from_fn whose body tail is `if bad { Err(401) } else { Ok(next) }` blesses", async () => {
+    const mw =
+      `async fn gate(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+      `    if bad(&req) { Err(StatusCode::UNAUTHORIZED) } else { Ok(next.run(req).await) }\n}\n`;
+    const f = await rs("pc2.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=true hook=-"]);
+  });
 });
 
 describe("auth NEGATIVE: never-false-bless", () => {
@@ -660,6 +687,75 @@ describe("auth NEGATIVE: never-false-bless", () => {
       `        _ => {}\n    }\n    resp\n}\n`;
     const f = await rs("n11.rs",
       withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(observe))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  // RESIDUAL produce-position pins: an `Err(401)` / `ErrorUnauthorized(..)` that
+  // sits in a NON-produce position (a comparison operand, a plain call argument,
+  // a never-returned let RHS, a struct-literal field, a builder argument) is a
+  // MENTION, never a reject. Neutral names (tap / record / build) so no name veto
+  // or hedge is in play — the produce-position gate alone must resolve not-auth.
+  it("R1: an `Err(401)` as a `== Err(..)` comparison operand never blesses", async () => {
+    const mw =
+      `async fn tap(req: Request, next: Next) -> Response {\n` +
+      `    let resp = next.run(req).await;\n` +
+      `    if resp == Err(StatusCode::UNAUTHORIZED) {\n` +
+      `        tracing::warn!("downstream 401");\n` +
+      `    }\n    resp\n}\n`;
+    const f = await rs("r1.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(tap))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("R2b: an `Err(401)` as a plain call argument never blesses", async () => {
+    const mw =
+      `async fn record(req: Request, next: Next) -> Response {\n` +
+      `    record_metric(Err(StatusCode::UNAUTHORIZED));\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("r2b.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(record))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("R3b: an `Err(401)` in a never-returned let RHS never blesses", async () => {
+    const mw =
+      `async fn build(req: Request, next: Next) -> Response {\n` +
+      `    let _e = Err(StatusCode::UNAUTHORIZED);\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("r3b.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("R6: an `Err(401)` as a struct-literal field value never blesses", async () => {
+    const mw =
+      `async fn build(req: Request, next: Next) -> Response {\n` +
+      `    let _cfg = Config { fallback: Err(StatusCode::UNAUTHORIZED) };\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("r6.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("R10: an `Err(401)` as a builder-method argument never blesses", async () => {
+    const mw =
+      `async fn build(req: Request, next: Next) -> Response {\n` +
+      `    let _svc = Handler::new().default_error(Err(StatusCode::UNAUTHORIZED));\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("r10.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("R8: an `.ok_or_else` closure that MENTIONS 401 but PRODUCES 403 never blesses", async () => {
+    const mw =
+      `async fn build(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+      `    let _t = maybe(&req).ok_or_else(|| {\n` +
+      `        if flag() == StatusCode::UNAUTHORIZED { log(); }\n` +
+      `        StatusCode::FORBIDDEN\n` +
+      `    })?;\n    Ok(next.run(req).await)\n}\n`;
+    const f = await rs("r8.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(build))`));
     expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
   });
 

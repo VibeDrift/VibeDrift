@@ -274,6 +274,7 @@ const CALL_EXPR_T = new Set(["call_expression"]);
 const IF_EXPR_T = new Set(["if_expression"]);
 const LET_DECL_T = new Set(["let_declaration"]);
 const RETURN_EXPR_T = new Set(["return_expression"]);
+const TRY_EXPR_T = new Set(["try_expression"]);
 
 /** Lowercase segments of an identifier, split on non-alphanumeric AND CamelCase
  *  boundaries. Copied VERBATIM from security-ast-go.ts:603 (whole-segment
@@ -622,18 +623,37 @@ function rustSubtreeHas403(node: SyntaxNode): boolean {
   return false;
 }
 
-/** True when `node`, sitting in a PRODUCE / return position, yields a 401
- *  rejection value: a bare `StatusCode::UNAUTHORIZED`, a `(StatusCode::
- *  UNAUTHORIZED, ..)` tuple, a `(STATUS,..).into_response()` / `STATUS
- *  .into_response()` call, or an `Err(<produces 401>)` construction. Recurses
- *  through `Err(..)` and `.into_response()`. Everything else — `Ok(..)`, a plain
- *  identifier, a comparison, a non-status call — yields false. This is the ONLY
- *  gate for a 401 bless: a 401 reached through here in a produce position (a
- *  `return` value, a block tail, an `Err(..)`, an `.ok_or(..)`) rejects; a 401 in
- *  an `if`/`while`/`match` condition/scrutinee, a comparison operand, a match-arm
- *  pattern, or a plain call argument is never routed here. Mirrors Go's
- *  produce-position gating (scanGoBody). */
-function rustProduces401(node: SyntaxNode | null): boolean {
+/** The tail VALUE expression of a block — its implicit-return value — or null.
+ *  Tree-sitter-rust wraps a trailing block-expression (`match`/`if`/`loop`/`block`)
+ *  in an `expression_statement` with NO semicolon; a value-discarding `foo();`
+ *  statement carries a trailing `;`. A bare non-block tail (a `scoped_identifier`,
+ *  a call, a tuple) is already unwrapped. Returns null when the last item is a
+ *  semicolon-terminated statement (value discarded — not a produce position). */
+function blockTailValue(block: SyntaxNode): SyntaxNode | null {
+  const named = block.namedChildren.filter((c): c is SyntaxNode => c !== null);
+  const last = named[named.length - 1] ?? null;
+  if (!last) return null;
+  if (last.type === "expression_statement") {
+    const semi = last.children.some((c) => c?.type === ";");
+    return semi ? null : (last.namedChild(0) ?? null);
+  }
+  return last;
+}
+
+/** True when `node`, evaluated in a PRODUCE position (a `return` value, a `?` try
+ *  operand, a block/body TAIL, a match-arm value, an if/else branch tail), yields
+ *  a 401 rejection. Recurses through: match-arm values, if/else branch tails, and
+ *  block tails (a 401 produced by ANY branch counts); `Err(<produces>)`, a bare
+ *  `(STATUS,..).into_response()` / `STATUS.into_response()`, `.ok_or(<produces>)`,
+ *  and the `.ok_or_else(|| <produce tail>)` closure body (its OWN tail, NOT any
+ *  mention); a bare 401 status / status-tuple / Actix `ErrorUnauthorized(..)` at
+ *  the leaf. Everything else — `Ok(..)`, a plain identifier, a comparison, a
+ *  non-reject call — yields false. This is the ONLY gate for a 401 bless: a 401 in
+ *  a comparison operand, a plain call ARGUMENT, a struct-literal field, a
+ *  never-returned let RHS, or an `if`/`while`/`match` CONDITION/SCRUTINEE/PATTERN
+ *  is a MENTION and is never routed here. Mirrors Go's produce-position gating
+ *  (scanGoBody). */
+function rustProducesReject(node: SyntaxNode | null): boolean {
   if (!node) return false;
   switch (node.type) {
     case "scoped_identifier":
@@ -644,14 +664,40 @@ function rustProduces401(node: SyntaxNode | null): boolean {
     }
     case "call_expression": {
       const fn = node.childForFieldName("function");
-      if (fn?.type === "identifier" && fn.text === "Err") {
-        return rustProduces401(node.childForFieldName("arguments")?.namedChild(0) ?? null);
+      if (fn?.type === "identifier") {
+        if (fn.text === "Err") return rustProducesReject(node.childForFieldName("arguments")?.namedChild(0) ?? null);
+        if (RUST_ERR_CTOR_401.has(fn.text)) return true; // Actix ErrorUnauthorized(..) in a produce position
+        return false;
       }
-      if (fn?.type === "field_expression" && fn.childForFieldName("field")?.text === "into_response") {
-        return rustProduces401(fn.childForFieldName("value"));
+      if (fn?.type === "field_expression") {
+        const field = fn.childForFieldName("field")?.text;
+        if (field === "into_response") return rustProducesReject(fn.childForFieldName("value"));
+        if (field === "ok_or") return rustProducesReject(node.childForFieldName("arguments")?.namedChild(0) ?? null);
+        if (field === "ok_or_else") {
+          const closure = node.childForFieldName("arguments")?.namedChild(0) ?? null;
+          const cbody = closure?.type === "closure_expression" ? closure.childForFieldName("body") : null;
+          return rustProducesReject(cbody); // the closure body's OWN produce tail, never any mention
+        }
       }
       return false;
     }
+    case "block":
+      return rustProducesReject(blockTailValue(node));
+    case "if_expression": {
+      if (rustProducesReject(node.childForFieldName("consequence"))) return true; // then-branch block tail
+      const alt = node.childForFieldName("alternative"); // else_clause -> block | if_expression (else-if)
+      return alt ? alt.namedChildren.some((c) => rustProducesReject(c)) : false;
+    }
+    case "match_expression": {
+      const mb = node.namedChildren.find((c): c is SyntaxNode => c?.type === "match_block");
+      return mb
+        ? mb.namedChildren.some((arm) => arm?.type === "match_arm" && rustProducesReject(arm.childForFieldName("value")))
+        : false;
+    }
+    case "return_expression":
+      return rustProducesReject(node.namedChild(0) ?? null);
+    case "try_expression":
+      return rustProducesReject(node.namedChild(0) ?? null); // `E?` propagates Err(E) as a return
     default:
       return false;
   }
@@ -661,80 +707,59 @@ interface RustBodySignals { reject401: boolean; reject403Guarded: boolean; opaqu
 
 /** Scan an effective from_fn body for the reject catalogue. reject401 blesses
  *  ALONE; reject403Guarded blesses only inside a credential-guarded 403 (mirror
- *  Go). Detects a 401 named status in any produce position (Err(STATUS),
- *  (STATUS,..).into_response(), .ok_or(STATUS), a bare tail STATUS, return
- *  Err(STATUS)) plus the ONE explicitly-read `.ok_or_else(|| STATUS)` closure and
- *  Actix `Err(ErrorUnauthorized(..))`. Nested closures are pruned (a reject in a
- *  non-inline closure never blesses). A credential read or an opaque auth-flavored
- *  call with no reject makes the body `opaque` (unsure on the name, never bless). */
+ *  Go). reject401 is decided ENTIRELY by rustProducesReject evaluated on the body's
+ *  actual produce positions (return values, `?` try operands, the block/body tail);
+ *  it recurses match arms, if/else branch tails, Err(STATUS), (STATUS,..)
+ *  .into_response(), .ok_or(STATUS), the .ok_or_else(|| STATUS) closure tail, and
+ *  Actix ErrorUnauthorized(..). A 401 in any NON-produce position (a comparison,
+ *  a call argument, a let RHS, a struct field, a condition/scrutinee/pattern) is a
+ *  MENTION and never blesses. Nested closures are pruned (a reject in a non-inline
+ *  closure never blesses). A credential read or an opaque auth-flavored call with
+ *  no reject makes the body `opaque` (unsure on the name, never a bless). */
 function scanRustBody(body: SyntaxNode, defs: Map<string, SyntaxNode | null>): RustBodySignals {
   const out: RustBodySignals = { reject401: false, reject403Guarded: false, opaqueHint: false, credentialRead: false };
 
-  // 1. A 401 named status blesses ONLY as a PRODUCED value (pruned of nested
-  //    closures): a `return <STATUS>` value or a block TAIL expression that is a
-  //    401, a `(STATUS,..).into_response()`, or an `Err(<produces 401>)`. A 401 in
-  //    a comparison operand (`== StatusCode::UNAUTHORIZED`), an `if`/`while`/`match`
-  //    condition/scrutinee, a `match`-arm PATTERN, or a plain call ARGUMENT (a
-  //    `headers.insert(..)` or a logging macro) is a MENTION, never a reject — the
-  //    invariant requires a verifiable rejection, not a mention. The `Err(..)`,
-  //    `.ok_or(..)` and `.ok_or_else(..)` produce forms are read in the call scan
-  //    (section 2). Mirrors Go's produce-position gating (scanGoBody).
+  // 1. reject401 fires ONLY from a 401 produced in a PRODUCE position (pruned of
+  //    nested closures): a `return <produces>` value, a `<produces>?` try operand
+  //    (error propagation IS a reject-return), or the block/body TAIL value.
+  //    rustProducesReject recurses through match-arm values, if/else branch tails,
+  //    block tails, `Err(..)`, `.into_response()`, `.ok_or(..)`, and the
+  //    `.ok_or_else(|| ..)` closure produce tail. A 401 in a comparison operand
+  //    (`== Err(..)`), a plain call ARGUMENT, a struct-literal field, a
+  //    never-returned let RHS, an `if`/`while`/`match` CONDITION/SCRUTINEE, or a
+  //    `match`-arm PATTERN is a MENTION, never a reject — the invariant requires a
+  //    verifiable rejection, not a mention. Mirrors Go's produce-position gating.
   for (const ret of rustPrunedDescendants(body, RETURN_EXPR_T)) {
     if (ret.hasError) continue;
-    if (rustProduces401(ret.namedChild(0) ?? null)) { out.reject401 = true; break; }
+    if (rustProducesReject(ret.namedChild(0) ?? null)) { out.reject401 = true; break; }
   }
   if (!out.reject401) {
-    // A block TAIL expression (last child, no trailing `;`), or a bare-expression
-    // body (`|req, next| STATUS`). Non-produce last children (an
-    // `expression_statement`, a plain identifier) fail rustProduces401.
-    const named = body.namedChildren.filter((c): c is SyntaxNode => c !== null);
-    const tail = body.type === "block" ? (named[named.length - 1] ?? null) : body;
-    if (rustProduces401(tail)) out.reject401 = true;
+    // A `?` try operand anywhere in the body (`h.get(x).ok_or(STATUS)?`): the `?`
+    // propagates the constructed Err as a return, so it is a produce position.
+    for (const t of rustPrunedDescendants(body, TRY_EXPR_T)) {
+      if (t.hasError) continue;
+      if (rustProducesReject(t.namedChild(0) ?? null)) { out.reject401 = true; break; }
+    }
+  }
+  if (!out.reject401) {
+    // The block TAIL value (a bare-expression body `|req, next| STATUS`, or a
+    // trailing `match`/`if` implicit-return); blockTailValue unwraps the
+    // no-semicolon expression_statement tree-sitter wraps a block-expression in.
+    const tail = body.type === "block" ? blockTailValue(body) : body;
+    if (rustProducesReject(tail)) out.reject401 = true;
   }
 
-  // 2. Call-position produce scan: `Err(<produces 401>)` (the idiomatic Axum
-  //    reject value), the `.ok_or(STATUS)` / `.ok_or_else(|| STATUS)` produce
-  //    forms (read explicitly), Actix bare-identifier 401 constructors, plus the
-  //    credential-read and opaque-auth-call signals. A `.into_response()` that is
-  //    NOT wrapped in a produce position (section 1) never reaches reject401 here.
+  // 2. Behavioral SIGNALS (never a bless, so a position-agnostic scan is safe):
+  //    a structural credential-surface read, and an unresolvable auth-flavored
+  //    callee. Both only drive unsure-vs-not-auth on the hook name — neither sets
+  //    reject401 (that is decided ENTIRELY by the produce-position gate above).
   const boundLocals = rustCredentialBoundLocals(body);
   for (const call of rustPrunedDescendants(body, CALL_EXPR_T)) {
     if (call.hasError) continue;
     if (!out.credentialRead && rustIsCredentialReadCall(call)) out.credentialRead = true;
     const fn = call.childForFieldName("function");
-    if (fn?.type === "field_expression") {
-      const field = fn.childForFieldName("field")?.text;
-      if (field === "ok_or") {
-        if (rustProduces401(call.childForFieldName("arguments")?.namedChild(0) ?? null)) out.reject401 = true;
-        continue;
-      }
-      if (field === "ok_or_else") {
-        const closure = call.childForFieldName("arguments")?.namedChild(0) ?? null;
-        const cbody = closure?.type === "closure_expression" ? closure.childForFieldName("body") : null;
-        if (cbody) {
-          if (cbody.type === "scoped_identifier" && rustRejectStatus(cbody) === "401") out.reject401 = true;
-          else if (cbody.namedChildren.some((c) => c && c.type === "scoped_identifier" && rustRejectStatus(c) === "401")) {
-            out.reject401 = true;
-          } else {
-            for (const si of rustPrunedDescendants(cbody, SCOPED_ID_T)) {
-              if (rustRejectStatus(si) === "401") { out.reject401 = true; break; }
-            }
-          }
-        }
-        continue;
-      }
-      continue; // any other method call is not a produce path (into_response gated in section 1)
-    }
-    if (fn?.type === "identifier") {
-      const name = fn.text;
-      if (name === "Err") {
-        if (rustProduces401(call.childForFieldName("arguments")?.namedChild(0) ?? null)) out.reject401 = true;
-        continue;
-      }
-      if (RUST_ERR_CTOR_401.has(name)) { out.reject401 = true; continue; }
-      // An unresolvable (not-in-file, or duplicate) auth-flavored callee -> opaque.
-      if (!defs.has(name) && rustNameHasHint(name)) out.opaqueHint = true;
-    }
+    // An unresolvable (not-in-file, or duplicate) auth-flavored callee -> opaque.
+    if (fn?.type === "identifier" && !defs.has(fn.text) && rustNameHasHint(fn.text)) out.opaqueHint = true;
   }
 
   // 3. Guarded 403: an `if <credential-condition> { <403 reject> }`.
