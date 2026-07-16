@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { securityConsistency } from "../../../src/drift/security-consistency.js";
 import { runDriftDetection, driftFindingToFinding } from "../../../src/drift/index.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
+import { SECURITY_SUBCATEGORIES } from "../../../src/drift/types.js";
 import { fileWithTree } from "../../helpers/drift-tree.js";
 import { extractPythonRoutesAst } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
@@ -1855,5 +1856,147 @@ describe("Task 6 (Go): suppression pins", () => {
     expect(a).toBeDefined();
     const dangerLine = src.split("\n").findIndex((l) => l.includes(`/danger`)) + 1;
     expect(a!.deviatingFiles.some((d: any) => d.evidence[0].line === dangerLine)).toBe(true);
+  });
+});
+
+// ── Task 4 (Rust): AST extractor wired into both seams ───────────────────────
+//
+// Seam 1 (extractRoutes) and seam 2 (buildFileMiddlewareIndex) dispatch to the
+// Rust AST extractor for CLEAN-parsed rust files. Unlike Go/Python there is NO
+// regex fallback: an absent or errored tree yields zero Rust routes (unchanged
+// from before this module was wired in). Byte-identical for every non-rust file.
+describe("Rust AST wiring (Task 4)", () => {
+  const rsTree = (p: string, c: string) => fileWithTree(p, c, "rust");
+  const authFinding = (fs: any[]) => fs.find((f: any) => f.subCategory === SECURITY_SUBCATEGORIES.auth);
+  const devPaths = (f: any): string[] =>
+    f ? f.deviatingFiles.map((d: any) => d.evidence[0].code.split(" ")[1]) : [];
+
+  // A from_fn body that verifiably 401-rejects (rule 2 bless, NOT a name bless).
+  const requireAuthFn =
+    `async fn require_auth(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+    `    let t = req.headers().get("Authorization");\n` +
+    `    if t.is_none() { return Err(StatusCode::UNAUTHORIZED); }\n` +
+    `    Ok(next.run(req).await)\n}\n`;
+
+  // 7 routes covered by a trailing from_fn(require_auth) .layer (all DESCENDANTS
+  // of it -> blessed), then ONE route added AFTER the layer. That last link is the
+  // OUTERMOST node with the layer as its DESCENDANT, so the covering-layer walk
+  // finds no ancestor layer -> it stays unauthed (the "stripped" deviator).
+  const sevenAuthedThen = (lastPath: string) =>
+    requireAuthFn +
+    `fn app() -> Router {\n    Router::new()\n` +
+    ["/a", "/b", "/c", "/d", "/e", "/f", "/g"].map((p) => `        .route("${p}", post(h))\n`).join("") +
+    `        .layer(middleware::from_fn(require_auth))\n` +
+    `        .route("${lastPath}", post(h))\n}\n`;
+
+  // N authed routes in one file, all covered by a trailing from_fn(require_auth) layer.
+  const authedPeersFile = (dir: string, name: string, paths: string[]) =>
+    rsTree(`${dir}/${name}`,
+      requireAuthFn +
+      `fn app() -> Router {\n    Router::new()\n` +
+      paths.map((p) => `        .route("${p}", post(h))\n`).join("") +
+      `        .layer(middleware::from_fn(require_auth))\n}\n`);
+  const sevenPeerPaths = ["/p1", "/p2", "/p3", "/p4", "/p5", "/p6", "/p7"];
+
+  // ── Seam 1: dispatch selects the Rust AST branch ──
+  it("dispatch: 7 layer-authed routes + 1 stripped route -> exactly one auth finding on the stripped route", async () => {
+    const f = await rsTree("src/rapi/api.rs", sevenAuthedThen("/stripped"));
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    const findings = securityConsistency.detect(mkCtx([f]));
+    const auths = findings.filter((x) => x.subCategory === SECURITY_SUBCATEGORIES.auth);
+    // Before this branch, Rust contributed zero routes and nothing fired.
+    expect(auths).toHaveLength(1);
+    expect(auths[0].deviatingFiles).toHaveLength(1);
+    expect(devPaths(auths[0])).toEqual(["/stripped"]);
+  });
+
+  it("no regex fallback: a tree-less OR broken-tree rust file emits zero routes through detect", async () => {
+    const src = sevenAuthedThen("/stripped");
+    // Control: a CLEAN tree extracts the routes and fires (the branch is live).
+    const clean = await rsTree("src/rnofb/api.rs", src);
+    expect(clean.tree!.rootNode.hasError).toBe(false);
+    expect(authFinding(securityConsistency.detect(mkCtx([clean])))).toBeDefined();
+    // Tree-less: no tree at all -> the Rust arm is gated off -> zero routes, so
+    // detect stays silent (routes.length < 2). There is NO regex fallback.
+    const treeless = file("src/rnofb/api.rs", src, "rust");
+    expect(treeless.tree).toBeUndefined();
+    expect(securityConsistency.detect(mkCtx([treeless]))).toHaveLength(0);
+    // Broken tree: rootNode.hasError -> the Rust arm is gated off -> zero routes.
+    // Unlike Go/Python, no regex fallback recovers the parse-error file's routes.
+    const broken = await rsTree("src/rnofb/api.rs", src + `fn broke() { let x = = 1; }\n`);
+    expect(broken.tree!.rootNode.hasError).toBe(true);
+    expect(securityConsistency.detect(mkCtx([broken]))).toHaveLength(0);
+  });
+
+  // ── Seam 2: cross-language regex noise can no longer bless a clean rust file ──
+  it("cross-language noise (seam 2): a rust doc-comment app.use never blesses a clean rust route", async () => {
+    const orders = await rsTree("src/rnoise/orders.rs",
+      `/// Mirrors the Node service: app.use(authMiddleware) runs first.\n` +
+      `fn app() -> Router {\n    Router::new().route("/orders", post(create))\n}\n`);
+    expect(orders.tree!.rootNode.hasError).toBe(false);
+    const peers = await authedPeersFile("src/rnoise", "peers.rs", sevenPeerPaths);
+    const f = authFinding(securityConsistency.detect(mkCtx([orders, peers])));
+    expect(f).toBeDefined();
+    // The case-insensitive jsAuth regex matches `app.use(authMiddleware` in the
+    // doc comment, but a clean rust tree forces the js/go/py index arms false, so
+    // /orders stays unauthed and is the flagged deviator.
+    expect(devPaths(f)).toContain("/orders");
+  });
+
+  it("unsure survives the dispatch: an extractor-typed route's deviator is the hedged shape", async () => {
+    const peers = await authedPeersFile("src/rhedge", "peers.rs", sevenPeerPaths);
+    // The handler carries an auth-extractor param (AuthUser) and the route is NOT
+    // covered by any layer -> the route resolves UNSURE naming the type (never a
+    // type-name bless: hasAuth stays false, authUnsureHook = "AuthUser").
+    const unsure = await rsTree("src/rhedge/unsure.rs",
+      `async fn h(user: AuthUser) -> Response { todo!() }\n` +
+      `fn app() -> Router {\n    Router::new().route("/unsure", post(h))\n}\n`);
+    const findings = securityConsistency.detect(mkCtx([peers, unsure]));
+    const auths = findings.filter((x) => x.subCategory === SECURITY_SUBCATEGORIES.auth);
+    expect(auths).toHaveLength(1);
+    expect(auths[0].deviatingFiles).toHaveLength(1);
+    const dev = auths[0].deviatingFiles[0].detectedPattern;
+    expect(dev).toContain("double check"); // the shipped hedged copy, reused verbatim
+    expect(dev).toContain("AuthUser");
+  });
+
+  it("healthPaths end-to-end: 7 layer-authed routes + 1 unauthed POST /healthz -> zero auth findings", async () => {
+    const f = await rsTree("src/rhealth/api.rs", sevenAuthedThen("/healthz"));
+    expect(f.tree!.rootNode.hasError).toBe(false);
+    // /healthz is excluded, leaving 7/7 authed -> no deviation.
+    expect(authFinding(securityConsistency.detect(mkCtx([f])))).toBeUndefined();
+  });
+
+  // ── Byte-identical guard: a clean rust file cannot perturb non-rust findings ──
+  it("byte-identity: adding a clean rust route file does not change the JS/Python/Go findings", async () => {
+    const js = await fileWithTree("src/js/api.ts",
+      `router.post("/items", requireAuth, createItem);\n` +
+      `router.put("/items/:id", requireAuth, updateItem);\n` +
+      `router.patch("/items/:id", requireAuth, patchItem);\n` +
+      `router.delete("/items/:id", requireAuth, deleteItem);\n` +
+      `router.post("/danger", wipeEverything);\n`);
+    const py = await fileWithTree("src/py/orders.py",
+      `@app.post("/a")\n@requires_auth\ndef a(): return {}\n` +
+      `@app.post("/b")\n@requires_auth\ndef b(): return {}\n` +
+      `@app.post("/c")\n@requires_auth\ndef c(): return {}\n` +
+      `@app.post("/d")\n@requires_auth\ndef d(): return {}\n` +
+      `@app.post("/pydanger")\ndef pydanger(): return {}\n`, "python");
+    const go = await fileWithTree("src/go/orders.go",
+      `func AuthMiddleware() gin.HandlerFunc { return func(c *gin.Context) { if c.GetHeader("Authorization") == "" { c.AbortWithStatus(http.StatusUnauthorized); return }; c.Next() } }\n` +
+      `func routes(r *gin.Engine) {\n\tr.Use(AuthMiddleware())\n\tr.POST("/o1", createX)\n\tr.POST("/o2", createY)\n}\n`, "go");
+    // A single unauthed GET route in its own directory: GET is not mutating, so it
+    // is in no auth/validation vote and (alone) triggers no rate-limit vote -> it
+    // contributes zero findings and carries no auth-machinery symbols.
+    const rust = await fileWithTree("src/rust/thing.rs",
+      `fn app() -> Router {\n    Router::new().route("/rust-thing", get(handler))\n}\n`, "rust");
+    expect(rust.tree!.rootNode.hasError).toBe(false);
+
+    const nonRust = [js, py, go];
+    const withoutRust = securityConsistency.detect(mkCtx(nonRust));
+    const withRust = securityConsistency.detect(mkCtx([...nonRust, rust]));
+    expect(withRust).toEqual(withoutRust);
+    // Meaningful: the non-rust findings actually present (the JS deviator fires),
+    // so this is a real byte-for-byte comparison, not two empty arrays.
+    expect(withoutRust.length).toBeGreaterThan(0);
   });
 });

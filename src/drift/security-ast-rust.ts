@@ -114,7 +114,7 @@
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
-import type { RouteInfo } from "./security-consistency.js";
+import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
 
 // Field name for Axum's fluent builder registration (`Router::new().route(...)`).
 const ROUTE_FIELD = "route";
@@ -925,6 +925,15 @@ function extractorTypeUnsure(handler: string | null, defs: Map<string, SyntaxNod
     if (RUST_AUTH_EXTRACTOR_TYPES.has(tname) || rustNameIsFlavored(tname)) return tname;
   }
   return null;
+}
+
+/** Seam-2 parity shape. Axum auth is CHAIN-scoped (a .layer wraps only the routes in its
+ *  fluent subtree), so there is no safe FILE-level Rust auth OR: returning true here would
+ *  bless every route in the file, including siblings a layer never wrapped. v1 returns
+ *  all-false (never OR an UNSURE — honesty invariant, mirror extractGoFileMiddlewareAst,
+ *  security-ast-go.ts:1382). The route extractor computes auth itself from the tree. */
+export function extractRustFileMiddlewareAst(_tree: Tree): FileMiddleware {
+  return { hasAuth: false, hasValidation: false, hasRateLimit: false };
 }
 
 export function extractRustRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
