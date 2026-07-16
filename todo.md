@@ -1,13 +1,32 @@
 # CLI backlog
 
-- **Hedge recommendation noun is Python-flavored for Go/mixed findings.** The
-  shared `hedgeRecommendationSuffix` (`src/drift/security-consistency.ts`) and
-  the terminal's read-back regex (`src/output/terminal.ts`, `before_request
-  hook (...)`) hardcode the Flask/FastAPI noun "before_request hook", which is
-  inaccurate for a Go middleware/handler hedge (e.g. `middleware.VerifyToken`).
-  Neutralizing it requires changing the producer and the terminal regex in
-  lockstep (a language-aware branch so Python stays byte-identical), which is
-  reserved for the user-facing honesty pass. Parked.
+- **Rust auth recall gaps (all fail-safe — a miss, never a false-bless).** From
+  the real-repo spot check: (1) a `MethodRouter::route_layer(...)` nested inside
+  `arg1` of `.route(path, mr)` is invisible to the ancestor-layer coverage walk,
+  so a genuinely-protected Axum route gets neither bless nor hedge; (2)
+  parenthesized/macro-wrapped rejects (`return (Err(FORBIDDEN))`, `forbidden!()`)
+  don't bless because `rustProducesReject` has no `parenthesized_expression` /
+  `macro_invocation` case (symmetric across 401/403 — fix both at once); (3) an
+  Actix `ErrorForbidden(..)` ctor isn't recognized for the guarded-403 lane.
+- **Rust v1.1: in-file `FromRequest`/`FromRequestParts` impl bless.** Today an
+  extractor-typed param resolves to `unsure`; reading the impl body to verify a
+  reject would let it bless. Same idea for multi-statement middleware bodies
+  (e.g. Echo `JWTWithConfig`, Go) and cross-function group wiring.
+- **Cross-file resolution extensions.** Python absolute imports; multi-module Go
+  (multiple `go.mod`). Current resolver is single-module / relative-import only.
+- **Minor cross-language hedge asymmetry.** A Python hook with an opaque body and
+  a NON-auth-flavored name resolves `unsure`; Go/Rust resolve the same shape
+  `not-auth`. Both are safe (never a bless). Decide whether to align Python to
+  `not-auth` for uniformity, or keep the more cautious hedge.
+- **Optional: language-aware hedge noun.** The auth "double check" hedge now says
+  a neutral "an auth hook (X)" for all languages (was the Flask-specific "a
+  before_request hook"). A nicety would be language-specific nouns (Python
+  "before_request hook / dependency", Go "middleware", Rust "extractor / layer"),
+  which needs threading the finding's language into `hedgeRecommendationSuffix`
+  and the terminal read-back regex in lockstep. Low priority.
+- **Batched `SCORING_VERSION` bump before the next publish.** The Rust auth lane
+  and the Python hook reconciliation change stored auth verdicts; fold into the
+  next version bump + silent backfill so users don't see per-scan version churn.
 
 - **No per-call logging in the MCP server (tool calls are invisible).** The stdio
   server (`src/mcp/server.ts`) only writes startup (`vibedrift-mcp running on
