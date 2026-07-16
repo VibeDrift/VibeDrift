@@ -1,5 +1,13 @@
 # CLI backlog
 
+- **Refresh `ARCHITECTURE.md` against the code (or fold it into the handbook).** Sections 11/20
+  still describe the retired pre-v4 exponential scoring formula, `SCORING_VERSION "v3"`, and
+  "24 security rules" vs the current v11 noisy-OR engine and 20 patterns; `AGENTS.md` says
+  "12 analyzers + 8 detectors" vs the registries' 13/14. The registries and `docs/handbook/`
+  (see `DEVELOPER_HANDBOOK_OSS.html`) are the source of truth.
+- **`test/calibration/README.md` drift.** Sample output shows a "≥5pt" monotonic drop (the gate in
+  `run.ts` is 3.0) and a "drop a generator in `generators/`" section references a directory that
+  does not exist (injectors live in `injectors.ts`).
 - **Rust auth recall gaps (all fail-safe — a miss, never a false-bless).** From
   the real-repo spot check: (1) a `MethodRouter::route_layer(...)` nested inside
   `arg1` of `.route(path, mr)` is invisible to the ancestor-layer coverage walk,
