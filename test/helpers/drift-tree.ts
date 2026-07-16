@@ -4,7 +4,7 @@ import type { DriftFile } from "../../src/drift/types.js";
 export async function fileWithTree(
   path: string,
   content: string,
-  language: "javascript" | "typescript" | "python" | "go" = "typescript",
+  language: "javascript" | "typescript" | "python" | "go" | "rust" = "typescript",
 ): Promise<DriftFile> {
   const tree = await parseFile({
     path, relativePath: path, language, content, lineCount: content.split("\n").length,
