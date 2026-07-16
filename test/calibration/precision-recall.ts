@@ -23,6 +23,7 @@ import { generateBaseline, type BaselineFile } from "./baseline.js";
 import { INJECTORS } from "./injectors.js";
 import { flaskAuthedGroup, pyAuthFile, pyAppFile, stripFlaskAuth } from "./python-security-fixture.js";
 import { ginAuthedGroup, goAuthFile, goMainFile, stripGinAuth } from "./go-security-fixture.js";
+import { axumAuthedGroup, rustAuthTokensFile, stripAxumAuth } from "./rust-security-fixture.js";
 import { classify, findingCategory, type CategoryMetrics, type DriftLabel, type ScoredFinding } from "./metrics.js";
 
 // Each injector's expected detector category (what a correct detector emits).
@@ -162,13 +163,37 @@ async function main(): Promise<void> {
     .map((s) => ({ ...s, category: "security_posture_go" }));
   mergeInto(agg, classify(goScored, goLabels));
 
+  // 5. Rust security corpus (own root, own row label), mirroring the Python/Go
+  // rows above verbatim. Exercises the AST extractor's realistic Axum fixture
+  // through the FULL on-disk scan pipeline (not the direct detector call
+  // test/calibration/security-rust.test.ts uses), kept out of the TS
+  // baseline/injector loop for the same isolation reason as the Python/Go
+  // rows: merging Rust files into generateBaseline() would contaminate the
+  // naming/architecture rows and shift the clean-scan FP floor, and merging
+  // this row's counts into the JS/Python/Go "security_posture" rows would let
+  // a Rust regression hide behind good numbers from the other languages.
+  const rustBase = [...axumAuthedGroup(), rustAuthTokensFile];
+  const rustVariant = stripAxumAuth(rustBase, 3); // 3 of 8 files stripped -> ratio 5/8 <= 0.75: primary vote silent, gap path
+  const rustLabels = diffLabels(rustBase, rustVariant, "security_posture_rust");
+  const rustDir = join(root, "security_rust");
+  await writeFixture(rustDir, rustVariant);
+  const rustScored = scored(await scan(rustDir))
+    .filter((s) => s.category === "security_posture")
+    .map((s) => ({ ...s, category: "security_posture_rust" }));
+  mergeInto(agg, classify(rustScored, rustLabels));
+
   const allRows = finalize(agg);
   // Only the INJECTED categories have synthetic ground truth — those are the
   // ones we can fairly score. Other categories that fire on the templated
   // baseline (semantic_duplication, dead-code, phantom_scaffolding — the 6
   // near-identical, consumer-less handlers legitimately trip them) have no
   // ground truth here and are reported separately as un-measured.
-  const injectedCats = new Set([...Object.values(INJECTOR_CATEGORY), "security_posture_py", "security_posture_go"]);
+  const injectedCats = new Set([
+    ...Object.values(INJECTOR_CATEGORY),
+    "security_posture_py",
+    "security_posture_go",
+    "security_posture_rust",
+  ]);
   const rows = allRows.filter((r) => injectedCats.has(r.category));
   const unmeasured = allRows.filter((r) => !injectedCats.has(r.category) && (r.fp ?? 0) > 0);
 

@@ -276,6 +276,99 @@ since local defs take precedence over any cross-file candidate.
   plain S1-shape stripped deviator run in the same test stays flat, not
   hedged (no leakage between the two failure modes).
 
+## Rust security fixture (the multilang calibration gate)
+
+`rust-security-fixture.ts` + `security-rust.test.ts` are the enforced
+precision/recall gate for the Rust AST security extractor
+(`src/drift/security-ast-rust.ts`), mirroring the Python/Go gates above and
+running the same way (a normal vitest file, checked on every `npm test`).
+
+**The v1 boundary governs the whole corpus:** Rust v1 blesses a route ONLY
+when a covering (ancestor) `.layer`/`.route_layer` wraps a
+`middleware::from_fn`/`from_fn_with_state` whose in-file body VERIFIABLY
+rejects (401-family). There is no name-only bless and no type-name bless. So
+every authed fixture below DEFINES its `require_auth`/`gate` middleware
+IN-FILE with a body that actually rejects, and blesses through the readable
+reject, never through the name. Extractor-typed auth (an `AuthUser`/`Identity`
+handler param) and Actix/Rocket auth resolve UNSURE at best — v1 does not read
+a `FromRequest` impl even when it is in-file, and Actix attribute-macro routes
+have no builder layer chain at all to walk.
+
+The corpus is realistic Axum/Actix multi-file code (real `Router::new()`
+builder chains, `.route_layer`/`.layer` scoping, `from_fn`/`from_fn_with_state`
+resolution, Actix attribute macros), split into independent roots so each
+corpus roots its own `repoHasAuthMachinery` evidence and its own
+route-directory vote (`routeGroupKey` = dirname):
+
+- `rustsrv/routes/` — 8 Axum files, 2 mutating routes each (POST + DELETE),
+  authed via a single `.route_layer(middleware::from_fn(require_auth))`
+  covering both.
+- `rustsrv/auth_tokens.rs` — the repo-global `login_required` machinery token
+  (case-sensitive: this is what `repoHasAuthMachinery` matches;
+  Rust-idiomatic `require_auth` is deliberately NOT in that regex, mirroring
+  the Python fixture's `auth.py` trick).
+- `statesrv/routes/` — 5 Axum files, one mutating route each, authed via
+  `.layer(middleware::from_fn_with_state(state.clone(), require_auth))`
+  (LAST-arg resolution) — a SECOND bless mechanism, proving the dominance
+  vote is not a single code path.
+- `hooks/routes/` — 5 uniformly PUBLIC Axum webhook receivers, same
+  negative-control shape as the Python/Go rows: signature verification
+  happens inside the handler body via a `check_signature` helper, never as a
+  `from_fn` layer, so it's structurally invisible to the covering-layer walk.
+  **This is why the negative control lives in its own corpus root:**
+  `repoHasAuthMachinery` is repo-global over whatever files are in
+  `ctx.files`, not scoped to a route group, so mixing it into an authed
+  corpus would let that corpus's own machinery leak in.
+- `bodycol/routes/`, `bodygate/routes/`, `bodyunsure/routes/` — the three
+  body-signature scenarios (S6-S8), each its own root for the same
+  machinery-isolation reason.
+- `actixsrv/` — Actix attribute-macro handlers (`#[get(...)]`/`#[post(...)]`).
+  Measures the v1 boundary explicitly: method+path recognition works
+  identically to Axum, but auth never blesses (an auth-flavored extractor
+  type hedges, a non-auth extractor type or a scope-level `.wrap` resolves
+  flat not-auth — the `.wrap` is structurally invisible to an attribute-macro
+  route, since v1's covering-layer walk only ever starts from a builder
+  `.route(...)` call node).
+
+Nine scenarios (S0-S8), mirroring the Python/Go S0-S8, plus an Actix
+addendum:
+
+| # | Scenario | Corpus | Asserts |
+|---|----------|--------|---------|
+| S0 | Recognition + no-name-bless pin | rustsrv + statesrv + hooks (18 files) | 2 routes/file (Axum), 1 route/file (state), 1 unauthed route/file (hooks), def-only file yields 0 routes, unresolved name hedges, in-file reject blesses |
+| S1 | Primary dominance vote, `from_fn` | rustsrv (8 files, 1 stripped) | dominantCount 14, totalRelevantFiles 16, consistencyScore 88, precision/recall 1.0 |
+| S2 | Primary dominance vote, `from_fn_with_state` | statesrv (5 files, 1 stripped) | dominantCount 4, score 80, through the LAST-arg resolution path |
+| S3 | Uniform-auth-gap fallback | rustsrv (all 8 stripped) + auth_tokens.rs | gap fires, severity error, precision/recall 1.0 |
+| S4 | Negative control | hooks (5 files) | non-vacuity first, then zero findings |
+| S5 | Uniformly-authed control | full rustsrv + statesrv corpus | non-vacuity first, then zero findings on every axis |
+| S6 | Name-auth-but-body-isnt collision | bodycol (5 files) | flat not-auth, NOT suppressed, no hedge |
+| S7 | Body-is-real-auth positive | bodygate (5 files) | boring `gate()` hook blesses on body alone |
+| S8 | Unresolvable-body UNSURE | bodyunsure (5 files) | hedged copy naming the hook, counts match S6, no leakage into S1 |
+
+**S1's arithmetic note (audit-first):** the task brief's shorthand describes
+S1 by file count ("dominantCount 7, totalRelevantFiles 8"). The fixture
+carries 2 mutating routes per file, so the actual applicable-routes
+denominator is 16, not 8, and stripping one file's layer removes auth from
+its 2 routes. The ratio is identical (7/8 == 14/16 == 0.875, consistencyScore
+rounds to 88 either way), but the literal `dominantCount`/`totalRelevantFiles`
+fields are asserted as 14/16 — verified against
+`analyzeSecurityProperty`'s own arithmetic, not copied from the brief.
+
+**Isolated trend row (`npm run calibrate`):** a Rust corpus loop runs after
+the Go row in `precision-recall.ts`, relabeled to a dedicated
+`security_posture_rust` category (never merged into the shared TS baseline or
+the JS/Python/Go `security_posture` rows, for the same isolation reasons
+those rows document). Measured on the first run: precision 1.00, recall 1.00
+(TP 3, FP 0, FN 0) — every one of the 3 stripped files in the gap-path
+variant was caught. The task brief flagged that Rust recall was *expected* to
+be lower than Python/Go given the conservative v1; that did not materialize
+here because this corpus's deviators use the canonical from_fn-strip shape
+(the same shape S1/S3 measure), which the extractor resolves cleanly. This is
+a real, verified number, not a floor — a future corpus exercising a harder
+recall case (e.g. an extractor-typed deviator) could legitimately measure
+lower without failing the gate (the enforced floor is the `security-floor`
+row at >= 0.95, unaffected by this row).
+
 ## Adding a new injection type
 
 Drop a generator in `generators/`. Signature:
