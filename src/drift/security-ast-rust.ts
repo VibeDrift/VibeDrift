@@ -166,6 +166,126 @@ export const SECURITY_AST_RUST = {
   VERB_CALLEES, ANY_CALLEES, ON_CALLEES, ATTR_ROUTE_METHODS, ROUTE_FIELD, MUTATING_VERBS,
 };
 
+// ─── Body-first auth classification (Task 3) ─────────────────────────────────
+//
+// GOVERNING INVARIANT — NEVER-FALSE-BLESS. A route blesses ONLY when a covering
+// (ANCESTOR) `.layer`/`.route_layer` wraps a `middleware::from_fn(fn)` whose
+// in-file body VERIFIABLY rejects (401-family, or a credential-guarded 403).
+// There is NO name-only bless and NO type-name bless. Every opaque, imported,
+// unreadable, or veto case resolves `not-auth` or `unsure`; every auth-flavored
+// EXTRACTOR TYPE on a handler param resolves `unsure` (LOCKED, v1 does NOT read
+// the `FromRequest` impl even when it is in-file). Mirrors the Go design in
+// security-ast-go.ts (classifyGoMiddlewareAuth + bodyAuthSignatureGo).
+//
+// LAYER SCOPING (the crux): an Axum `.layer`/`.route_layer` wraps only the
+// routes registered BEFORE it. In the tree the layer call is the OUTER node and
+// the routes it wraps are its DESCENDANTS (a LEFT-associative chain nests as
+// route_B(layer_L(route_A(new())))). `coveringLayerArgs` walks UP from a route
+// call collecting ONLY ancestor layer args, so `.layer(auth).route(A)` — where A
+// is the OUTER node and the layer a descendant — never blesses A.
+
+/** Three-way behavioral signal of a from_fn body: a 401-family (or
+ *  credential-guarded 403) reject blesses; a credential-read / opaque-auth-call
+ *  body with no reject is `opaque` (drives unsure-vs-not-auth on the name); a
+ *  visible non-enforcing body is `none`. Mirrors GoBodySignal. */
+export type RustBodySignal = "reject" | "none" | "opaque";
+/** Precedence outcome. `unsure` is not-authed internally (never sets hasAuth) —
+ *  it only records the hook name so a renderer can hedge. Rules 4/5 (opaque /
+ *  unreadable) NEVER return "auth". Mirrors GoAuthOutcome. */
+export type RustAuthOutcome = "auth" | "not-auth" | "unsure";
+
+// Named status constants this module reads, mapped to code. Axum SCREAMING_CASE
+// (StatusCode::UNAUTHORIZED) and Rocket/Actix PascalCase (Status::Unauthorized /
+// HttpResponse::Unauthorized) both resolve. A bare integer literal (from_u16(401),
+// Err(401)) is DELIBERATELY absent: v1 requires the named constant (a construction
+// is not itself a reject; requiring the name is the safe-direction call).
+const RUST_STATUS_CONSTS = new Map<string, "401" | "403" | "404" | "500">([
+  ["UNAUTHORIZED", "401"], ["Unauthorized", "401"],
+  ["FORBIDDEN", "403"], ["Forbidden", "403"],
+  ["NOT_FOUND", "404"], ["NotFound", "404"],
+  ["INTERNAL_SERVER_ERROR", "500"], ["InternalServerError", "500"],
+]);
+// The receiver path a status constant hangs off of (the `path` field of a
+// scoped_identifier's LAST segment). `http::StatusCode::UNAUTHORIZED` has a
+// nested scoped path whose own last segment is "StatusCode"; matched by suffix.
+const STATUS_PATH_TAILS = new Set(["StatusCode", "Status", "HttpResponse"]);
+// Actix bare-identifier 401 error constructors (`Err(ErrorUnauthorized(..))`).
+const RUST_ERR_CTOR_401 = new Set(["ErrorUnauthorized"]);
+
+// Auth lexicons — VERBATIM copies of the Go sets (security-ast-go.ts). Keeping
+// them byte-identical means a rename smuggling attempt fails the same way in both
+// languages and the whole-segment discipline is shared.
+const RUST_AUTH_VETO_SEGMENTS = new Set([
+  "skip", "bypass", "mock", "disable", "disabled", "optional", "noop", "fake",
+  "stub", "dummy", "test", "dev", "insecure", "parse", "handler", "login",
+  "log", "logger", "logging", "metrics", "stats",
+]);
+const RUST_AUTH_SEGMENTS = new Set([
+  "auth", "auth2", "authenticate", "authenticated", "authentication",
+  "authorize", "authorization", "jwt", "oauth", "oauth2", "bearer",
+  "session", "token", "user", "users", "credential", "credentials",
+  "principal", "identity",
+]);
+const RUST_AUTH_PAIRS = new Set([
+  "logged in", "require auth", "require login", "require user", "require role",
+  "require session", "ensure user", "ensure auth", "ensure session",
+  "verify token", "verify user", "verify session", "token required",
+  "check auth", "check session", "is authenticated", "validate token",
+]);
+const RUST_OPAQUE_HINT_SEGMENTS = new Set([
+  ...RUST_AUTH_SEGMENTS, "check", "confirm", "guard", "verify", "require",
+  "ensure", "protect", "restrict",
+]);
+// Credential-surface reads (a `.get("Authorization")` etc.); the string key must
+// be credential-flavored and NOT csrf/xsrf/agent. Mirrors the Go credential set.
+const RUST_CRED_READ_FIELDS = new Set([
+  "get", "get_header", "header", "typed_header", "cookie", "cookies", "get_cookie",
+]);
+const RUST_CREDENTIAL_KEY_SEGMENTS = new Set([
+  "user", "uid", "token", "jwt", "auth", "authorization", "login",
+  "credentials", "session", "bearer", "cookie", "sid",
+]);
+const RUST_CREDENTIAL_KEY_VETO = new Set(["csrf", "xsrf", "agent"]);
+// Optionality wrappers on a handler-param TYPE veto the extractor lane entirely
+// (`Option<AuthUser>` / MaybeAuth / OptionalUser never even hedge).
+const RUST_OPTIONALITY_SEGMENTS = new Set(["option", "optional", "maybe"]);
+// Non-auth Axum/Actix extractor types: a handler param of one of these
+// contributes NOTHING (no bless, no hedge).
+const RUST_NON_AUTH_EXTRACTORS = new Set([
+  "Json", "Query", "Path", "State", "Form", "Extension", "Bytes", "RawQuery",
+  "TypedHeader", "Multipart", "Host", "ConnectInfo", "OriginalUri", "Request",
+]);
+// Auth-flavored extractor types whose NAME hedges (never blesses). The five
+// canonical names the brief pins plus a few common synonyms; `Claims` is here
+// because it is not segment-flavored on its own.
+const RUST_AUTH_EXTRACTOR_TYPES = new Set([
+  "AuthUser", "Claims", "RequireAuth", "Identity", "Bearer",
+  "AuthenticatedUser", "CurrentUser", "LoggedInUser", "Principal", "JwtClaims",
+]);
+// Axum middleware constructors whose LAST argument is the middleware handler.
+const FROM_FN_CALLEES = new Set(["from_fn", "from_fn_with_state"]);
+// Middleware-applying chain fields whose ANCESTOR position over a route makes it
+// a covering layer. `wrap` (Actix) is included for classification completeness;
+// body-first still gates any bless, so a non-rejecting wrap never blesses.
+const LAYER_FIELDS = new Set(["layer", "route_layer", "wrap"]);
+
+const SCOPED_ID_T = new Set(["scoped_identifier"]);
+const CALL_EXPR_T = new Set(["call_expression"]);
+const IF_EXPR_T = new Set(["if_expression"]);
+const LET_DECL_T = new Set(["let_declaration"]);
+
+/** Lowercase segments of an identifier, split on non-alphanumeric AND CamelCase
+ *  boundaries. Copied VERBATIM from security-ast-go.ts:603 (whole-segment
+ *  matching makes substring blessing structurally impossible). */
+function nameSegments(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((s) => s.length > 0);
+}
+
 /** Path/verb text of a Rust string literal. string_literal is a LEAF in the pinned
  *  grammar (slice off the two quote chars). raw_string_literal has an r + variable-#
  *  prefix, so strip r#*"…"#* by regex; a mismatch → null (skip, a miss is safe). Anything
@@ -198,7 +318,16 @@ function inErroredContext(node: SyntaxNode): boolean {
   return false;
 }
 
-interface RustRoute { method: string; path: string; anchor: SyntaxNode; handler: string | null; }
+interface RustRoute {
+  method: string;
+  path: string;
+  anchor: SyntaxNode;
+  handler: string | null;
+  // The route-registration `call_expression` (builder `.route(...)` link), the
+  // START of the covering-layer ancestor walk. Null for attribute-macro routes
+  // (Actix/Rocket have no builder layer chain; only the extractor lane applies).
+  call: SyntaxNode | null;
+}
 
 /** Collect the HTTP verbs a method-router expression registers. Walks the base
  *  callee and any method-router chain: a plain/scoped verb call (`post(h)`,
@@ -299,7 +428,7 @@ function asBuilderRoute(call: SyntaxNode): RustRoute | null {
   if (path === null || !path.startsWith("/")) return null; // leading-slash gate
   const method = resolveAxumMethod(named[1]);
   if (method === null) return null; // not a recognized verb callee
-  return { method, path, anchor: field, handler: axumHandlerName(named[1]) };
+  return { method, path, anchor: field, handler: axumHandlerName(named[1]), call };
 }
 
 /** The `method = "VERB"` verbs of a generic `#[route(...)]` token tree, in
@@ -361,7 +490,7 @@ function asAttributeRoute(attrItem: SyntaxNode): RustRoute | null {
     sib = sib.nextNamedSibling;
   }
   if (sib?.type !== "function_item") return null;
-  return { method, path, anchor: attrItem, handler: sib.childForFieldName("name")?.text ?? null };
+  return { method, path, anchor: attrItem, handler: sib.childForFieldName("name")?.text ?? null, call: null };
 }
 
 /** File-wide map of top-level and impl-method function definitions by name
@@ -380,9 +509,347 @@ export function collectRustFunctionDefs(root: SyntaxNode): Map<string, SyntaxNod
   return defs;
 }
 
+/** "401"|"403"|"404"|"500"|"other"|null for a Rust status node. v1 reads only the
+ *  NAMED constant (StatusCode::UNAUTHORIZED / Status::Unauthorized, FORBIDDEN/
+ *  Forbidden, ...); a bare integer_literal is NOT blessed (from_u16(401) is a
+ *  construction, not a reject — a miss is safe). Never guesses a bare local const. */
+function rustRejectStatus(n: SyntaxNode | null): "401" | "403" | "404" | "500" | "other" | null {
+  if (!n) return null;
+  if (n.type === "scoped_identifier") {
+    const pathText = n.childForFieldName("path")?.text ?? "";
+    const tail = pathText.split("::").pop() ?? pathText;
+    const name = n.childForFieldName("name")?.text ?? "";
+    if (STATUS_PATH_TAILS.has(tail)) return RUST_STATUS_CONSTS.get(name) ?? "other";
+  }
+  if (n.type === "integer_literal") return "other"; // v1: bare integer never blesses
+  return null;
+}
+
+/** Descendants of `node` of one of `types`, NOT descending into nested
+ *  `closure_expression` / `function_item` subtrees (a reject in a non-inline
+ *  closure/nested fn is not executed inline). Pre-order; the root is never
+ *  yielded. Mirror of goPrunedDescendants (security-ast-go.ts:635). The targeted
+ *  `.ok_or_else` closure is read explicitly, never via this walk. */
+function rustPrunedDescendants(node: SyntaxNode, types: Set<string>): SyntaxNode[] {
+  const out: SyntaxNode[] = [];
+  const visit = (n: SyntaxNode) => {
+    for (const child of n.namedChildren) {
+      if (!child || child.type === "closure_expression" || child.type === "function_item") continue;
+      if (types.has(child.type)) out.push(child);
+      visit(child);
+    }
+  };
+  visit(node);
+  return out;
+}
+
+/** True when a string key reads as a credential (segment hit, veto cancels). */
+function rustCredKeyIsCredential(key: string): boolean {
+  const segs = nameSegments(key);
+  if (segs.some((s) => RUST_CREDENTIAL_KEY_VETO.has(s))) return false;
+  return segs.some((s) => RUST_CREDENTIAL_KEY_SEGMENTS.has(s));
+}
+
+/** True when a call structurally reads a credential surface: `.get("Authorization")`
+ *  (only when the receiver chain text mentions a header/cookie surface, excluding
+ *  `cache.get(...)`), `.get_header(...)` / `.header(...)` / `.typed_header(...)`, or
+ *  a cookie accessor. The string key must be credential-flavored and NOT
+ *  csrf/xsrf/agent. Mirrors goIsCredentialReadCall. */
+function rustIsCredentialReadCall(call: SyntaxNode): boolean {
+  const fn = call.childForFieldName("function");
+  if (!fn || fn.type !== "field_expression") return false;
+  const field = fn.childForFieldName("field")?.text ?? "";
+  if (!RUST_CRED_READ_FIELDS.has(field)) return false;
+  const arg0 = call.childForFieldName("arguments")?.namedChild(0) ?? null;
+  const key = arg0 && (arg0.type === "string_literal" || arg0.type === "raw_string_literal")
+    ? rustStringText(arg0)
+    : null;
+  const recvText = fn.childForFieldName("value")?.text ?? "";
+  const surfaceReceiver = /header|cookie/i.test(recvText);
+  if (field === "get") {
+    // A generic `.get(key)` counts only on a header/cookie surface with a
+    // credential-flavored key (guards against cache.get("token")).
+    return surfaceReceiver && key !== null && rustCredKeyIsCredential(key);
+  }
+  if (field === "cookie" || field === "cookies" || field === "get_cookie") return true;
+  // get_header / header / typed_header: credential-flavored key, or a bare
+  // header accessor with no string key (typed extractor).
+  return key === null || rustCredKeyIsCredential(key);
+}
+
+/** True when an unresolvable callee name is auth-flavored enough to be opaque. */
+function rustNameHasHint(name: string): boolean {
+  return nameSegments(name).some((s) => RUST_OPAQUE_HINT_SEGMENTS.has(s));
+}
+
+/** Local names bound to a structural credential read (`let t = req.headers()
+ *  .get("Authorization")`), pruned of nested closures. Lets `t.is_none()` count
+ *  as a credential guard. Mirror goCredentialBoundLocals. */
+function rustCredentialBoundLocals(body: SyntaxNode): Set<string> {
+  const bound = new Set<string>();
+  for (const decl of rustPrunedDescendants(body, LET_DECL_T)) {
+    if (decl.hasError) continue;
+    const pattern = decl.childForFieldName("pattern");
+    const value = decl.childForFieldName("value");
+    if (pattern?.type !== "identifier" || !value) continue;
+    if (value.type === "call_expression" && rustIsCredentialReadCall(value)) bound.add(pattern.text);
+  }
+  return bound;
+}
+
+/** True when an if-guard's condition structurally reads a credential surface or
+ *  references a credential-bound local (the guarded-403 bless gate). */
+function rustGuardHasCredentialRead(cond: SyntaxNode | null, boundLocals: Set<string>): boolean {
+  if (!cond) return false;
+  const calls = rustPrunedDescendants(cond, CALL_EXPR_T);
+  if (cond.type === "call_expression") calls.unshift(cond);
+  if (calls.some((c) => !c.hasError && rustIsCredentialReadCall(c))) return true;
+  if (boundLocals.size > 0) {
+    const ids = rustPrunedDescendants(cond, new Set(["identifier"]));
+    if (cond.type === "identifier") ids.unshift(cond);
+    if (ids.some((id) => boundLocals.has(id.text))) return true;
+  }
+  return false;
+}
+
+/** True when a subtree contains a 403 status constant (pruned). Only consulted
+ *  INSIDE a credential-guarded if-consequence — a bare 403 never blesses. */
+function rustSubtreeHas403(node: SyntaxNode): boolean {
+  for (const si of rustPrunedDescendants(node, SCOPED_ID_T)) {
+    if (rustRejectStatus(si) === "403") return true;
+  }
+  return false;
+}
+
+interface RustBodySignals { reject401: boolean; reject403Guarded: boolean; opaqueHint: boolean; credentialRead: boolean; }
+
+/** Scan an effective from_fn body for the reject catalogue. reject401 blesses
+ *  ALONE; reject403Guarded blesses only inside a credential-guarded 403 (mirror
+ *  Go). Detects a 401 named status in any produce position (Err(STATUS),
+ *  (STATUS,..).into_response(), .ok_or(STATUS), a bare tail STATUS, return
+ *  Err(STATUS)) plus the ONE explicitly-read `.ok_or_else(|| STATUS)` closure and
+ *  Actix `Err(ErrorUnauthorized(..))`. Nested closures are pruned (a reject in a
+ *  non-inline closure never blesses). A credential read or an opaque auth-flavored
+ *  call with no reject makes the body `opaque` (unsure on the name, never bless). */
+function scanRustBody(body: SyntaxNode, defs: Map<string, SyntaxNode | null>): RustBodySignals {
+  const out: RustBodySignals = { reject401: false, reject403Guarded: false, opaqueHint: false, credentialRead: false };
+
+  // 1. A 401 named status constant in a PRODUCE position (pruned of nested
+  //    closures). Covers Err(STATUS) / tuple.into_response() / .ok_or(STATUS) /
+  //    bare tail / return Err(STATUS). A 401 that is the direct RHS of a `let`
+  //    binding (`let code = StatusCode::UNAUTHORIZED;`) is a REFERENCE, not a
+  //    reject, and is excluded — the invariant requires a verifiable rejection,
+  //    not a mention (the `.ok_or(STATUS)` case is not affected: its status node's
+  //    immediate parent is an `arguments`, never the `let_declaration`).
+  for (const si of rustPrunedDescendants(body, SCOPED_ID_T)) {
+    if (rustRejectStatus(si) === "401" && si.parent?.type !== "let_declaration") {
+      out.reject401 = true;
+      break;
+    }
+  }
+  if (body.type === "scoped_identifier" && rustRejectStatus(body) === "401") out.reject401 = true;
+
+  // 2. Call-position scan: the ok_or_else closure (read explicitly), Actix
+  //    bare-identifier 401 constructors, credential reads, and opaque auth calls.
+  const boundLocals = rustCredentialBoundLocals(body);
+  for (const call of rustPrunedDescendants(body, CALL_EXPR_T)) {
+    if (call.hasError) continue;
+    if (!out.credentialRead && rustIsCredentialReadCall(call)) out.credentialRead = true;
+    const fn = call.childForFieldName("function");
+    if (fn?.type === "field_expression" && fn.childForFieldName("field")?.text === "ok_or_else") {
+      const closure = call.childForFieldName("arguments")?.namedChild(0) ?? null;
+      const cbody = closure?.type === "closure_expression" ? closure.childForFieldName("body") : null;
+      if (cbody) {
+        if (cbody.type === "scoped_identifier" && rustRejectStatus(cbody) === "401") out.reject401 = true;
+        else if (cbody.namedChildren.some((c) => c && c.type === "scoped_identifier" && rustRejectStatus(c) === "401")) {
+          out.reject401 = true;
+        } else {
+          for (const si of rustPrunedDescendants(cbody, SCOPED_ID_T)) {
+            if (rustRejectStatus(si) === "401") { out.reject401 = true; break; }
+          }
+        }
+      }
+      continue;
+    }
+    if (fn?.type === "identifier") {
+      const name = fn.text;
+      if (RUST_ERR_CTOR_401.has(name)) { out.reject401 = true; continue; }
+      // An unresolvable (not-in-file, or duplicate) auth-flavored callee -> opaque.
+      if (!defs.has(name) && rustNameHasHint(name)) out.opaqueHint = true;
+    }
+  }
+
+  // 3. Guarded 403: an `if <credential-condition> { <403 reject> }`.
+  for (const ifs of rustPrunedDescendants(body, IF_EXPR_T)) {
+    if (ifs.hasError) continue;
+    const cond = ifs.childForFieldName("condition");
+    const cons = ifs.childForFieldName("consequence");
+    if (cons && rustGuardHasCredentialRead(cond, boundLocals) && rustSubtreeHas403(cons)) {
+      out.reject403Guarded = true;
+    }
+  }
+
+  return out;
+}
+
+/** A from_fn body's three-way behavioral signal. */
+export function bodyAuthSignatureRust(body: SyntaxNode, defs: Map<string, SyntaxNode | null>): RustBodySignal {
+  const s = scanRustBody(body, defs);
+  if (s.reject401 || s.reject403Guarded) return "reject";
+  if (s.opaqueHint || s.credentialRead) return "opaque";
+  return "none";
+}
+
+/** True when a name is auth-FLAVORED (drives unsure-vs-not-auth for opaque /
+ *  unreadable bodies — NEVER a bless). A veto segment cancels. Mirror goNameIsFlavored. */
+function rustNameIsFlavored(name: string): boolean {
+  const segs = nameSegments(name);
+  if (segs.some((s) => RUST_AUTH_VETO_SEGMENTS.has(s))) return false;
+  if (segs.some((s) => RUST_AUTH_SEGMENTS.has(s))) return true;
+  for (let i = 0; i < segs.length - 1; i++) {
+    if (RUST_AUTH_PAIRS.has(`${segs[i]} ${segs[i + 1]}`)) return true;
+  }
+  return false;
+}
+
+/** The LOCKED five-rule precedence. `body` is the from_fn's in-file body (or null
+ *  when imported/unresolvable). Rules 4/5 (opaque / unreadable) NEVER return
+ *  "auth" — a name alone never blesses. Mirror classifyGoMiddlewareAuth. */
+export function classifyRustAuth(
+  name: string, body: SyntaxNode | null, defs: Map<string, SyntaxNode | null>,
+): RustAuthOutcome {
+  const segs = nameSegments(name);
+  if (segs.some((s) => RUST_AUTH_VETO_SEGMENTS.has(s))) return "not-auth"; // rule 1: veto beats a body reject
+  if (body) {
+    const sig = bodyAuthSignatureRust(body, defs);
+    if (sig === "reject") return "auth";                                   // rule 2: a verified reject blesses
+    if (sig === "none") return "not-auth";                                 // rule 3: visible non-enforcing body
+    return rustNameIsFlavored(name) ? "unsure" : "not-auth";               // rule 4: opaque never blesses on name
+  }
+  return rustNameIsFlavored(name) ? "unsure" : "not-auth";                 // rule 5: unreadable never blesses on name
+}
+
+/** The callee NAME of a call/identifier/scoped_identifier: identifier text, or a
+ *  scoped_identifier's last `name` segment. Never its arguments. */
+function rustCalleeName(node: SyntaxNode): string | null {
+  if (node.type === "identifier") return node.text;
+  if (node.type === "scoped_identifier") return node.childForFieldName("name")?.text ?? null;
+  if (node.type === "call_expression") {
+    const fn = node.childForFieldName("function");
+    return fn ? rustCalleeName(fn) : null;
+  }
+  return null;
+}
+
+/** Classify a `.layer`/`.route_layer`/`.wrap` argument. `from_fn(X)` /
+ *  `from_fn_with_state(state, X)` resolve X (the LAST arg) to its in-file
+ *  function_item body → classifyRustAuth. A non-from_fn layer arg (TraceLayer::new,
+ *  HttpAuthentication::bearer, a bare `auth_mw`) resolves body=null → rule 5
+ *  (unsure if auth-flavored, else not-auth). NEVER blessed on the name. */
+function classifyRustLayerArg(
+  arg: SyntaxNode, defs: Map<string, SyntaxNode | null>,
+): { outcome: RustAuthOutcome; name: string | null } {
+  if (arg.type === "call_expression") {
+    const fn = arg.childForFieldName("function");
+    const calleeName = fn ? rustCalleeName(fn) : null;
+    if (calleeName && FROM_FN_CALLEES.has(calleeName)) {
+      const args = rustNamed(arg.childForFieldName("arguments"));
+      const handler = args.length ? args[args.length - 1] : null; // from_fn: only arg; with_state: LAST arg
+      if (handler?.type === "identifier") {
+        const hname = handler.text;
+        const def = defs.get(hname) ?? null;
+        const hbody = def ? def.childForFieldName("body") : null;
+        return { outcome: classifyRustAuth(hname, hbody, defs), name: hname };
+      }
+      if (handler?.type === "closure_expression") {
+        // Inline `from_fn(|req, next| { ... })`: read the closure body directly;
+        // an empty name means the body must carry the whole verdict (no name bless).
+        const cbody = handler.childForFieldName("body");
+        return { outcome: cbody ? classifyRustAuth("", cbody, defs) : "not-auth", name: null };
+      }
+      return { outcome: "not-auth", name: null };
+    }
+    // Non-from_fn layer constructor (TraceLayer::new_for_http(), Logger::default(),
+    // HttpAuthentication::bearer(v)): body is unreadable -> rule 5 on the callee name.
+    return { outcome: classifyRustAuth(calleeName ?? "", null, defs), name: calleeName };
+  }
+  if (arg.type === "identifier") {
+    return { outcome: classifyRustAuth(arg.text, null, defs), name: arg.text };
+  }
+  if (arg.type === "scoped_identifier") {
+    const name = arg.childForFieldName("name")?.text ?? "";
+    return { outcome: classifyRustAuth(name, null, defs), name: name || null };
+  }
+  return { outcome: "not-auth", name: null };
+}
+
+/** Walk UP from a route's `.route` call collecting the ARG NODES of every ANCESTOR
+ *  `.layer`/`.route_layer`/`.wrap` call. NEVER-FALSE-BLESS crux: the layer call is
+ *  the OUTER node and the routes it wraps are its DESCENDANTS, so a covering layer
+ *  is always an ANCESTOR of the route. The walk stops the moment it leaves the
+ *  fluent chain (parent is no longer a chain-link whose receiver is the current
+ *  node), so `.layer(auth).route(A)` — where A is the OUTER node and the layer a
+ *  DESCENDANT — collects nothing and never blesses A. */
+function coveringLayerArgs(routeCall: SyntaxNode): SyntaxNode[] {
+  const out: SyntaxNode[] = [];
+  let cur: SyntaxNode = routeCall;
+  for (let hops = 0; hops < 64; hops++) {
+    const parent = cur.parent;
+    if (!parent || parent.type !== "field_expression") break;             // left the chain
+    if (!(parent.childForFieldName("value")?.equals(cur) ?? false)) break; // cur is not the receiver
+    const grand = parent.parent;
+    if (!grand || grand.type !== "call_expression") break;
+    if (!(grand.childForFieldName("function")?.equals(parent) ?? false)) break;
+    if (LAYER_FIELDS.has(parent.childForFieldName("field")?.text ?? "")) {
+      for (const a of rustNamed(grand.childForFieldName("arguments"))) out.push(a);
+    }
+    cur = grand; // climb past this chain link (layer collected above, route/other skipped)
+  }
+  return out;
+}
+
+/** The OUTER type name of a handler-param type node: `AuthUser` -> "AuthUser",
+ *  `Option<AuthUser>` -> "Option" (outer, so the optionality veto fires),
+ *  `Json<T>` -> "Json", `&AuthUser` -> "AuthUser", `web::Json<T>` -> "Json". */
+function rustTypeName(node: SyntaxNode | null): string | null {
+  if (!node) return null;
+  if (node.type === "type_identifier") return node.text;
+  if (node.type === "generic_type") return rustTypeName(node.childForFieldName("type"));
+  if (node.type === "scoped_type_identifier") return node.childForFieldName("name")?.text ?? null;
+  if (node.type === "reference_type") return rustTypeName(node.childForFieldName("type"));
+  return null;
+}
+
+/** Auth-extractor-typed handler param → the type NAME (UNSURE, never a bless in
+ *  v1). Resolve the handler identifier → in-file function_item → each param's
+ *  OUTER type name. An Option/Maybe/Optional wrapper vetoes the param entirely; a
+ *  non-auth extractor (Json/Query/Path/State/Form/...) contributes nothing. v1
+ *  does NOT read the type's `FromRequest` impl even when it is in-file (LOCKED —
+ *  the biggest documented recall cost). Returns the FIRST auth-extractor type
+ *  name, or null. */
+function extractorTypeUnsure(handler: string | null, defs: Map<string, SyntaxNode | null>): string | null {
+  if (!handler) return null;
+  const def = defs.get(handler) ?? null;
+  const params = def?.childForFieldName("parameters");
+  if (!params) return null;
+  for (const p of rustNamed(params)) {
+    if (p.type !== "parameter") continue;
+    const tname = rustTypeName(p.childForFieldName("type"));
+    if (!tname) continue;
+    const segs = nameSegments(tname);
+    if (segs.some((s) => RUST_OPTIONALITY_SEGMENTS.has(s))) continue; // optionality veto -> no hedge
+    if (RUST_NON_AUTH_EXTRACTORS.has(tname)) continue;                // Json/Path/State/... -> nothing
+    if (RUST_AUTH_EXTRACTOR_TYPES.has(tname) || rustNameIsFlavored(tname)) return tname;
+  }
+  return null;
+}
+
 export function extractRustRoutesAst(tree: Tree, filePath: string): RouteInfo[] {
   const routes: RouteInfo[] = [];
   const root = tree.rootNode;
+  // File-wide function-def map for body-first auth resolution (Task 3): from_fn
+  // middleware handlers and handler-param extractor lookups both key off it.
+  const defs = collectRustFunctionDefs(root);
 
   // Attribute-macro routes (Actix/Rocket). attribute_item siblings are flat
   // (never nested inside each other), so traversal order already matches
@@ -390,7 +857,7 @@ export function extractRustRoutesAst(tree: Tree, filePath: string): RouteInfo[] 
   for (const attrItem of root.descendantsOfType("attribute_item")) {
     if (!attrItem || inErroredContext(attrItem)) continue;
     const r = asAttributeRoute(attrItem);
-    if (r) routes.push(emitRoute(r, filePath));
+    if (r) routes.push(emitRoute(r, filePath, defs));
   }
 
   // Builder .route routes (Axum). Filtering to field=="route" yields exactly
@@ -409,20 +876,42 @@ export function extractRustRoutesAst(tree: Tree, filePath: string): RouteInfo[] 
   builderMatches.sort((a, b) =>
     a.anchor.startPosition.row - b.anchor.startPosition.row
     || a.anchor.startPosition.column - b.anchor.startPosition.column);
-  for (const r of builderMatches) routes.push(emitRoute(r, filePath));
+  for (const r of builderMatches) routes.push(emitRoute(r, filePath, defs));
 
   return routes;
 }
 
-function emitRoute(r: RustRoute, filePath: string): RouteInfo {
+function emitRoute(r: RustRoute, filePath: string, defs: Map<string, SyntaxNode | null>): RouteInfo {
+  // Finalize per-route auth (Task 3). For each covering (ancestor) layer arg,
+  // classify body-first: ANY "auth" blesses (hasAuth = true, hook cleared — a
+  // blessed route never hedges). Else the FIRST "unsure" covering layer name, or
+  // (if none) the auth-extractor type on the handler param, fills authUnsureHook.
+  // A mutating route with no signal stays hasAuth=false with no hedge.
+  let hasAuth = false;
+  let authUnsureHook: string | undefined;
+  for (const arg of r.call ? coveringLayerArgs(r.call) : []) {
+    const { outcome, name } = classifyRustLayerArg(arg, defs);
+    if (outcome === "auth") hasAuth = true;
+    else if (outcome === "unsure" && authUnsureHook === undefined && name) authUnsureHook = name;
+  }
+  if (hasAuth) {
+    authUnsureHook = undefined; // a blessed route never hedges
+  } else if (authUnsureHook === undefined) {
+    const ext = extractorTypeUnsure(r.handler, defs);
+    if (ext) authUnsureHook = ext;
+  }
+
   return {
     method: r.method,
     path: r.path,
     file: filePath,
     line: r.anchor.startPosition.row + 1, // anchor = the "route" field token (builder) or attribute_item (macro)
-    hasAuth: false,        // Task 3 fills the signal
+    hasAuth,               // Task 3: body-first, covering-ancestor-layer only
     hasValidation: false,  // deferred non-goal
     hasRateLimit: false,   // deferred non-goal
     hasErrorHandler: false, // write-only field; every AST path hard-codes false
+    // authUnsureHook only on a NON-blessed, auth-flavored-opaque route; the key
+    // is ABSENT otherwise so every other Rust route serializes byte-identically.
+    ...(authUnsureHook !== undefined ? { authUnsureHook } : {}),
   };
 }
