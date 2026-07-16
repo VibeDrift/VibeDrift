@@ -6,13 +6,15 @@
  * security-ast-python.ts, and security-ast-go.ts. Rust has zero coverage
  * today; this is the first module for the language.
  *
- * TASK 1 SCOPE: route recognition only. `hasAuth` is unconditionally false
- * on every route this module emits — Task 3 fills the signal, Task 4 wires
- * this module into security-consistency.ts. Method/path resolution beyond
- * the single-verb-callee case (the `on(filter, h)` combinator, a chained
- * multi-verb `get(l).post(c)` link, Rocket's generic `#[route(GET, "/x")]`
- * macro) is Task 2; those shapes are recognized structurally as NOT a route
- * today (a recall gap, never a bless) rather than guessed.
+ * SCOPE (Task 1 + Task 2): route recognition and method/path resolution.
+ * `hasAuth` is unconditionally false on every route this module emits — Task 3
+ * fills the signal, Task 4 wires this module into security-consistency.ts.
+ * Task 2 resolves the full method surface: the `on(MethodFilter, h)`
+ * combinator and a chained multi-verb `get(l).post(c)` link (both verb-SHAPED
+ * but unresolvable/multi -> "ALL" or the first mutating verb, never a silent
+ * GET-drop) and Actix's generic `#[route("/x", method = "VERB")]` macro
+ * (verbs read from the token tree). An arg1 with NO verb shape at all (a bare
+ * identifier, an unrecognized callee) is still a deliberate SKIP.
  *
  * A find-replace port from a sibling module fails silently on five Rust
  * grammar traps (probe-verified against the pinned tree-sitter-wasms rust
@@ -82,18 +84,21 @@
  * modules' fallback can.
  *
  * PINNED RECALL GAPS (measured, never a false-bless; each is a route this
- * module will not find rather than one it misclassifies):
- *   - Axum's `on(MethodFilter, handler)` combinator (`ON_CALLEES` is
- *     forward-declared for Task 2; its `MethodFilter` argument is not parsed
- *     yet, so an `on(...)` call is simply not recognized as a route).
- *   - A chained multi-verb link (`get(l).post(c)`) as `.route`'s arg1: the
- *     outer callee is a `field_expression`, not an `identifier` or
- *     `scoped_identifier`, and `resolveAxumMethod` does not unwrap it, so
- *     the whole `.route(...)` call is skipped rather than guessing one verb.
- *   - Rocket's generic `#[route(GET, "/x")]` macro: `"route"` is
- *     deliberately absent from `ATTR_ROUTE_METHODS` (its method lives inside
- *     the token tree, not in the macro name), so it is unrecognized rather
- *     than resolved as a bogus `"ROUTE"` method.
+ * module will not find, or a method it over-approximates to "ALL", rather
+ * than one it misclassifies into or out of the mutating vote wrongly):
+ *   - Axum's `on(MethodFilter, handler)` precise verb is v1-DEFERRED: an
+ *     `on(...)` call IS recognized as a route, but its `MethodFilter` argument
+ *     is not parsed, so it resolves to "ALL" (stays in the mutating vote) —
+ *     an over-approximation, never a GET-drop.
+ *   - A method-router built as a separate `let mr = post(h); app.route("/x", mr)`
+ *     binding is NOT recognized: a bare-identifier arg1 is structurally
+ *     indistinguishable from a non-Axum `.route(path, someVar)` call (a config
+ *     or HTTP-client builder), so it is skipped rather than resolved via local
+ *     let-binding dataflow (deferred). A recall gap, never an over-capture.
+ *   - Rocket's generic `#[route(GET, "/x")]` form (verb as a bare POSITIONAL
+ *     token, not `method = "GET"`) is not read: only the Actix
+ *     `#[route("/x", method = "VERB")]` string form resolves its verb; a
+ *     positional-verb route macro falls through to "ALL" (any method).
  *   - `.nest("/api", api_routes())`: emits zero routes itself and the
  *     `"/api"` prefix is NOT applied to routes registered inside
  *     `api_routes()` (a separate expression/function entirely) — a
@@ -102,10 +107,10 @@
  *     in a separate STATEMENT from a later `.route(...)` call on that same
  *     variable is never associated with that route: recognition here is
  *     single-fluent-chain only. Scope inheritance is Task 4.
- *   - HEAD and OPTIONS are excluded from both `VERB_CALLEES` and
- *     `ATTR_ROUTE_METHODS` entirely (never recognized, mirroring the Go
- *     module's `VERB_FIELDS` convention): neither verb is ever emitted as a
- *     route by this module.
+ *   - HEAD and OPTIONS are excluded from `VERB_CALLEES` and
+ *     `ATTR_ROUTE_METHODS` (they live in `EXCLUDED_VERB_CALLEES` only so a
+ *     head/options-only method router is recognized-then-skipped): neither
+ *     verb is ever emitted as a route by this module.
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
@@ -121,24 +126,40 @@ const ROUTE_FIELD = "route";
 const VERB_CALLEES = new Map([
   ["get", "GET"], ["post", "POST"], ["put", "PUT"], ["patch", "PATCH"], ["delete", "DELETE"],
 ]);
+// Method-router verb callees that are NEVER mutating and never emitted as a
+// route: `head(h)` / `options(o)`. Kept separate from VERB_CALLEES (which the
+// module header documents as HEAD/OPTIONS-free) so a head/options callee is
+// still RECOGNIZED as a method-router shape — a head/options-only router is a
+// deliberate SKIP, not an unresolvable "ALL". Mapped to a canonical verb only
+// so the exclusion filter in `resolveAxumMethod` can drop them.
+const EXCLUDED_VERB_CALLEES = new Map([["head", "HEAD"], ["options", "OPTIONS"]]);
 // `any(handler)` registers a route for every method — the same "ALL"
 // sentinel Express's `.all()` resolves to, so it participates in the
 // mutating vote alongside a real mutating verb.
 const ANY_CALLEES = new Set(["any"]);
-// Axum's `on(MethodFilter, handler)` combinator: forward-declared for Task 2
-// (its `MethodFilter` argument is not parsed by this task; see PINNED RECALL
-// GAPS above), never consulted by `resolveAxumMethod` yet.
+// Axum's `on(MethodFilter, handler)` combinator. Its precise `MethodFilter`
+// verb is v1-DEFERRED (not parsed): an `on(...)` call is verb-SHAPED but its
+// verb is unresolvable, so it resolves to the "ALL" sentinel and stays in the
+// mutating vote (never a silent GET-drop). See PINNED RECALL GAPS.
 const ON_CALLEES = new Set(["on"]);
 // Actix-web-codegen / Rocket per-verb attribute macro names (`#[get(...)]`,
 // `#[post(...)]`, `#[actix_web::post(...)]`). HEAD and OPTIONS are
 // deliberately absent for the same reason VERB_CALLEES excludes them.
-// Rocket's generic `#[route(METHOD, "/x")]` is deliberately absent too (see
-// PINNED RECALL GAPS above): its method lives inside the token tree, not in
-// the macro name, and Task 1 does not read it out.
+// Actix's generic `#[route("/x", method = "VERB")]` is handled separately
+// (`ROUTE_MACRO`): its method lives inside the token tree, not the macro name.
 const ATTR_ROUTE_METHODS = new Set(["get", "post", "put", "patch", "delete"]);
-// Verbs a RESOLVED route.method may carry once emitted: forward-declared for
-// Task 2/3/4 use (Task 1's single-verb-callee resolution never needs to pick
-// among multiple candidates), mirroring the Go/Python modules' own constant.
+// The generic multi-method attribute macro (`#[route("/x", method = "POST")]`).
+// Its verb(s) live in the token tree as `method = "VERB"` pairs, read by
+// `attrMacroMethod`; no `method=` -> "ALL" (any method).
+const ROUTE_MACRO = "route";
+// The five HTTP verbs this module resolves by name (mutating set plus GET).
+// A statically-literal-but-unrecognized verb (e.g. `"TRACE"`) resolves GET
+// (DRF/Go precedent), distinct from an UNRESOLVABLE dynamic verb -> ALL.
+const RECOGNIZED_VERBS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+// The mutating verbs (plus the "ALL" sentinel) used to pick the winning method
+// across a multi-verb chain or route macro: the FIRST mutating verb wins the
+// resolution, so a mixed `get(l).post(c)` router stays in the mutating vote.
+// Mirrors the Go/Python modules' own constant.
 const MUTATING_VERBS = new Set(["POST", "PUT", "PATCH", "DELETE", "ALL"]);
 
 export const SECURITY_AST_RUST = {
@@ -179,35 +200,85 @@ function inErroredContext(node: SyntaxNode): boolean {
 
 interface RustRoute { method: string; path: string; anchor: SyntaxNode; handler: string | null; }
 
-/** Method for a builder route's arg1: a verb-callee call recognized via
- *  VERB_CALLEES (a plain `post(h)` identifier callee, or a scoped
- *  `axum::routing::post(h)` whose `name` field is the verb) or ANY_CALLEES
- *  (`any(h)`, resolves the "ALL" sentinel). Anything else — a bare
- *  identifier (`handler_service`, not even a call), the `on(filter, h)`
- *  combinator, a chained `get(l).post(c)` multi-verb callee (a
- *  `field_expression`, not an identifier/scoped_identifier) — returns null,
- *  so the caller skips the route entirely. A recall gap here can only drop a
- *  route, never bless one. */
-function resolveAxumMethod(arg1: SyntaxNode): string | null {
-  if (arg1.type !== "call_expression") return null;
-  const fn = arg1.childForFieldName("function");
-  let name: string | null = null;
-  if (fn?.type === "identifier") name = fn.text;
-  else if (fn?.type === "scoped_identifier") name = fn.childForFieldName("name")?.text ?? null;
-  if (name === null) return null;
-  if (VERB_CALLEES.has(name)) return VERB_CALLEES.get(name)!;
-  if (ANY_CALLEES.has(name)) return "ALL";
-  return null;
+/** Collect the HTTP verbs a method-router expression registers. Walks the base
+ *  callee and any method-router chain: a plain/scoped verb call (`post(h)`,
+ *  `axum::routing::post(h)`), a chained multi-verb link (`get(l).post(c)`, a
+ *  `field_expression` whose value is the inner method-router call), `any(..)`
+ *  -> "ALL", `on(MethodFilter::VERB, ..)` -> "ALL" (verb v1-DEFERRED), and the
+ *  never-mutating `head`/`options` callees (recognized so a head/options-only
+ *  router is a deliberate skip, never mistaken for an unresolvable form).
+ *  Returns `{ verbs, sawVerbShape }` — `sawVerbShape` gates the route: only a
+ *  recognized BASE call (an inner verb/any/on callee) asserts the shape, so a
+ *  chain whose base is not a router callee is skipped even if an outer field
+ *  verb was collected (guards against a plain `receiver.post(h)` method call). */
+function collectMethodVerbs(arg1: SyntaxNode): { verbs: string[]; sawVerbShape: boolean } {
+  const verbs: string[] = [];
+  let sawVerbShape = false;
+  let cur: SyntaxNode | null = arg1;
+  for (let hops = 0; cur && hops < 16; hops++) {
+    if (cur.type !== "call_expression") break;
+    const fn = cur.childForFieldName("function");
+    if (fn?.type === "identifier") {
+      const name = fn.text;
+      if (VERB_CALLEES.has(name)) { verbs.push(VERB_CALLEES.get(name)!); sawVerbShape = true; }
+      else if (EXCLUDED_VERB_CALLEES.has(name)) { verbs.push(EXCLUDED_VERB_CALLEES.get(name)!); sawVerbShape = true; }
+      else if (ANY_CALLEES.has(name)) { verbs.push("ALL"); sawVerbShape = true; }
+      else if (ON_CALLEES.has(name)) { verbs.push("ALL"); sawVerbShape = true; } // v1: MethodFilter precise verb deferred
+      break; // base of the chain
+    }
+    if (fn?.type === "scoped_identifier") {
+      const name = fn.childForFieldName("name")?.text ?? "";
+      if (VERB_CALLEES.has(name)) { verbs.push(VERB_CALLEES.get(name)!); sawVerbShape = true; }
+      else if (EXCLUDED_VERB_CALLEES.has(name)) { verbs.push(EXCLUDED_VERB_CALLEES.get(name)!); sawVerbShape = true; }
+      break;
+    }
+    if (fn?.type === "field_expression") {
+      // A chain link (`get(l).post(c)`). Collect the outer verb but do NOT assert
+      // the method-router shape here: only a recognized BASE call (an inner
+      // verb/any/on callee) sets sawVerbShape. This skips a plain method call on
+      // a non-router receiver (`receiver.post(h)`, whose base is a bare
+      // identifier) rather than emitting it as a spurious mutating route.
+      const verb = fn.childForFieldName("field")?.text ?? "";
+      if (VERB_CALLEES.has(verb)) verbs.push(VERB_CALLEES.get(verb)!);
+      else if (EXCLUDED_VERB_CALLEES.has(verb)) verbs.push(EXCLUDED_VERB_CALLEES.get(verb)!);
+      cur = fn.childForFieldName("value"); // recurse into the inner method-router call
+      continue;
+    }
+    break;
+  }
+  return { verbs, sawVerbShape };
 }
 
-/** Handler name = arg1's own call's first identifier argument
- *  (`post(create_order)` -> "create_order"). RouteInfo has no handler slot;
- *  this is carried on RustRoute for Task 3's benefit only, unused downstream
- *  in Task 1. */
+/** Resolved method for an Axum builder arg1, or null to SKIP. Not a method
+ *  router (a bare identifier, an unrecognized callee) -> null. A verb-SHAPED
+ *  router whose usable verbs are all HEAD/OPTIONS -> null (never mutating). An
+ *  unresolvable-but-verb-shaped form (`on(..)`, `any(..)`) -> "ALL": it stays
+ *  in the mutating vote, never a silent GET-drop (mirror Go resolveAnyFieldMethod).
+ *  Otherwise the first mutating verb across the chain, else the first verb. */
+function resolveAxumMethod(arg1: SyntaxNode): string | null {
+  const { verbs, sawVerbShape } = collectMethodVerbs(arg1);
+  if (!sawVerbShape) return null; // arg1 is not a method router: skip the route
+  const usable = verbs.filter((v) => v !== "HEAD" && v !== "OPTIONS");
+  if (usable.length === 0) return null; // HEAD/OPTIONS-only -> skip (never mutating)
+  return usable.find((v) => MUTATING_VERBS.has(v)) ?? usable[0];
+}
+
+/** Handler name = the INNERMOST method-router call's first identifier argument
+ *  (`post(create_order)` -> "create_order"; `get(l).post(c)` -> "l", the base
+ *  call). RouteInfo has no handler slot; this is carried on RustRoute for
+ *  Task 3's benefit only, unused downstream today. Null when the base call's
+ *  first argument is not a plain identifier (e.g. `on(MethodFilter::POST, h)`,
+ *  whose first argument is the filter). */
 function axumHandlerName(arg1: SyntaxNode): string | null {
-  if (arg1.type !== "call_expression") return null;
-  const inner = arg1.childForFieldName("arguments")?.namedChild(0) ?? null;
-  return inner?.type === "identifier" ? inner.text : null;
+  let cur: SyntaxNode | null = arg1;
+  for (let hops = 0; cur && hops < 16; hops++) {
+    if (cur.type !== "call_expression") return null;
+    const fn = cur.childForFieldName("function");
+    if (fn?.type === "field_expression") { cur = fn.childForFieldName("value"); continue; }
+    const inner = cur.childForFieldName("arguments")?.namedChild(0) ?? null;
+    return inner?.type === "identifier" ? inner.text : null;
+  }
+  return null;
 }
 
 /** Recognize a builder .route(path, VERB(h)) anchor. Structural gate (Axum is fluent, no
@@ -231,13 +302,40 @@ function asBuilderRoute(call: SyntaxNode): RustRoute | null {
   return { method, path, anchor: field, handler: axumHandlerName(named[1]) };
 }
 
-/** Task 1 stub: reads only the macro name (`"route"` is never a member of
- *  ATTR_ROUTE_METHODS, so this never sees Rocket's generic macro — see
- *  PINNED RECALL GAPS). `tokenTree` is accepted for Task 2's benefit (which
- *  will need to read a VERB out of it for the generic macro) but unused
- *  today. */
-function attrMacroMethod(macro: string, _tokenTree: SyntaxNode | null): string {
-  return macro.toUpperCase();
+/** The `method = "VERB"` verbs of a generic `#[route(...)]` token tree, in
+ *  source order, uppercased. The token tree is FLAT: an `identifier "method"`
+ *  named child is followed (skipping the anonymous `=`) by a `string_literal`
+ *  value. A non-string value (a bare identifier / const) is not readable and
+ *  is skipped, so an empty result means "no readable method=". */
+function readRouteMacroMethods(tokenTree: SyntaxNode): string[] {
+  const kids = rustNamed(tokenTree);
+  const out: string[] = [];
+  for (let i = 0; i < kids.length; i++) {
+    if (kids[i].type !== "identifier" || kids[i].text !== "method") continue;
+    const val = kids[i + 1];
+    const text = val ? rustStringText(val) : null;
+    if (text !== null) out.push(text.toUpperCase());
+  }
+  return out;
+}
+
+/** Resolved method for an attribute macro, or null to SKIP (the macro resolves
+ *  to a non-mutating-only HEAD/OPTIONS set). A per-verb macro (`#[post(..)]`) is
+ *  the macro name upper-cased. The generic `#[route(.., method = "VERB")]`
+ *  macro reads its verbs from the token tree: no readable `method=` -> "ALL"
+ *  (any method); a fully-literal unrecognized verb -> GET (DRF/Go precedent);
+ *  HEAD/OPTIONS values are excluded, and a route whose only verbs are
+ *  HEAD/OPTIONS resolves null (skip). Among the rest, the first mutating verb,
+ *  else the first. */
+function attrMacroMethod(macro: string, tokenTree: SyntaxNode | null): string | null {
+  if (macro !== ROUTE_MACRO) return macro.toUpperCase();
+  const raw = tokenTree ? readRouteMacroMethods(tokenTree) : [];
+  if (raw.length === 0) return "ALL"; // no readable method= -> matches any method
+  const mapped = raw
+    .map((v) => (v === "HEAD" || v === "OPTIONS" ? null : RECOGNIZED_VERBS.has(v) ? v : "GET"))
+    .filter((v): v is string => v !== null);
+  if (mapped.length === 0) return null; // only HEAD/OPTIONS -> skip (never mutating)
+  return mapped.find((v) => MUTATING_VERBS.has(v)) ?? mapped[0];
 }
 
 /** Attribute-macro route on the function_item that FOLLOWS the attribute_item sibling. */
@@ -247,13 +345,15 @@ function asAttributeRoute(attrItem: SyntaxNode): RustRoute | null {
   const callee = attr.namedChild(0);
   const macro = callee?.type === "identifier" ? callee.text
     : callee?.type === "scoped_identifier" ? (callee.childForFieldName("name")?.text ?? "") : "";
-  if (!ATTR_ROUTE_METHODS.has(macro)) return null;
+  if (!ATTR_ROUTE_METHODS.has(macro) && macro !== ROUTE_MACRO) return null;
   const tokenTree = attr.childForFieldName("arguments") ?? null;
   const pathNode = tokenTree
     ? rustNamed(tokenTree).find((n) => n.type === "string_literal" || n.type === "raw_string_literal")
     : null;
   const path = pathNode ? rustStringText(pathNode) : null;
   if (path === null || !path.startsWith("/")) return null;
+  const method = attrMacroMethod(macro, tokenTree);
+  if (method === null) return null; // HEAD/OPTIONS-only route macro -> skip
   // The route attaches to the nearest following function_item sibling, skipping comments
   // and other attributes.
   let sib: SyntaxNode | null = attrItem.nextNamedSibling;
@@ -261,7 +361,6 @@ function asAttributeRoute(attrItem: SyntaxNode): RustRoute | null {
     sib = sib.nextNamedSibling;
   }
   if (sib?.type !== "function_item") return null;
-  const method = attrMacroMethod(macro, tokenTree);
   return { method, path, anchor: attrItem, handler: sib.childForFieldName("name")?.text ?? null };
 }
 

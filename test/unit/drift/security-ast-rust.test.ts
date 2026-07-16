@@ -288,3 +288,149 @@ describe("extractRustRoutesAst: comments and strings never extracted (G8)", () =
     expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
   });
 });
+
+describe("extractRustRoutesAst: method resolution (G3)", () => {
+  const axum = (arg1: string) =>
+    `fn app() -> Router {\n    Router::new().route("/x", ${arg1})\n}\n`;
+  const method = async (name: string, arg1: string): Promise<string[]> => {
+    const f = await rs(name, axum(arg1));
+    return extractRustRoutesAst(f.tree!, f.relativePath).map((r) => r.method);
+  };
+
+  it("resolves each single method-router verb callee to its HTTP verb", async () => {
+    expect(await method("mpost.rs", "post(h)")).toEqual(["POST"]);
+    expect(await method("mput.rs", "put(h)")).toEqual(["PUT"]);
+    expect(await method("mpatch.rs", "patch(h)")).toEqual(["PATCH"]);
+    expect(await method("mdelete.rs", "delete(h)")).toEqual(["DELETE"]);
+    expect(await method("mget.rs", "get(h)")).toEqual(["GET"]);
+  });
+
+  it("resolves any(h) to the ALL sentinel (stays in the mutating vote)", async () => {
+    expect(await method("many.rs", "any(h)")).toEqual(["ALL"]);
+  });
+
+  it("resolves a scoped verb callee axum::routing::post(h) to POST", async () => {
+    expect(await method("mscoped.rs", "axum::routing::post(h)")).toEqual(["POST"]);
+  });
+
+  it("collects both verbs of a chain and resolves the first mutating one", async () => {
+    // get(list).post(create): GET + POST present -> POST wins the mutating vote.
+    expect(await method("mchain1.rs", "get(list).post(create)")).toEqual(["POST"]);
+    // get(a).put(b): the sole mutating verb PUT wins.
+    expect(await method("mchain2.rs", "get(a).put(b)")).toEqual(["PUT"]);
+  });
+
+  it("resolves an unresolvable but verb-shaped on() combinator to ALL, never a GET-drop", async () => {
+    // v1 DEFERRED: the precise MethodFilter verb is not parsed; the route stays
+    // in the mutating vote as ALL rather than silently dropping to GET.
+    expect(await method("mon.rs", "on(MethodFilter::POST, h)")).toEqual(["ALL"]);
+  });
+
+  it("skips a HEAD-only method-router (never mutating)", async () => {
+    const f = await rs("mhead.rs", axum("head(h)"));
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("skips a chain whose only verbs are head/options", async () => {
+    const f = await rs("mheadopt.rs", axum("head(h).options(o)"));
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("skips a bare MethodRouter-variable arg1 (not a method-router shape)", async () => {
+    // route("/x", mr) is structurally indistinguishable from a non-Axum
+    // .route(path, someVar) call; recognizing it would over-capture. Documented
+    // recall gap: a let-bound `let mr = post(h)` route is not resolved here.
+    const f = await rs("mbarevar.rs", axum("mr"));
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("skips an unrecognized non-verb callee my_router()", async () => {
+    const f = await rs("munrec.rs", axum("my_router()"));
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("skips a plain method call receiver.post(h) whose base is not a router callee", async () => {
+    // Guards the chain walk: an outer field verb alone must not synthesize a
+    // spurious mutating route; only a recognized base call asserts the shape.
+    const f = await rs("mfieldbase.rs", axum("receiver.post(h)"));
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("resolves attribute-macro verbs from the macro name", async () => {
+    const g = await rs("aget.rs", `#[get("/g")]\nfn h(){}\n`);
+    expect(extractRustRoutesAst(g.tree!, g.relativePath).map((r) => r.method)).toEqual(["GET"]);
+    const p = await rs("apost.rs", `#[post("/p")]\nfn h(){}\n`);
+    expect(extractRustRoutesAst(p.tree!, p.relativePath).map((r) => r.method)).toEqual(["POST"]);
+    const d = await rs("adelete.rs", `#[delete("/d")]\nfn h(){}\n`);
+    expect(extractRustRoutesAst(d.tree!, d.relativePath).map((r) => r.method)).toEqual(["DELETE"]);
+  });
+
+  it('resolves a generic #[route("/x", method = "POST")] macro to POST', async () => {
+    const f = await rs("aroute.rs", `#[route("/x", method = "POST")]\nfn h(){}\n`);
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["POST /x"]);
+  });
+
+  it('resolves a generic #[route("/x")] with no method= to ALL', async () => {
+    const f = await rs("aroutenone.rs", `#[route("/x")]\nfn h(){}\n`);
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["ALL /x"]);
+  });
+
+  it('resolves a fully-literal unrecognized verb in #[route] to GET', async () => {
+    // A statically-known-but-unrecognized verb resolves GET (DRF/Go precedent),
+    // distinct from an UNRESOLVABLE dynamic verb which resolves ALL.
+    const f = await rs("aroutetrace.rs", `#[route("/x", method = "TRACE")]\nfn h(){}\n`);
+    expect(extractRustRoutesAst(f.tree!, f.relativePath).map((r) => r.method)).toEqual(["GET"]);
+  });
+});
+
+describe("extractRustRoutesAst: path forms and string handling (G4)", () => {
+  const axum = (path: string, arg1 = "post(h)") =>
+    `fn app() -> Router {\n    Router::new().route(${path}, ${arg1})\n}\n`;
+  const paths = async (name: string, path: string): Promise<string[]> => {
+    const f = await rs(name, axum(path));
+    return extractRustRoutesAst(f.tree!, f.relativePath).map((r) => r.path);
+  };
+
+  it("requires a leading slash (skips a slash-less or empty path)", async () => {
+    const noslash = await rs("pnoslash.rs", axum(`"users"`));
+    expect(extractRustRoutesAst(noslash.tree!, noslash.relativePath)).toEqual([]);
+    const empty = await rs("pempty.rs", axum(`""`));
+    expect(extractRustRoutesAst(empty.tree!, empty.relativePath)).toEqual([]);
+  });
+
+  it("accepts axum :id and brace {id} path params verbatim", async () => {
+    expect(await paths("pcolon.rs", `"/users/:id"`)).toEqual(["/users/:id"]);
+    expect(await paths("pbrace.rs", `"/users/{id}"`)).toEqual(["/users/{id}"]);
+  });
+
+  it("accepts the root path /", async () => {
+    expect(await paths("proot.rs", `"/"`)).toEqual(["/"]);
+  });
+
+  it("accepts a unicode path verbatim", async () => {
+    expect(await paths("punicode.rs", `"/café"`)).toEqual(["/café"]);
+  });
+
+  it("reads a raw-string-literal path, stripping the r-prefix and hashes", async () => {
+    expect(await paths("praw.rs", `r"/raw"`)).toEqual(["/raw"]);
+    expect(await paths("prawhash.rs", `r#"/hash"#`)).toEqual(["/hash"]);
+  });
+
+  it("skips a mis-form raw path that fails the strip regex (deliberate safe miss)", async () => {
+    // A byte-raw string br"/x" is a raw_string_literal whose text starts with
+    // `b`, not `r`; the strip regex returns null -> path unresolved -> skip.
+    const f = await rs("prawbyte.rs", axum(`br"/x"`));
+    expect(extractRustRoutesAst(f.tree!, f.relativePath)).toEqual([]);
+  });
+
+  it("skips a non-literal path (const, format!, or binary concat)", async () => {
+    const konst = await rs("pconst.rs", axum(`PATH`));
+    expect(extractRustRoutesAst(konst.tree!, konst.relativePath)).toEqual([]);
+    const fmt = await rs("pfmt.rs", axum(`&format!("/x/{}", id)`));
+    expect(extractRustRoutesAst(fmt.tree!, fmt.relativePath)).toEqual([]);
+    const concat = await rs("pconcat.rs", axum(`"/x" + "/y"`));
+    expect(extractRustRoutesAst(concat.tree!, concat.relativePath)).toEqual([]);
+  });
+});
