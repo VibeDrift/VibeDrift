@@ -1143,6 +1143,30 @@ describe("Task 4: hedged unsure-auth finding copy", () => {
     expect(a.recommendation).toContain("a before_request hook (verify_session)");
   });
 
+  it("mixed-language finding (Python + Go hedged deviators): the noun falls back to the neutral 'auth hook'", async () => {
+    const goTree = (p: string, c: string) => fileWithTree(p, c, "go");
+    // Enough confidently-authed Python peers that the dominance vote fires with
+    // the two unsure routes (8/10 = 0.8 > 0.75).
+    const peers = await Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map((n) => peerAuth(n)));
+    const pyUnsure = await unsureRoute(); // authUnsureHook "verify_session" (.py)
+    const goUnsure = await goTree(
+      "src/routes/reports.go",
+      `package routes\n\nimport (\n\t"github.com/gin-gonic/gin"\n\n\t"example.com/x/middleware"\n)\n\n` +
+        `func RegisterReports(router *gin.Engine) {\n\trouter.Use(middleware.VerifyToken)\n\trouter.POST("/reports", createReport)\n}\n\n` +
+        `func createReport(c *gin.Context) {}\n`,
+    );
+    const a = auth(securityConsistency.detect(ctxOf([...peers, pyUnsure, goUnsure]) as any))!;
+
+    // Both hooks are named...
+    expect(a.recommendation).toContain("verify_session");
+    expect(a.recommendation).toContain("middleware.VerifyToken");
+    // ...but because the hedged deviators span two languages, the noun is the
+    // NEUTRAL "auth hook", never a per-language noun.
+    expect(a.recommendation).toContain("an auth hook (");
+    expect(a.recommendation).not.toContain("before_request hook");
+    expect(a.recommendation).not.toContain("a middleware (");
+  });
+
   it("confident sibling: a plainly-unauthed route (no unsure hook) keeps today's exact flat deviator byte-for-byte", async () => {
     const peers = await Promise.all([peerAuth(1), peerAuth(2), peerAuth(3), peerAuth(4)]);
     const bare = await pyTree("src/routes/x.py", `@app.post("/x")\ndef x():\n    return {}\n`);
