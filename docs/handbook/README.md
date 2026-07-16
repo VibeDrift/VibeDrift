@@ -1,4 +1,30 @@
-# Developer Handbook sources
+# Developer Handbook
+
+How VibeDrift is engineered, chapter by chapter. These files render as normal
+markdown right here on GitHub, so you can read the whole handbook without
+leaving the repo. For the styled single-page version, see
+[vibedrift.ai/handbook](https://vibedrift.ai/handbook) or open
+[`DEVELOPER_HANDBOOK_OSS.html`](../../DEVELOPER_HANDBOOK_OSS.html) at the repo
+root.
+
+## Chapters
+
+1. [Welcome](./01-welcome.md) — what VibeDrift is (and is not), and how to read this handbook
+2. [System Architecture](./02-architecture.md) — the layered pipeline and the repo map
+3. [The Scan Pipeline](./03-scan-pipeline.md) — what happens when you run a scan, and the CLI surface
+4. [Layer 1: Static Analyzers](./04-static-analyzers.md) — the per-file checks and what each one flags
+5. [Cross-File Drift Detection](./05-drift-detection.md) — the dominance vote and the drift detectors
+6. [Security Consistency](./06-security-consistency.md) — auth drift across languages, and never-false-bless
+7. [Layer 1.7: Code DNA](./07-code-dna.md) — fingerprinting, MinHash, op sequences, taint
+8. [Scoring](./08-scoring.md) — from findings to the Vibe Drift Score
+9. [The MCP Server](./09-mcp-tools.md) — drift checks in the agent loop
+10. [Output Surfaces](./10-outputs.md) — terminal, HTML, CSV, DOCX, and the generated context block
+11. [The Local/Cloud Boundary](./11-cloud-boundary.md) — every byte that can leave your machine, and how to opt out
+12. [Testing, Calibration, and CI](./12-testing-and-calibration.md) — how a detector change is proven safe
+13. [Extending VibeDrift](./13-extending.md) — recipes for adding analyzers, detectors, languages, and formats
+14. [Glossary](./14-glossary.md) — every term of art, defined
+
+## Source of truth
 
 This directory is the source of truth for `DEVELOPER_HANDBOOK_OSS.html` at the
 repo root. The HTML is a build artifact. Never edit it by hand.

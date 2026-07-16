@@ -202,9 +202,19 @@ See the [Action repository](https://github.com/skhan75/vibedrift-actions) for al
 | `VIBEDRIFT_API_URL` | Override the API base URL |
 | `VIBEDRIFT_TELEMETRY_DISABLED` | Set to `1` to turn off the beacon and update check |
 
+## Developer Handbook
+
+Want to know how VibeDrift actually works inside? The **Developer Handbook** walks the whole engine: the scan pipeline, every static analyzer, cross-file drift detection, Security Consistency across JavaScript, TypeScript, Python, Go, and Rust, the Code DNA fingerprinting layer, the scoring engine, the MCP server, and how to add your own detector or language.
+
+- **Read it on the web:** [vibedrift.ai/handbook](https://vibedrift.ai/handbook)
+- **Read it here on GitHub:** [`docs/handbook/`](./docs/handbook/) (the chapters render as normal markdown)
+- **Offline:** open [`DEVELOPER_HANDBOOK_OSS.html`](./DEVELOPER_HANDBOOK_OSS.html), a single self-contained file
+
+The handbook is compiled from the markdown chapters in `docs/handbook/` by a zero-dependency script (`npm run handbook`). To improve it, edit a chapter and rebuild. See [`docs/handbook/README.md`](./docs/handbook/README.md).
+
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and how to add an analyzer, [AGENTS.md](./AGENTS.md) for codebase conventions, and [SECURITY.md](./SECURITY.md) for reporting security issues.
+Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and how to add an analyzer, [AGENTS.md](./AGENTS.md) for codebase conventions, and [SECURITY.md](./SECURITY.md) for reporting security issues. To understand the engine before you change it, start with the [Developer Handbook](#developer-handbook).
 
 ## License
 
@@ -214,6 +224,7 @@ MIT. See [LICENSE](./LICENSE). The CLI runs entirely on your machine; the option
 
 - **Website:** [vibedrift.ai](https://vibedrift.ai)
 - **Docs & scoring guide:** [vibedrift.ai/guide](https://vibedrift.ai/guide)
+- **Developer Handbook:** [vibedrift.ai/handbook](https://vibedrift.ai/handbook)
 - **Blog:** [vibedrift.ai/blog](https://vibedrift.ai/blog)
 - **Releases:** [vibedrift.ai/releases](https://vibedrift.ai/releases)
 - **FAQ:** [vibedrift.ai/faq](https://vibedrift.ai/faq)

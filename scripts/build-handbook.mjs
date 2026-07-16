@@ -437,6 +437,27 @@ const confidentialBanner = config.confidential
   ? `<div class="confidential">CONFIDENTIAL. Internal VibeDrift engineering documentation. Do not distribute outside the team.</div>`
   : "";
 
+// Optional head metadata. Defaults keep an internal handbook private (noindex,
+// no canonical); a public handbook served on the web sets these in its
+// handbook.json so search engines index the canonical URL, not this file.
+const metaTags = [
+  config.noindex ? '<meta name="robots" content="noindex">' : "",
+  config.description
+    ? `<meta name="description" content="${escapeHtml(config.description)}">`
+    : "",
+  config.canonical
+    ? `<link rel="canonical" href="${escapeHtml(config.canonical)}">`
+    : "",
+]
+  .filter(Boolean)
+  .join("\n");
+
+// When homeUrl is set, the sidebar title links back to the site (useful when
+// the handbook is served standalone, with no site chrome around it).
+const brandTitle = config.homeUrl
+  ? `<a class="t" href="${escapeHtml(config.homeUrl)}">${escapeHtml(config.title)}</a>`
+  : `<span class="t">${escapeHtml(config.title)}</span>`;
+
 // ---------------------------------------------------------------------------
 // Final HTML
 // ---------------------------------------------------------------------------
@@ -446,7 +467,7 @@ const html = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
+${metaTags}
 <title>${escapeHtml(config.title)}</title>
 <style>
 :root {
@@ -471,6 +492,7 @@ nav.sidebar {
 }
 .brand { padding: 0 20px 14px; border-bottom: 1px solid var(--bd); margin-bottom: 12px; }
 .brand .t { font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--w); }
+a.t:hover { text-decoration: none; }
 .brand .badge {
   display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 1px;
   color: var(--y); border: 1px solid var(--y); border-radius: 3px; padding: 1px 6px; margin-left: 6px;
@@ -580,7 +602,7 @@ ${confidentialBanner}
 <div class="layout">
 <nav class="sidebar">
   <div class="brand">
-    <span class="t">${escapeHtml(config.title)}</span><span class="badge">${escapeHtml(config.badge ?? "")}</span>
+    ${brandTitle}<span class="badge">${escapeHtml(config.badge ?? "")}</span>
     <div class="meta">${version ? `v${escapeHtml(version)} · ` : ""}generated ${generatedOn}</div>
   </div>
   <div class="search"><input id="q" type="search" placeholder="Filter sections…" autocomplete="off"></div>

@@ -2,5 +2,8 @@
   "title": "VibeDrift Developer Handbook",
   "badge": "OSS",
   "confidential": false,
-  "output": "DEVELOPER_HANDBOOK_OSS.html"
+  "output": "DEVELOPER_HANDBOOK_OSS.html",
+  "homeUrl": "https://www.vibedrift.ai",
+  "canonical": "https://www.vibedrift.ai/handbook",
+  "description": "How VibeDrift is engineered: the scan pipeline, static analyzers, cross-file drift detection, Security Consistency across languages, Code DNA, the scoring engine, the MCP server, and how to extend it."
 }
