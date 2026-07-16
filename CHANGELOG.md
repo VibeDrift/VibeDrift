@@ -6,6 +6,42 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.16.0 — 2026-07-16
+
+### Added
+
+- **Security Consistency now checks Python, Go, and Rust**, not just
+  JavaScript/TypeScript. The auth check reads the body of the middleware or hook
+  that guards a route and classifies each route as protected, unprotected, or
+  **unsure**. It never marks a route authenticated on a name or type alone — only
+  when a readable guard verifiably rejects (a 401, or a credential-guarded 403).
+  When the guard's body can't be read (imported, opaque, or an extractor type),
+  the route is flagged "unsure, double check" and named, rather than guessed
+  either way. This holds across Flask/FastAPI/Django (Python), Gin/Echo/stdlib
+  (Go), and Axum/Actix/Rocket (Rust).
+- **Cross-file auth resolution.** When a route's guard is a hook imported from
+  another file, the scanner follows the import to that file and reads the real
+  body before deciding, instead of hedging on the name.
+
+### Changed
+
+- **Import graph is now AST-based.** Import and dependency analysis moved from
+  regex to a real tree-sitter AST with module resolution, so imports mentioned
+  in comments or strings no longer produce false-positive dependency drift.
+
+### Breaking
+
+- **Scoring recalibrated (internal scoring version bumped).** Because the auth
+  check now understands Python, Go, and Rust routes, a web repo in those
+  languages that carries real auth inconsistency may see its Security Consistency
+  (and composite) score move to reflect drift that was always present — a Flask
+  app in our testing dropped about 5 points. Repos whose auth is uniform or
+  expressed only through extractor types, and repos without those route shapes,
+  are unchanged. Saved scores are kept as-is, the new method applies to new
+  scans, cross-version score deltas are suppressed, and the CLI shows a one-time
+  notice linking to the release notes. CI users gating on `--fail-on-score` for
+  an affected repo should re-check their threshold.
+
 ## 0.15.0 — 2026-07-09
 
 ### Fixed

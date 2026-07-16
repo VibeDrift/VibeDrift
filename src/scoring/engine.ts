@@ -55,12 +55,23 @@ import {
  *        mutating routes reflects the security_posture drift it always had.
  *        Only repos with those route shapes move; every other repo is byte
  *        identical, and the bundled calibration corpus is unchanged.
+ *   v11: multi-language security auth + AST import graph. The security auth vote
+ *        now runs body-first route + auth extraction for Python, Go, and Rust
+ *        (was JS/TS + regex-Flask only), with cross-file hook resolution and a
+ *        conservative "unsure" state that never false-blesses. A Python/Go/Rust
+ *        web repo with real auth inconsistency now reflects the security_posture
+ *        drift it always had (e.g. a Flask app's composite ~ -5); repos with
+ *        uniform or extractor-typed auth are unchanged. Separately, the import
+ *        graph moved from regex to AST with real module resolution, dropping
+ *        false-positive import/dependency drift. Repos without Python/Go/Rust
+ *        routes or import-drift false positives are byte identical; the bundled
+ *        calibration corpus is unchanged.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v10";
+export const SCORING_VERSION = "v11";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;

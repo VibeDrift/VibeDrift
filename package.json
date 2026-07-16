@@ -1,6 +1,6 @@
 {
   "name": "@vibedrift/cli",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Ship agentic. Stay coherent. Self-checking code integrity for AI coding agents, in the loop via MCP.",
   "type": "module",
   "bin": {
