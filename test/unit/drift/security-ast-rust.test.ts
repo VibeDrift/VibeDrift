@@ -622,6 +622,47 @@ describe("auth NEGATIVE: never-false-bless", () => {
     expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
   });
 
+  // PASS-THROUGH middlewares that merely MENTION a downstream 401 in a NON-produce
+  // position (a comparison operand, a header-insert argument, a match-arm pattern)
+  // and then return the response unchanged. None rejects; none may bless. Neutral
+  // names (tap / add_header / observe) so no name veto is in play — the body
+  // signature alone must resolve not-auth. Reproduces the produce-position bug.
+  it("MENTION-not-reject: a 401 in an `== StatusCode::UNAUTHORIZED` comparison never blesses", async () => {
+    const mw =
+      `async fn tap(req: Request, next: Next) -> Response {\n` +
+      `    let resp = next.run(req).await;\n` +
+      `    if resp.status() == StatusCode::UNAUTHORIZED {\n` +
+      `        tracing::warn!("downstream returned 401");\n` +
+      `    }\n    resp\n}\n`;
+    const f = await rs("n9.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(tap))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("MENTION-not-reject: a 401-gated header INSERT (WWW-Authenticate) never blesses", async () => {
+    const mw =
+      `async fn add_header(req: Request, next: Next) -> Response {\n` +
+      `    let mut resp = next.run(req).await;\n` +
+      `    if resp.status() == StatusCode::UNAUTHORIZED {\n` +
+      `        resp.headers_mut().insert("WWW-Authenticate", HeaderValue::from_static("Bearer"));\n` +
+      `    }\n    resp\n}\n`;
+    const f = await rs("n10.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(add_header))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("MENTION-not-reject: a 401 as a `match` arm PATTERN (metric observe) never blesses", async () => {
+    const mw =
+      `async fn observe(req: Request, next: Next) -> Response {\n` +
+      `    let resp = next.run(req).await;\n` +
+      `    match resp.status() {\n` +
+      `        StatusCode::UNAUTHORIZED => metrics::incr("downstream_401"),\n` +
+      `        _ => {}\n    }\n    resp\n}\n`;
+    const f = await rs("n11.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(observe))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
   it("a non-from_fn layer (TraceLayer / Logger) is not auth", async () => {
     const trace = await rs("n6a.rs",
       `fn app() -> Router {\n    Router::new().route("/x", get(h)).layer(TraceLayer::new_for_http())\n}\n`);

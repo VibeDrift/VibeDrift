@@ -273,6 +273,7 @@ const SCOPED_ID_T = new Set(["scoped_identifier"]);
 const CALL_EXPR_T = new Set(["call_expression"]);
 const IF_EXPR_T = new Set(["if_expression"]);
 const LET_DECL_T = new Set(["let_declaration"]);
+const RETURN_EXPR_T = new Set(["return_expression"]);
 
 /** Lowercase segments of an identifier, split on non-alphanumeric AND CamelCase
  *  boundaries. Copied VERBATIM from security-ast-go.ts:603 (whole-segment
@@ -621,6 +622,41 @@ function rustSubtreeHas403(node: SyntaxNode): boolean {
   return false;
 }
 
+/** True when `node`, sitting in a PRODUCE / return position, yields a 401
+ *  rejection value: a bare `StatusCode::UNAUTHORIZED`, a `(StatusCode::
+ *  UNAUTHORIZED, ..)` tuple, a `(STATUS,..).into_response()` / `STATUS
+ *  .into_response()` call, or an `Err(<produces 401>)` construction. Recurses
+ *  through `Err(..)` and `.into_response()`. Everything else — `Ok(..)`, a plain
+ *  identifier, a comparison, a non-status call — yields false. This is the ONLY
+ *  gate for a 401 bless: a 401 reached through here in a produce position (a
+ *  `return` value, a block tail, an `Err(..)`, an `.ok_or(..)`) rejects; a 401 in
+ *  an `if`/`while`/`match` condition/scrutinee, a comparison operand, a match-arm
+ *  pattern, or a plain call argument is never routed here. Mirrors Go's
+ *  produce-position gating (scanGoBody). */
+function rustProduces401(node: SyntaxNode | null): boolean {
+  if (!node) return false;
+  switch (node.type) {
+    case "scoped_identifier":
+      return rustRejectStatus(node) === "401";
+    case "tuple_expression": {
+      const first = node.namedChildren.find((c): c is SyntaxNode => c !== null) ?? null;
+      return first?.type === "scoped_identifier" && rustRejectStatus(first) === "401";
+    }
+    case "call_expression": {
+      const fn = node.childForFieldName("function");
+      if (fn?.type === "identifier" && fn.text === "Err") {
+        return rustProduces401(node.childForFieldName("arguments")?.namedChild(0) ?? null);
+      }
+      if (fn?.type === "field_expression" && fn.childForFieldName("field")?.text === "into_response") {
+        return rustProduces401(fn.childForFieldName("value"));
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
 interface RustBodySignals { reject401: boolean; reject403Guarded: boolean; opaqueHint: boolean; credentialRead: boolean; }
 
 /** Scan an effective from_fn body for the reject catalogue. reject401 blesses
@@ -634,45 +670,67 @@ interface RustBodySignals { reject401: boolean; reject403Guarded: boolean; opaqu
 function scanRustBody(body: SyntaxNode, defs: Map<string, SyntaxNode | null>): RustBodySignals {
   const out: RustBodySignals = { reject401: false, reject403Guarded: false, opaqueHint: false, credentialRead: false };
 
-  // 1. A 401 named status constant in a PRODUCE position (pruned of nested
-  //    closures). Covers Err(STATUS) / tuple.into_response() / .ok_or(STATUS) /
-  //    bare tail / return Err(STATUS). A 401 that is the direct RHS of a `let`
-  //    binding (`let code = StatusCode::UNAUTHORIZED;`) is a REFERENCE, not a
-  //    reject, and is excluded — the invariant requires a verifiable rejection,
-  //    not a mention (the `.ok_or(STATUS)` case is not affected: its status node's
-  //    immediate parent is an `arguments`, never the `let_declaration`).
-  for (const si of rustPrunedDescendants(body, SCOPED_ID_T)) {
-    if (rustRejectStatus(si) === "401" && si.parent?.type !== "let_declaration") {
-      out.reject401 = true;
-      break;
-    }
+  // 1. A 401 named status blesses ONLY as a PRODUCED value (pruned of nested
+  //    closures): a `return <STATUS>` value or a block TAIL expression that is a
+  //    401, a `(STATUS,..).into_response()`, or an `Err(<produces 401>)`. A 401 in
+  //    a comparison operand (`== StatusCode::UNAUTHORIZED`), an `if`/`while`/`match`
+  //    condition/scrutinee, a `match`-arm PATTERN, or a plain call ARGUMENT (a
+  //    `headers.insert(..)` or a logging macro) is a MENTION, never a reject — the
+  //    invariant requires a verifiable rejection, not a mention. The `Err(..)`,
+  //    `.ok_or(..)` and `.ok_or_else(..)` produce forms are read in the call scan
+  //    (section 2). Mirrors Go's produce-position gating (scanGoBody).
+  for (const ret of rustPrunedDescendants(body, RETURN_EXPR_T)) {
+    if (ret.hasError) continue;
+    if (rustProduces401(ret.namedChild(0) ?? null)) { out.reject401 = true; break; }
   }
-  if (body.type === "scoped_identifier" && rustRejectStatus(body) === "401") out.reject401 = true;
+  if (!out.reject401) {
+    // A block TAIL expression (last child, no trailing `;`), or a bare-expression
+    // body (`|req, next| STATUS`). Non-produce last children (an
+    // `expression_statement`, a plain identifier) fail rustProduces401.
+    const named = body.namedChildren.filter((c): c is SyntaxNode => c !== null);
+    const tail = body.type === "block" ? (named[named.length - 1] ?? null) : body;
+    if (rustProduces401(tail)) out.reject401 = true;
+  }
 
-  // 2. Call-position scan: the ok_or_else closure (read explicitly), Actix
-  //    bare-identifier 401 constructors, credential reads, and opaque auth calls.
+  // 2. Call-position produce scan: `Err(<produces 401>)` (the idiomatic Axum
+  //    reject value), the `.ok_or(STATUS)` / `.ok_or_else(|| STATUS)` produce
+  //    forms (read explicitly), Actix bare-identifier 401 constructors, plus the
+  //    credential-read and opaque-auth-call signals. A `.into_response()` that is
+  //    NOT wrapped in a produce position (section 1) never reaches reject401 here.
   const boundLocals = rustCredentialBoundLocals(body);
   for (const call of rustPrunedDescendants(body, CALL_EXPR_T)) {
     if (call.hasError) continue;
     if (!out.credentialRead && rustIsCredentialReadCall(call)) out.credentialRead = true;
     const fn = call.childForFieldName("function");
-    if (fn?.type === "field_expression" && fn.childForFieldName("field")?.text === "ok_or_else") {
-      const closure = call.childForFieldName("arguments")?.namedChild(0) ?? null;
-      const cbody = closure?.type === "closure_expression" ? closure.childForFieldName("body") : null;
-      if (cbody) {
-        if (cbody.type === "scoped_identifier" && rustRejectStatus(cbody) === "401") out.reject401 = true;
-        else if (cbody.namedChildren.some((c) => c && c.type === "scoped_identifier" && rustRejectStatus(c) === "401")) {
-          out.reject401 = true;
-        } else {
-          for (const si of rustPrunedDescendants(cbody, SCOPED_ID_T)) {
-            if (rustRejectStatus(si) === "401") { out.reject401 = true; break; }
+    if (fn?.type === "field_expression") {
+      const field = fn.childForFieldName("field")?.text;
+      if (field === "ok_or") {
+        if (rustProduces401(call.childForFieldName("arguments")?.namedChild(0) ?? null)) out.reject401 = true;
+        continue;
+      }
+      if (field === "ok_or_else") {
+        const closure = call.childForFieldName("arguments")?.namedChild(0) ?? null;
+        const cbody = closure?.type === "closure_expression" ? closure.childForFieldName("body") : null;
+        if (cbody) {
+          if (cbody.type === "scoped_identifier" && rustRejectStatus(cbody) === "401") out.reject401 = true;
+          else if (cbody.namedChildren.some((c) => c && c.type === "scoped_identifier" && rustRejectStatus(c) === "401")) {
+            out.reject401 = true;
+          } else {
+            for (const si of rustPrunedDescendants(cbody, SCOPED_ID_T)) {
+              if (rustRejectStatus(si) === "401") { out.reject401 = true; break; }
+            }
           }
         }
+        continue;
       }
-      continue;
+      continue; // any other method call is not a produce path (into_response gated in section 1)
     }
     if (fn?.type === "identifier") {
       const name = fn.text;
+      if (name === "Err") {
+        if (rustProduces401(call.childForFieldName("arguments")?.namedChild(0) ?? null)) out.reject401 = true;
+        continue;
+      }
       if (RUST_ERR_CTOR_401.has(name)) { out.reject401 = true; continue; }
       // An unresolvable (not-in-file, or duplicate) auth-flavored callee -> opaque.
       if (!defs.has(name) && rustNameHasHint(name)) out.opaqueHint = true;
