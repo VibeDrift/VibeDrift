@@ -37,6 +37,7 @@ import { pickIntentHint } from "./utils.js";
 import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
 import { extractPythonRoutesAst, extractPythonFileMiddlewareAst } from "./security-ast-python.js";
 import { extractGoRoutesAst, extractGoFileMiddlewareAst } from "./security-ast-go.js";
+import { extractRustRoutesAst, extractRustFileMiddlewareAst } from "./security-ast-rust.js";
 import { buildXFileIndex } from "./security-xfile-index.js";
 import type { CrossFileIndex } from "./security-xfile-index.js";
 import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
@@ -178,6 +179,12 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
     // this index is a file-wide bless.
     const pythonAst = file.language === "python" && !!file.tree && !file.tree.rootNode.hasError;
     const goAst = file.language === "go" && !!file.tree && !file.tree.rootNode.hasError;
+    // Rust is AST-only (no regex fallback anywhere): a clean-parsed rust file is
+    // handled by the Rust lane below and forces every js/go/py regex arm false for
+    // the same cross-language-noise reason as pythonAst/goAst (a rust doc-comment
+    // mentioning app.use(...) matches the jsAuth regex). A tree-less / errored rust
+    // file has no lane at all -> its index entry stays all-false, byte-identical.
+    const rustAst = file.language === "rust" && !!file.tree && !file.tree.rootNode.hasError;
 
     // JS/TS — Express / Hono / Fastify / Koa. AST when a parsed tree is
     // available (structural: gated on a router/app receiver, not just
@@ -188,11 +195,11 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
       jsAuth = mw.hasAuth;
       jsRateLimit = mw.hasRateLimit;
       jsValidation = mw.hasValidation;
-    } else if (pythonAst || goAst) {
-      // Cross-language noise on either clean-tree language is a file-wide bless:
-      // on a clean-parsed python OR go file the js regex arms are pure noise (they
-      // match app.use(...) text inside docstrings/comments), so force them false
-      // rather than let them file-wide-bless that file's routes.
+    } else if (pythonAst || goAst || rustAst) {
+      // Cross-language noise on any clean-tree language is a file-wide bless: on a
+      // clean-parsed python, go OR rust file the js regex arms are pure noise (they
+      // match app.use(...) text inside docstrings/comments/doc-comments), so force
+      // them false rather than let them file-wide-bless that file's routes.
       jsAuth = false;
       jsRateLimit = false;
       jsValidation = false;
@@ -214,9 +221,9 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
       goRateLimit = mw.hasRateLimit;
       goValidation = mw.hasValidation;
     } else {
-      goAuth = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Aa]uth|RequireAuth|VerifyToken|JWT|Bearer)/.test(c);
-      goRateLimit = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Rr]ateLimit|[Tt]hrottle|[Ll]imiter)/.test(c);
-      goValidation = !pythonAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Vv]alidate|[Vv]alidator)/.test(c);
+      goAuth = !pythonAst && !rustAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Aa]uth|RequireAuth|VerifyToken|JWT|Bearer)/.test(c);
+      goRateLimit = !pythonAst && !rustAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Rr]ateLimit|[Tt]hrottle|[Ll]imiter)/.test(c);
+      goValidation = !pythonAst && !rustAst && /\.\s*Use\s*\(\s*[^,)]*?(?:[Vv]alidate|[Vv]alidator)/.test(c);
     }
 
     // Python — Flask / FastAPI
@@ -228,18 +235,39 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
       pyRateLimit = mw.hasRateLimit;
       pyValidation = mw.hasValidation;
     } else {
-      // Forced false on a clean-parsed go file for the same cross-language noise
-      // reason as above (a go comment containing login_required currently sets
-      // pyAuth for that go file).
-      pyAuth = !goAst && /(?:@\w+\.before_request|@blueprint\.before_request|add_middleware\s*\([^,)]*[Aa]uth|@?\bjwt_required\b|@?\blogin_required\b)/.test(c);
-      pyRateLimit = !goAst && /(?:@\w+\.\w+\s*\([^)]*[Ll]imit|RateLimiter|Limiter\(|add_middleware\s*\([^,)]*[Ll]imit)/.test(c);
-      pyValidation = !goAst && /add_middleware\s*\([^,)]*[Vv]alid/.test(c);
+      // Forced false on a clean-parsed go OR rust file for the same cross-language
+      // noise reason as above (a go comment / rust doc-comment containing
+      // login_required currently sets pyAuth for that file).
+      pyAuth = !goAst && !rustAst && /(?:@\w+\.before_request|@blueprint\.before_request|add_middleware\s*\([^,)]*[Aa]uth|@?\bjwt_required\b|@?\blogin_required\b)/.test(c);
+      pyRateLimit = !goAst && !rustAst && /(?:@\w+\.\w+\s*\([^)]*[Ll]imit|RateLimiter|Limiter\(|add_middleware\s*\([^,)]*[Ll]imit)/.test(c);
+      pyValidation = !goAst && !rustAst && /add_middleware\s*\([^,)]*[Vv]alid/.test(c);
+    }
+
+    // Rust — Axum / Actix / Rocket. AST when a clean parsed tree is available;
+    // there is NO regex fallback for Rust (an absent / errored tree yields
+    // all-false lanes). extractRustFileMiddlewareAst returns all-false
+    // unconditionally: Axum .layer auth is CHAIN-scoped (wraps only its fluent
+    // subtree), so there is no safe FILE-level Rust auth OR — the route extractor
+    // computes covering-layer auth from the tree itself. This lane exists for seam
+    // parity; it never blesses (mirror how the Go/Python AST paths ignore this OR
+    // for auth). For every non-(rust-with-clean-tree) file it is all-false, so the
+    // final OR below is byte-identical to today.
+    let rustAuth: boolean, rustRateLimit: boolean, rustValidation: boolean;
+    if (rustAst) {
+      const mw = extractRustFileMiddlewareAst(file.tree!);
+      rustAuth = mw.hasAuth;
+      rustRateLimit = mw.hasRateLimit;
+      rustValidation = mw.hasValidation;
+    } else {
+      rustAuth = false;
+      rustRateLimit = false;
+      rustValidation = false;
     }
 
     index.set(file.relativePath, {
-      hasAuth: jsAuth || goAuth || pyAuth,
-      hasValidation: jsValidation || goValidation || pyValidation,
-      hasRateLimit: jsRateLimit || goRateLimit || pyRateLimit,
+      hasAuth: jsAuth || goAuth || pyAuth || rustAuth,
+      hasValidation: jsValidation || goValidation || pyValidation || rustValidation,
+      hasRateLimit: jsRateLimit || goRateLimit || pyRateLimit || rustRateLimit,
     });
   }
   return index;
@@ -258,8 +286,24 @@ function extractRoutes(
     if (file.language === "go") extractGoRoutes(file, routes, fileMw, xfile);
     else if (file.language === "javascript" || file.language === "typescript") extractJsRoutes(file, routes, fileMw);
     else if (file.language === "python") extractPythonRoutes(file, routes, fileMw, xfile);
+    else if (file.language === "rust") extractRustRoutes(file, routes);
   }
   return routes;
+}
+
+function extractRustRoutes(file: DriftFile, routes: RouteInfo[]) {
+  // AST ONLY, and ONLY on a CLEAN parse. There is NO regex fallback for Rust
+  // anywhere in this codebase: an absent or errored tree yields zero Rust routes
+  // (unchanged from before this module was wired in). A parse error can only
+  // shrink the recognized route set for that file, never emit a wrong route, and
+  // Rust has no legacy regex path whose over-blesses we would need to preserve.
+  // No FileMiddleware argument: Axum .layer scope is CHAIN-scoped, so the AST path
+  // computes covering-layer auth from the tree itself (a file-level OR would
+  // false-bless siblings a layer never wrapped, and the seam-2 index entry is
+  // all-false for rust anyway).
+  if (file.tree && !file.tree.rootNode.hasError) {
+    routes.push(...extractRustRoutesAst(file.tree, file.relativePath));
+  }
 }
 
 function inheritedAuth(perRoute: boolean, fileMw: FileMiddleware | undefined): boolean {
