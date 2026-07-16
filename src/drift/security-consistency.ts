@@ -52,10 +52,10 @@ const BODY_METHODS = ["POST", "PUT", "PATCH", "ALL"];
 
 // ─── Hedged copy for auth routes whose hook could not be verified ────────────
 //
-// A route only carries `authUnsureHook` on the Python or Go AST path, and only
-// when `hasAuth === false` (a blessed route never sets it). Task 4 turns the
-// flat "no auth" copy into a HEDGE that names the exact before_request-style
-// hook the user should verify. The route stays not-authed in every vote — this
+// A route only carries `authUnsureHook` on the Python, Go, or Rust AST path,
+// and only when `hasAuth === false` (a blessed route never sets it). Task 4
+// turns the flat "no auth" copy into a HEDGE that names the exact auth hook
+// the user should verify. The route stays not-authed in every vote — this
 // is copy only. JS/TS routes and the regex fallback never set the field, so
 // they always take the flat arm and render byte-identically. No em-dash /
 // double hyphen in the hedged strings (comma/colon/period only).
@@ -74,7 +74,7 @@ function hedgeRecommendationSuffix(deviators: RouteInfo[]): string {
   const hedged = deviators.filter((r) => r.authUnsureHook);
   if (hedged.length === 0) return "";
   const names = [...new Set(hedged.map((r) => r.authUnsureHook!))].sort().join(", ");
-  return ` ${hedged.length} of these could not be confirmed: a before_request hook (${names}) may authenticate them but its body could not be verified. Double check those hooks before treating the routes as unauthenticated.`;
+  return ` ${hedged.length} of these could not be confirmed: an auth hook (${names}) may authenticate them but its body could not be verified. Double check those hooks before treating the routes as unauthenticated.`;
 }
 
 // Does the codebase use auth machinery anywhere? If it does, a mutating route

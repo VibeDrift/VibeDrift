@@ -138,9 +138,9 @@ function scoreColorFn(score: number, max: number): typeof chalk {
 }
 
 /**
- * True when this is an auth-consistency finding the Python or Go body-signature
- * analyzer could not confirm: its recommendation carries the appended "Double
- * check" hedge naming a before_request hook. For such a finding the flat
+ * True when this is an auth-consistency finding the Python, Go, or Rust
+ * body-signature analyzer could not confirm: its recommendation carries the
+ * appended "Double check" hedge naming an auth hook. For such a finding the flat
  * confident "unprotected routes" consequence is a FALSE claim, so the terminal
  * must hedge instead. Confident security findings never carry this marker, so
  * their output is byte-identical.
@@ -151,10 +151,10 @@ function isHedgedAuthFinding(f: Finding): boolean {
   return isSecurity && !!rec && /Double check/.test(rec);
 }
 
-/** The before_request hook name(s) the appended hedge sentence named, read back
- *  out of the recommendation so the terminal can point at the exact hook. */
+/** The auth hook name(s) the appended hedge sentence named, read back out of the
+ *  recommendation so the terminal can point at the exact hook. */
 function hedgedHookNames(f: Finding): string | null {
-  const m = f.metadata?.recommendation?.match(/before_request hook \(([^)]+)\)/);
+  const m = f.metadata?.recommendation?.match(/auth hook \(([^)]+)\)/);
   return m ? m[1] : null;
 }
 
@@ -164,8 +164,8 @@ function hedgedHookNames(f: Finding): string | null {
 function hedgedSecurityConsequence(f: Finding): string {
   const names = hedgedHookNames(f);
   return names
-    ? `A before_request hook (${names}) may already authenticate some of these routes, double check it before treating them as unprotected`
-    : `A before_request hook may already authenticate some of these routes, double check before treating them as unprotected`;
+    ? `An auth hook (${names}) may already authenticate some of these routes, double check it before treating them as unprotected`
+    : `An auth hook may already authenticate some of these routes, double check before treating them as unprotected`;
 }
 
 /**
