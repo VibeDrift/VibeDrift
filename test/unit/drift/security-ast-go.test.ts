@@ -153,6 +153,48 @@ describe("extractGoRoutesAst: additional Gin/Echo recognition forms", () => {
       .map((r) => `${r.method} ${r.path}`)).toEqual(["PUT /x"]);
   });
 
+  it("resolves a fiber.New() constructor — extracts routes with correct method, path, and line", async () => {
+    const f = await go("fiber_app.go",
+      `package main\n\n` +
+      `func main() {\n` +
+      `\tapp := fiber.New()\n` +
+      `\tapp.Post("/users", createUser)\n` +
+      `\tapp.Get("/users", listUsers)\n` +
+      `\tapp.Delete("/users/:id", deleteUser)\n` +
+      `}\n`);
+    const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "POST /users",
+      "GET /users",
+      "DELETE /users/:id",
+    ]);
+    expect(routes[0].line).toBe(5);
+    expect(routes[0].file).toBe("fiber_app.go");
+  });
+
+  it("resolves a fiber.New() assigned to a non-standard variable name", async () => {
+    const f = await go("fiber_custom.go",
+      `package main\n\n` +
+      `func main() {\n` +
+      `\twebServer := fiber.New()\n` +
+      `\twebServer.Put("/items", updateItem)\n` +
+      `}\n`);
+    expect(extractGoRoutesAst(f.tree!, f.relativePath)
+      .map((r) => `${r.method} ${r.path}`)).toEqual(["PUT /items"]);
+  });
+
+  it("resolves a mux.NewRouter() constructor — Gorilla HandleFunc with chained Methods", async () => {
+    const f = await go("mux_app.go",
+      `package main\n\n` +
+      `func main() {\n` +
+      `\tmyRouter := mux.NewRouter()\n` +
+      `\tmyRouter.HandleFunc("/api/items", handleItems).Methods("POST")\n` +
+      `}\n`);
+    const routes = extractGoRoutesAst(f.tree!, f.relativePath);
+    expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /api/items"]);
+    expect(routes[0].line).toBe(5);
+  });
+
   it("resolves r.Any to the ALL sentinel verb", async () => {
     const f = await go("any.go", `package main\n\nfunc routes() {\n\tr.Any("/everything", h)\n}\n`);
     expect(extractGoRoutesAst(f.tree!, f.relativePath)
