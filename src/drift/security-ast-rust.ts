@@ -269,7 +269,6 @@ const FROM_FN_CALLEES = new Set(["from_fn", "from_fn_with_state"]);
 // body-first still gates any bless, so a non-rejecting wrap never blesses.
 const LAYER_FIELDS = new Set(["layer", "route_layer", "wrap"]);
 
-const SCOPED_ID_T = new Set(["scoped_identifier"]);
 const CALL_EXPR_T = new Set(["call_expression"]);
 const IF_EXPR_T = new Set(["if_expression"]);
 const LET_DECL_T = new Set(["let_declaration"]);
@@ -614,15 +613,6 @@ function rustGuardHasCredentialRead(cond: SyntaxNode | null, boundLocals: Set<st
   return false;
 }
 
-/** True when a subtree contains a 403 status constant (pruned). Only consulted
- *  INSIDE a credential-guarded if-consequence — a bare 403 never blesses. */
-function rustSubtreeHas403(node: SyntaxNode): boolean {
-  for (const si of rustPrunedDescendants(node, SCOPED_ID_T)) {
-    if (rustRejectStatus(si) === "403") return true;
-  }
-  return false;
-}
-
 /** The tail VALUE expression of a block — its implicit-return value — or null.
  *  Tree-sitter-rust wraps a trailing block-expression (`match`/`if`/`loop`/`block`)
  *  in an `expression_statement` with NO semicolon; a value-discarding `foo();`
@@ -642,112 +632,122 @@ function blockTailValue(block: SyntaxNode): SyntaxNode | null {
 
 /** True when `node`, evaluated in a PRODUCE position (a `return` value, a `?` try
  *  operand, a block/body TAIL, a match-arm value, an if/else branch tail), yields
- *  a 401 rejection. Recurses through: match-arm values, if/else branch tails, and
- *  block tails (a 401 produced by ANY branch counts); `Err(<produces>)`, a bare
+ *  a `target`-status rejection (401 by default; 403 for the credential-guarded
+ *  403 lane). Recurses through: match-arm values, if/else branch tails, and
+ *  block tails (a reject produced by ANY branch counts); `Err(<produces>)`, a bare
  *  `(STATUS,..).into_response()` / `STATUS.into_response()`, `.ok_or(<produces>)`,
  *  and the `.ok_or_else(|| <produce tail>)` closure body (its OWN tail, NOT any
- *  mention); a bare 401 status / status-tuple / Actix `ErrorUnauthorized(..)` at
- *  the leaf. Everything else — `Ok(..)`, a plain identifier, a comparison, a
- *  non-reject call — yields false. This is the ONLY gate for a 401 bless: a 401 in
- *  a comparison operand, a plain call ARGUMENT, a struct-literal field, a
- *  never-returned let RHS, or an `if`/`while`/`match` CONDITION/SCRUTINEE/PATTERN
- *  is a MENTION and is never routed here. Mirrors Go's produce-position gating
- *  (scanGoBody). */
-function rustProducesReject(node: SyntaxNode | null): boolean {
+ *  mention); a bare STATUS / status-tuple leaf. The Actix bare-identifier ctor
+ *  catalogue (`RUST_ERR_CTOR_401`) is 401-only in v1 scope (no Actix 403 ctor is
+ *  read — see the module header PINNED RECALL GAPS), so it only fires when
+ *  `target === "401"`. Everything else — `Ok(..)`, a plain identifier, a
+ *  comparison, a non-reject call — yields false. This is the ONLY gate for a
+ *  bless of either status: a reject in a comparison operand, a plain call
+ *  ARGUMENT, a struct-literal field, a never-returned let RHS, or an
+ *  `if`/`while`/`match` CONDITION/SCRUTINEE/PATTERN is a MENTION and is never
+ *  routed here. Mirrors Go's produce-position gating (scanGoBody). */
+function rustProducesReject(node: SyntaxNode | null, target: "401" | "403" = "401"): boolean {
   if (!node) return false;
   switch (node.type) {
     case "scoped_identifier":
-      return rustRejectStatus(node) === "401";
+      return rustRejectStatus(node) === target;
     case "tuple_expression": {
       const first = node.namedChildren.find((c): c is SyntaxNode => c !== null) ?? null;
-      return first?.type === "scoped_identifier" && rustRejectStatus(first) === "401";
+      return first?.type === "scoped_identifier" && rustRejectStatus(first) === target;
     }
     case "call_expression": {
       const fn = node.childForFieldName("function");
       if (fn?.type === "identifier") {
-        if (fn.text === "Err") return rustProducesReject(node.childForFieldName("arguments")?.namedChild(0) ?? null);
-        if (RUST_ERR_CTOR_401.has(fn.text)) return true; // Actix ErrorUnauthorized(..) in a produce position
+        if (fn.text === "Err") {
+          return rustProducesReject(node.childForFieldName("arguments")?.namedChild(0) ?? null, target);
+        }
+        if (RUST_ERR_CTOR_401.has(fn.text)) return target === "401"; // Actix ErrorUnauthorized(..): 401-only in v1 scope
         return false;
       }
       if (fn?.type === "field_expression") {
         const field = fn.childForFieldName("field")?.text;
-        if (field === "into_response") return rustProducesReject(fn.childForFieldName("value"));
-        if (field === "ok_or") return rustProducesReject(node.childForFieldName("arguments")?.namedChild(0) ?? null);
+        if (field === "into_response") return rustProducesReject(fn.childForFieldName("value"), target);
+        if (field === "ok_or") {
+          return rustProducesReject(node.childForFieldName("arguments")?.namedChild(0) ?? null, target);
+        }
         if (field === "ok_or_else") {
           const closure = node.childForFieldName("arguments")?.namedChild(0) ?? null;
           const cbody = closure?.type === "closure_expression" ? closure.childForFieldName("body") : null;
-          return rustProducesReject(cbody); // the closure body's OWN produce tail, never any mention
+          return rustProducesReject(cbody, target); // the closure body's OWN produce tail, never any mention
         }
       }
       return false;
     }
     case "block":
-      return rustProducesReject(blockTailValue(node));
+      return rustProducesReject(blockTailValue(node), target);
     case "if_expression": {
-      if (rustProducesReject(node.childForFieldName("consequence"))) return true; // then-branch block tail
+      if (rustProducesReject(node.childForFieldName("consequence"), target)) return true; // then-branch block tail
       const alt = node.childForFieldName("alternative"); // else_clause -> block | if_expression (else-if)
-      return alt ? alt.namedChildren.some((c) => rustProducesReject(c)) : false;
+      return alt ? alt.namedChildren.some((c) => rustProducesReject(c, target)) : false;
     }
     case "match_expression": {
       const mb = node.namedChildren.find((c): c is SyntaxNode => c?.type === "match_block");
       return mb
-        ? mb.namedChildren.some((arm) => arm?.type === "match_arm" && rustProducesReject(arm.childForFieldName("value")))
+        ? mb.namedChildren.some(
+            (arm) => arm?.type === "match_arm" && rustProducesReject(arm.childForFieldName("value"), target),
+          )
         : false;
     }
     case "return_expression":
-      return rustProducesReject(node.namedChild(0) ?? null);
+      return rustProducesReject(node.namedChild(0) ?? null, target);
     case "try_expression":
-      return rustProducesReject(node.namedChild(0) ?? null); // `E?` propagates Err(E) as a return
+      return rustProducesReject(node.namedChild(0) ?? null, target); // `E?` propagates Err(E) as a return
     default:
       return false;
   }
+}
+
+/** True when `node` (a from_fn body, or an if-consequence block) contains a
+ *  `target`-status reject in a PRODUCE position: a `return <produces>` value, a
+ *  `<produces>?` try operand, or the block/subtree TAIL. Pruned of nested
+ *  closures via `rustPrunedDescendants` (a reject in a non-inline closure is not
+ *  executed inline and never counts). Parameterized generalization of the
+ *  three-pronged produce sweep `scanRustBody` step 1 uses for 401, reused
+ *  UNCHANGED for the credential-guarded 403 lane (step 3) — mirrors Go's
+ *  `goSubtreeHas403Reject` produce-gating semantics. */
+function rustSubtreeProducesReject(node: SyntaxNode, target: "401" | "403"): boolean {
+  for (const ret of rustPrunedDescendants(node, RETURN_EXPR_T)) {
+    if (!ret.hasError && rustProducesReject(ret.namedChild(0) ?? null, target)) return true;
+  }
+  for (const t of rustPrunedDescendants(node, TRY_EXPR_T)) {
+    if (!t.hasError && rustProducesReject(t.namedChild(0) ?? null, target)) return true;
+  }
+  const tail = node.type === "block" ? blockTailValue(node) : node;
+  return rustProducesReject(tail, target);
 }
 
 interface RustBodySignals { reject401: boolean; reject403Guarded: boolean; opaqueHint: boolean; credentialRead: boolean; }
 
 /** Scan an effective from_fn body for the reject catalogue. reject401 blesses
  *  ALONE; reject403Guarded blesses only inside a credential-guarded 403 (mirror
- *  Go). reject401 is decided ENTIRELY by rustProducesReject evaluated on the body's
- *  actual produce positions (return values, `?` try operands, the block/body tail);
- *  it recurses match arms, if/else branch tails, Err(STATUS), (STATUS,..)
- *  .into_response(), .ok_or(STATUS), the .ok_or_else(|| STATUS) closure tail, and
- *  Actix ErrorUnauthorized(..). A 401 in any NON-produce position (a comparison,
- *  a call argument, a let RHS, a struct field, a condition/scrutinee/pattern) is a
- *  MENTION and never blesses. Nested closures are pruned (a reject in a non-inline
- *  closure never blesses). A credential read or an opaque auth-flavored call with
- *  no reject makes the body `opaque` (unsure on the name, never a bless). */
+ *  Go). Both are decided ENTIRELY by rustSubtreeProducesReject/rustProducesReject
+ *  evaluated on the relevant subtree's actual produce positions (return values,
+ *  `?` try operands, the block/subtree tail); the recursion covers match arms,
+ *  if/else branch tails, Err(STATUS), (STATUS,..).into_response(), .ok_or(STATUS),
+ *  the .ok_or_else(|| STATUS) closure tail, and (401-only) Actix
+ *  ErrorUnauthorized(..). A reject in any NON-produce position (a comparison, a
+ *  call argument, a let RHS, a struct field, a condition/scrutinee/pattern) is a
+ *  MENTION and never blesses, for EITHER status. Nested closures are pruned (a
+ *  reject in a non-inline closure never blesses). A credential read or an opaque
+ *  auth-flavored call with no reject makes the body `opaque` (unsure on the name,
+ *  never a bless). */
 function scanRustBody(body: SyntaxNode, defs: Map<string, SyntaxNode | null>): RustBodySignals {
   const out: RustBodySignals = { reject401: false, reject403Guarded: false, opaqueHint: false, credentialRead: false };
 
   // 1. reject401 fires ONLY from a 401 produced in a PRODUCE position (pruned of
   //    nested closures): a `return <produces>` value, a `<produces>?` try operand
-  //    (error propagation IS a reject-return), or the block/body TAIL value.
-  //    rustProducesReject recurses through match-arm values, if/else branch tails,
-  //    block tails, `Err(..)`, `.into_response()`, `.ok_or(..)`, and the
-  //    `.ok_or_else(|| ..)` closure produce tail. A 401 in a comparison operand
-  //    (`== Err(..)`), a plain call ARGUMENT, a struct-literal field, a
-  //    never-returned let RHS, an `if`/`while`/`match` CONDITION/SCRUTINEE, or a
-  //    `match`-arm PATTERN is a MENTION, never a reject — the invariant requires a
-  //    verifiable rejection, not a mention. Mirrors Go's produce-position gating.
-  for (const ret of rustPrunedDescendants(body, RETURN_EXPR_T)) {
-    if (ret.hasError) continue;
-    if (rustProducesReject(ret.namedChild(0) ?? null)) { out.reject401 = true; break; }
-  }
-  if (!out.reject401) {
-    // A `?` try operand anywhere in the body (`h.get(x).ok_or(STATUS)?`): the `?`
-    // propagates the constructed Err as a return, so it is a produce position.
-    for (const t of rustPrunedDescendants(body, TRY_EXPR_T)) {
-      if (t.hasError) continue;
-      if (rustProducesReject(t.namedChild(0) ?? null)) { out.reject401 = true; break; }
-    }
-  }
-  if (!out.reject401) {
-    // The block TAIL value (a bare-expression body `|req, next| STATUS`, or a
-    // trailing `match`/`if` implicit-return); blockTailValue unwraps the
-    // no-semicolon expression_statement tree-sitter wraps a block-expression in.
-    const tail = body.type === "block" ? blockTailValue(body) : body;
-    if (rustProducesReject(tail)) out.reject401 = true;
-  }
+  //    (error propagation IS a reject-return), or the block/body TAIL value. A 401
+  //    in a comparison operand (`== Err(..)`), a plain call ARGUMENT, a
+  //    struct-literal field, a never-returned let RHS, an `if`/`while`/`match`
+  //    CONDITION/SCRUTINEE, or a `match`-arm PATTERN is a MENTION, never a reject —
+  //    the invariant requires a verifiable rejection, not a mention. Mirrors Go's
+  //    produce-position gating.
+  out.reject401 = rustSubtreeProducesReject(body, "401");
 
   // 2. Behavioral SIGNALS (never a bless, so a position-agnostic scan is safe):
   //    a structural credential-surface read, and an unresolvable auth-flavored
@@ -762,12 +762,16 @@ function scanRustBody(body: SyntaxNode, defs: Map<string, SyntaxNode | null>): R
     if (fn?.type === "identifier" && !defs.has(fn.text) && rustNameHasHint(fn.text)) out.opaqueHint = true;
   }
 
-  // 3. Guarded 403: an `if <credential-condition> { <403 reject> }`.
+  // 3. Guarded 403: an `if <credential-condition> { <403 reject> }`. The 403 must
+  //    be PRODUCED inside the consequence block (a `return`/`?`/block-tail reject),
+  //    the same produce-position gate as reject401 above (T3 fix #3) — a 403
+  //    sitting in a call argument, comparison operand, struct field, or discarded
+  //    `let` inside the guard is a MENTION, never a reject, and must not bless.
   for (const ifs of rustPrunedDescendants(body, IF_EXPR_T)) {
     if (ifs.hasError) continue;
     const cond = ifs.childForFieldName("condition");
     const cons = ifs.childForFieldName("consequence");
-    if (cons && rustGuardHasCredentialRead(cond, boundLocals) && rustSubtreeHas403(cons)) {
+    if (cons && rustGuardHasCredentialRead(cond, boundLocals) && rustSubtreeProducesReject(cons, "403")) {
       out.reject403Guarded = true;
     }
   }

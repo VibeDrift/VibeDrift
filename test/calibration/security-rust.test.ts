@@ -452,6 +452,109 @@ describe("Rust calibration: S8 unresolvable-body UNSURE (imported require_auth)"
   });
 });
 
+// ─── S9: guarded-403 produce-gate (T3 fix #3) ─────────────────────────────────
+// A credential-guarded 403 blesses ONLY when the 403 is PRODUCED inside the
+// consequence (a `return`/`?`/block-tail reject) — the same produce-position
+// gate the 401 path uses. A 403 that merely APPEARS in the guarded branch as a
+// call argument, a comparison operand, a struct field, or a discarded `let`
+// binding is a MENTION: the middleware reads the header, does NOT reject, and
+// falls through to `next.run(...)`, so it must NEVER bless (NEVER-FALSE-BLESS).
+// Each negative uses a credential-read guard (so the guarded-403 lane is truly
+// exercised) and the auth-flavored name `require_auth`, so a regressed
+// (position-agnostic) 403 scan would return "auth"; the correct gate returns
+// "unsure" (opaque body + flavored name), which hedges and never blesses.
+
+describe("Rust calibration: S9 guarded-403 produce-gate (never-false-bless)", () => {
+  async function classifyFromFn(name: string, src: string) {
+    const driftFile = await fileWithTree("mw.rs", src, "rust");
+    const defs = collectRustFunctionDefs(driftFile.tree!.rootNode);
+    const def = defs.get(name)!;
+    const body = def.childForFieldName("body")!;
+    return classifyRustAuth(name, body, defs);
+  }
+
+  const guard = 'req.headers().get("Authorization").is_none()';
+
+  it("I1: 403 as a call/log argument in the guarded branch does NOT bless (falls through)", async () => {
+    const outcome = await classifyFromFn(
+      "require_auth",
+      `async fn require_auth(req: Request, next: Next) -> Response {\n` +
+        `    if ${guard} {\n` +
+        `        audit_log(StatusCode::FORBIDDEN, &req);\n` +
+        `    }\n` +
+        `    next.run(req).await\n}\n`,
+    );
+    expect(outcome).not.toBe("auth"); // invariant pin
+    expect(outcome).toBe("unsure"); // opaque body + flavored name -> hedge, never bless
+  });
+
+  it("I2: 403 as a comparison operand in the guarded branch does NOT bless", async () => {
+    const outcome = await classifyFromFn(
+      "require_auth",
+      `async fn require_auth(req: Request, next: Next) -> Response {\n` +
+        `    if ${guard} {\n` +
+        `        let denied = latest == StatusCode::FORBIDDEN;\n` +
+        `        note(denied);\n` +
+        `    }\n` +
+        `    next.run(req).await\n}\n`,
+    );
+    expect(outcome).not.toBe("auth");
+    expect(outcome).toBe("unsure");
+  });
+
+  it("I3: 403 as a struct-literal field in the guarded branch does NOT bless", async () => {
+    const outcome = await classifyFromFn(
+      "require_auth",
+      `async fn require_auth(req: Request, next: Next) -> Response {\n` +
+        `    if ${guard} {\n` +
+        `        let e = ErrInfo { code: StatusCode::FORBIDDEN, msg: "x" };\n` +
+        `        log_err(e);\n` +
+        `    }\n` +
+        `    next.run(req).await\n}\n`,
+    );
+    expect(outcome).not.toBe("auth");
+    expect(outcome).toBe("unsure");
+  });
+
+  it("H: 403 in a discarded `let` binding in the guarded branch does NOT bless", async () => {
+    const outcome = await classifyFromFn(
+      "require_auth",
+      `async fn require_auth(req: Request, next: Next) -> Response {\n` +
+        `    if ${guard} {\n` +
+        `        let _resp = StatusCode::FORBIDDEN;\n` +
+        `    }\n` +
+        `    next.run(req).await\n}\n`,
+    );
+    expect(outcome).not.toBe("auth");
+    expect(outcome).toBe("unsure");
+  });
+
+  it("PC1 (positive): a guarded `return Err(StatusCode::FORBIDDEN)` produce position DOES bless", async () => {
+    const outcome = await classifyFromFn(
+      "gate",
+      `async fn gate(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+        `    if ${guard} {\n` +
+        `        return Err(StatusCode::FORBIDDEN);\n` +
+        `    }\n` +
+        `    Ok(next.run(req).await)\n}\n`,
+    );
+    expect(outcome).toBe("auth"); // body-only bless (name 'gate' is not auth-flavored)
+  });
+
+  it("PC2 (positive): a guarded block-TAIL `Err(StatusCode::FORBIDDEN)` (if/else value) DOES bless", async () => {
+    const outcome = await classifyFromFn(
+      "gate",
+      `async fn gate(req: Request, next: Next) -> Result<Response, StatusCode> {\n` +
+        `    if ${guard} {\n` +
+        `        Err(StatusCode::FORBIDDEN)\n` +
+        `    } else {\n` +
+        `        Ok(next.run(req).await)\n` +
+        `    }\n}\n`,
+    );
+    expect(outcome).toBe("auth");
+  });
+});
+
 // ─── Actix addendum: method+path recognition without ever blessing ──────────
 
 describe("Rust calibration: Actix recognition addendum (v1 boundary)", () => {
