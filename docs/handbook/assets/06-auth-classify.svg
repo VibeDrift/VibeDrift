@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 540" width="880" height="540" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="ac-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa3af"/>
+    </marker>
+  </defs>
+
+  <rect x="60" y="16" width="380" height="36" fill="#12151a" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="76" y="39" fill="#e8eaed">route found: POST /orders (mutating verb)</text>
+
+  <line x1="250" y1="52" x2="250" y2="72" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+
+  <rect x="60" y="74" width="380" height="50" fill="#12151a" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="76" y="94" fill="#e8eaed">gather guards: per-route args + inherited</text>
+  <text x="76" y="112" fill="#e8eaed">scope marks (Use / group / layer / hook)</text>
+
+  <line x1="250" y1="124" x2="250" y2="146" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+
+  <rect x="60" y="148" width="380" height="50" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="76" y="168" fill="#e8eaed">rule 1: veto segment on the guard name?</text>
+  <text x="76" y="186" fill="#9aa3af">(skip, optional, anonymous, ...)</text>
+  <line x1="440" y1="173" x2="600" y2="173" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="500" y="165" fill="#9aa3af">yes</text>
+  <rect x="602" y="150" width="240" height="46" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="618" y="170" fill="#f87171">not-auth</text>
+  <text x="618" y="188" fill="#9aa3af">even over a real body reject</text>
+
+  <line x1="250" y1="198" x2="250" y2="228" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="260" y="218" fill="#9aa3af">no</text>
+
+  <rect x="60" y="230" width="380" height="50" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="76" y="250" fill="#e8eaed">rule 2: body shows a verified reject?</text>
+  <text x="76" y="268" fill="#9aa3af">(401 alone, 403 only credential-guarded)</text>
+  <line x1="440" y1="255" x2="600" y2="255" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="500" y="247" fill="#9aa3af">yes</text>
+  <rect x="602" y="232" width="240" height="46" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="618" y="252" fill="#34d399">auth (protected)</text>
+  <text x="618" y="270" fill="#9aa3af">the ONLY bless path</text>
+
+  <line x1="250" y1="280" x2="250" y2="310" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="260" y="300" fill="#9aa3af">no</text>
+
+  <rect x="60" y="312" width="380" height="50" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="76" y="332" fill="#e8eaed">rule 3: body fully visible, never rejects?</text>
+  <text x="76" y="350" fill="#9aa3af">a name never rescues a visible body</text>
+  <line x1="440" y1="337" x2="600" y2="337" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="500" y="329" fill="#9aa3af">yes</text>
+  <rect x="602" y="314" width="240" height="46" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="618" y="334" fill="#f87171">not-auth</text>
+  <text x="618" y="352" fill="#9aa3af">deviator in the auth vote</text>
+
+  <line x1="250" y1="362" x2="250" y2="392" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="260" y="382" fill="#9aa3af">no: opaque or unreadable</text>
+
+  <rect x="60" y="394" width="380" height="50" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="76" y="414" fill="#e8eaed">rules 4 and 5: is the guard auth-flavored?</text>
+  <text x="76" y="432" fill="#9aa3af">a name alone can hedge, never bless</text>
+  <line x1="440" y1="419" x2="600" y2="419" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="500" y="411" fill="#9aa3af">yes</text>
+  <rect x="602" y="396" width="256" height="64" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="618" y="416" fill="#e8eaed">unsure (hedged)</text>
+  <text x="618" y="434" fill="#9aa3af">still not-authed in the vote;</text>
+  <text x="618" y="452" fill="#9aa3af">copy: double check hook 'name'</text>
+
+  <line x1="250" y1="444" x2="250" y2="474" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#ac-arrow)"/>
+  <text x="260" y="464" fill="#9aa3af">no</text>
+  <rect x="60" y="476" width="380" height="40" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="76" y="500" fill="#f87171">not-auth</text>
+</svg>

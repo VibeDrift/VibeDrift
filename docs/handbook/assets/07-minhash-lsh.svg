@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="arrow7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa3af"/>
+    </marker>
+  </defs>
+
+  <!-- Row 1: body -> tokens -> shingles -> signature -->
+  <rect x="10" y="30" width="150" height="60" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="85" y="55" fill="#e8eaed" text-anchor="middle">function body</text>
+  <text x="85" y="73" fill="#9aa3af" text-anchor="middle">raw source</text>
+
+  <line x1="160" y1="60" x2="215" y2="60" stroke="#9aa3af" marker-end="url(#arrow7)"/>
+
+  <rect x="218" y="30" width="190" height="60" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="313" y="55" fill="#e8eaed" text-anchor="middle">normalized tokens</text>
+  <text x="313" y="73" fill="#9aa3af" text-anchor="middle">ID0, ID1... calls kept</text>
+
+  <line x1="408" y1="60" x2="463" y2="60" stroke="#9aa3af" marker-end="url(#arrow7)"/>
+
+  <rect x="466" y="30" width="170" height="60" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="551" y="55" fill="#e8eaed" text-anchor="middle">shingles</text>
+  <text x="551" y="73" fill="#9aa3af" text-anchor="middle">5-token windows</text>
+
+  <line x1="636" y1="60" x2="691" y2="60" stroke="#9aa3af" marker-end="url(#arrow7)"/>
+
+  <rect x="694" y="30" width="176" height="60" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="782" y="55" fill="#e8eaed" text-anchor="middle">MinHash signature</text>
+  <text x="782" y="73" fill="#9aa3af" text-anchor="middle">128 slots</text>
+
+  <!-- Down arrow from signature to LSH -->
+  <line x1="782" y1="90" x2="782" y2="130" stroke="#9aa3af" marker-end="url(#arrow7)"/>
+
+  <!-- Row 2: LSH -> candidate pair -> LCS verify (right to left flow) -->
+  <rect x="600" y="134" width="270" height="76" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="735" y="156" fill="#e8eaed" text-anchor="middle">LSH: 16 bands x 8 rows</text>
+  <!-- band cells -->
+  <rect x="622" y="168" width="52" height="26" fill="none" stroke="#9aa3af"/>
+  <rect x="678" y="168" width="52" height="26" fill="none" stroke="#9aa3af"/>
+  <rect x="734" y="168" width="52" height="26" fill="none" stroke="#34d399"/>
+  <rect x="790" y="168" width="52" height="26" fill="none" stroke="#9aa3af"/>
+  <text x="648" y="185" fill="#9aa3af" text-anchor="middle">b1</text>
+  <text x="704" y="185" fill="#9aa3af" text-anchor="middle">b2</text>
+  <text x="760" y="185" fill="#34d399" text-anchor="middle">b3 =</text>
+  <text x="816" y="185" fill="#9aa3af" text-anchor="middle">b16</text>
+
+  <line x1="600" y1="172" x2="545" y2="172" stroke="#9aa3af" marker-end="url(#arrow7)"/>
+
+  <rect x="330" y="134" width="212" height="76" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="436" y="164" fill="#e8eaed" text-anchor="middle">candidate pair</text>
+  <text x="436" y="184" fill="#9aa3af" text-anchor="middle">any one band matches</text>
+
+  <line x1="330" y1="172" x2="275" y2="172" stroke="#9aa3af" marker-end="url(#arrow7)"/>
+
+  <rect x="10" y="134" width="262" height="76" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="141" y="164" fill="#e8eaed" text-anchor="middle">LCS verify</text>
+  <text x="141" y="184" fill="#9aa3af" text-anchor="middle">2*LCS(a,b) / (|a|+|b|)</text>
+
+  <!-- Collision probability annotations -->
+  <text x="600" y="240" fill="#e8eaed">P(candidate) = 1 - (1 - s^8)^16</text>
+  <text x="600" y="262" fill="#34d399">s = 0.9  collides 99.99%</text>
+  <text x="600" y="282" fill="#f87171">s = 0.3  collides 0.1%</text>
+
+  <text x="10" y="240" fill="#9aa3af">consumers threshold the verified LCS score:</text>
+  <text x="10" y="262" fill="#e8eaed">drift detector 0.7 / find_similar 0.6 / validate_change 0.8</text>
+</svg>

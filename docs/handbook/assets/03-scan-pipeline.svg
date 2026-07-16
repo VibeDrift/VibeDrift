@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 310" width="880" height="310" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa3af"/>
+    </marker>
+  </defs>
+
+  <!-- Row 1: discovery, parse, analysis, deep -->
+  <rect x="20" y="50" width="140" height="54" fill="#12151a" stroke="#eab308" rx="6"/>
+  <text x="90" y="72" fill="#e8eaed" text-anchor="middle">Discovery</text>
+  <text x="90" y="90" fill="#9aa3af" text-anchor="middle" font-size="10">core/discovery.ts</text>
+
+  <rect x="200" y="50" width="140" height="54" fill="#12151a" stroke="#eab308" rx="6"/>
+  <text x="270" y="72" fill="#e8eaed" text-anchor="middle">Parse ASTs</text>
+  <text x="270" y="90" fill="#9aa3af" text-anchor="middle" font-size="10">web-tree-sitter</text>
+
+  <rect x="380" y="30" width="210" height="94" fill="#12151a" stroke="#eab308" rx="6"/>
+  <text x="485" y="52" fill="#e8eaed" text-anchor="middle">13 static analyzers</text>
+  <text x="485" y="72" fill="#e8eaed" text-anchor="middle">14 drift detectors</text>
+  <text x="485" y="92" fill="#e8eaed" text-anchor="middle">Code DNA (Layer 1.7)</text>
+  <text x="485" y="112" fill="#9aa3af" text-anchor="middle" font-size="10">local, concurrent, cached</text>
+
+  <rect x="630" y="50" width="160" height="54" fill="none" stroke="#eab308" stroke-dasharray="6 4" rx="6"/>
+  <text x="710" y="72" fill="#e8eaed" text-anchor="middle">Deep scan (opt-in)</text>
+  <text x="710" y="90" fill="#9aa3af" text-anchor="middle" font-size="10">--deep, API + dedup</text>
+
+  <line x1="160" y1="77" x2="196" y2="77" stroke="#9aa3af" marker-end="url(#arr)"/>
+  <line x1="340" y1="77" x2="376" y2="77" stroke="#9aa3af" marker-end="url(#arr)"/>
+  <line x1="590" y1="77" x2="626" y2="77" stroke="#9aa3af" marker-end="url(#arr)"/>
+
+  <!-- Elbow down to row 2 -->
+  <path d="M 710 104 L 710 152 L 95 152 L 95 196" fill="none" stroke="#9aa3af" marker-end="url(#arr)"/>
+
+  <!-- Row 2: floor, scoring, persist, render -->
+  <rect x="20" y="200" width="150" height="54" fill="#12151a" stroke="#eab308" rx="6"/>
+  <text x="95" y="222" fill="#e8eaed" text-anchor="middle">Security floor</text>
+  <text x="95" y="240" fill="#9aa3af" text-anchor="middle" font-size="10">min-peer re-tag</text>
+
+  <rect x="210" y="200" width="160" height="54" fill="#12151a" stroke="#eab308" rx="6"/>
+  <text x="290" y="222" fill="#e8eaed" text-anchor="middle">Scoring engine</text>
+  <text x="290" y="240" fill="#9aa3af" text-anchor="middle" font-size="10">noisy-OR, v11</text>
+
+  <rect x="410" y="200" width="180" height="54" fill="#12151a" stroke="#eab308" rx="6"/>
+  <text x="500" y="222" fill="#e8eaed" text-anchor="middle">Persist</text>
+  <text x="500" y="240" fill="#9aa3af" text-anchor="middle" font-size="10">history + MCP baseline</text>
+
+  <rect x="630" y="200" width="230" height="54" fill="#12151a" stroke="#eab308" rx="6"/>
+  <text x="745" y="222" fill="#e8eaed" text-anchor="middle">Render</text>
+  <text x="745" y="240" fill="#9aa3af" text-anchor="middle" font-size="10">html / terminal / json / csv / docx</text>
+
+  <line x1="170" y1="227" x2="206" y2="227" stroke="#9aa3af" marker-end="url(#arr)"/>
+  <line x1="370" y1="227" x2="406" y2="227" stroke="#9aa3af" marker-end="url(#arr)"/>
+  <line x1="590" y1="227" x2="626" y2="227" stroke="#9aa3af" marker-end="url(#arr)"/>
+
+  <text x="20" y="290" fill="#9aa3af" font-size="10">Dashed = optional network stage. Every other stage runs locally. Skipping deep scan also skips cross-layer dedup.</text>
+</svg>

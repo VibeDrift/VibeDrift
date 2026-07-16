@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 320" width="860" height="320" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="dv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa3af"/>
+    </marker>
+  </defs>
+
+  <text x="30" y="26" fill="#e8eaed">src/handlers/  (peer group: 4 files, minGroupSize 3)</text>
+  <rect x="20" y="38" width="310" height="244" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+
+  <rect x="36" y="54" width="278" height="40" fill="#12151a" stroke="#eab308" rx="4"/>
+  <text x="48" y="78" fill="#e8eaed">users.ts</text>
+  <text x="200" y="78" fill="#34d399">repository</text>
+
+  <rect x="36" y="108" width="278" height="40" fill="#12151a" stroke="#eab308" rx="4"/>
+  <text x="48" y="132" fill="#e8eaed">orders.ts</text>
+  <text x="200" y="132" fill="#34d399">repository</text>
+
+  <rect x="36" y="162" width="278" height="40" fill="#12151a" stroke="#eab308" rx="4"/>
+  <text x="48" y="186" fill="#e8eaed">products.ts</text>
+  <text x="200" y="186" fill="#34d399">repository</text>
+
+  <rect x="36" y="216" width="278" height="40" fill="#12151a" stroke="#eab308" rx="4"/>
+  <text x="48" y="240" fill="#e8eaed">reports.ts</text>
+  <text x="200" y="240" fill="#f87171">raw_sql</text>
+
+  <line x1="330" y1="160" x2="400" y2="160" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#dv-arrow)"/>
+  <text x="336" y="150" fill="#9aa3af">votes</text>
+
+  <rect x="402" y="96" width="236" height="128" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="418" y="122" fill="#e8eaed">dominance vote</text>
+  <text x="418" y="150" fill="#34d399">repository: 3 votes</text>
+  <text x="418" y="172" fill="#f87171">raw_sql:    1 vote</text>
+  <text x="418" y="200" fill="#e8eaed">share 0.75 &gt;= 0.70</text>
+
+  <line x1="638" y1="160" x2="694" y2="160" stroke="#9aa3af" stroke-width="1.5" marker-end="url(#dv-arrow)"/>
+
+  <rect x="696" y="104" width="148" height="112" fill="none" stroke="#eab308" stroke-width="1.5" rx="6"/>
+  <text x="710" y="130" fill="#e8eaed">DriftFinding</text>
+  <text x="710" y="158" fill="#e8eaed">deviator:</text>
+  <text x="710" y="178" fill="#f87171">reports.ts</text>
+  <text x="710" y="200" fill="#f87171">flagged</text>
+
+  <text x="30" y="306" fill="#9aa3af">group &lt; 3 files, &lt; 2 distinct patterns, or dominant share &lt; 0.70: no finding emitted</text>
+</svg>

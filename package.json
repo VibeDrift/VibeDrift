@@ -29,6 +29,7 @@
     "eval:analyze": "tsx eval/analyze.ts",
     "calibrate": "tsx test/calibration/precision-recall.ts",
     "calibrate:monotonic": "tsx test/calibration/run.ts",
+    "handbook": "node scripts/build-handbook.mjs",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "keywords": [

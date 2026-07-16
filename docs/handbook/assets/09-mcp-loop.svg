@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" font-family="ui-monospace, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="arrow9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa3af"/>
+    </marker>
+  </defs>
+
+  <!-- Agent box -->
+  <rect x="10" y="60" width="200" height="110" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="110" y="95" fill="#e8eaed" text-anchor="middle">coding agent</text>
+  <text x="110" y="115" fill="#9aa3af" text-anchor="middle">Claude Code, Cursor...</text>
+  <text x="110" y="145" fill="#9aa3af" text-anchor="middle">writes code in a loop</text>
+
+  <!-- MCP server box -->
+  <rect x="320" y="30" width="250" height="180" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="445" y="55" fill="#e8eaed" text-anchor="middle">vibedrift MCP server</text>
+  <text x="445" y="73" fill="#9aa3af" text-anchor="middle">stdio, logs on stderr</text>
+  <text x="340" y="100" fill="#e8eaed">init</text>
+  <text x="340" y="118" fill="#e8eaed">get_intent_hints</text>
+  <text x="340" y="136" fill="#e8eaed">get_dominant_pattern</text>
+  <text x="340" y="154" fill="#e8eaed">check_file_drift</text>
+  <text x="340" y="172" fill="#e8eaed">find_similar_function</text>
+  <text x="340" y="190" fill="#e8eaed">validate_change</text>
+
+  <!-- Baseline cache box -->
+  <rect x="670" y="60" width="200" height="110" rx="6" fill="#12151a" stroke="#eab308"/>
+  <text x="770" y="90" fill="#e8eaed" text-anchor="middle">baseline cache</text>
+  <text x="770" y="110" fill="#9aa3af" text-anchor="middle">~/.vibedrift/</text>
+  <text x="770" y="128" fill="#9aa3af" text-anchor="middle">baseline-cache/*.json</text>
+  <text x="770" y="150" fill="#9aa3af" text-anchor="middle">BASELINE_VERSION 3</text>
+
+  <!-- Agent -> server -->
+  <line x1="210" y1="95" x2="315" y2="95" stroke="#9aa3af" marker-end="url(#arrow9)"/>
+  <text x="262" y="86" fill="#e8eaed" text-anchor="middle">tool call</text>
+
+  <!-- Server -> agent -->
+  <line x1="315" y1="145" x2="210" y2="145" stroke="#9aa3af" marker-end="url(#arrow9)"/>
+  <text x="262" y="166" fill="#e8eaed" text-anchor="middle">result + status</text>
+  <text x="262" y="184" fill="#9aa3af" text-anchor="middle">ok | stale | ...</text>
+
+  <!-- Server -> cache -->
+  <line x1="570" y1="95" x2="665" y2="95" stroke="#9aa3af" marker-end="url(#arrow9)"/>
+  <text x="618" y="86" fill="#e8eaed" text-anchor="middle">load once</text>
+
+  <!-- Cache -> server -->
+  <line x1="665" y1="145" x2="570" y2="145" stroke="#9aa3af" marker-end="url(#arrow9)"/>
+  <text x="618" y="166" fill="#e8eaed" text-anchor="middle">serve cached</text>
+  <text x="618" y="184" fill="#9aa3af" text-anchor="middle">re-hash: ok vs stale</text>
+
+  <!-- Lazy build note -->
+  <text x="320" y="245" fill="#34d399">first call on a fresh repo: lazy build, 3-8s once, then cached</text>
+  <text x="320" y="267" fill="#f87171">content changes never rebuild in-loop: stale is served (version bumps rebuild once)</text>
+  <text x="10" y="245" fill="#9aa3af">per call budget</text>
+  <text x="10" y="263" fill="#e8eaed">&lt; 500 ms</text>
+</svg>
