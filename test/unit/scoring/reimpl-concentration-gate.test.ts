@@ -80,3 +80,19 @@ describe("reimplementation concentration gate — scoring impact", () => {
     expect(dense).toBeLessThan(belowGate);
   });
 });
+
+describe("gate idempotence (the scan-level hoist relies on this)", () => {
+  it("re-applying the gate to an already re-tagged set is a no-op", () => {
+    // scan.ts hoists the gate before computeScores so the re-tag reaches
+    // result.findings; computeScores then re-applies it to the same set.
+    // The second application must return the SAME reference (no double
+    // transformation), because the drift id no longer matches the gate's
+    // hygiene-id filter.
+    const dense = reimpl(5); // 5 findings on tiny LOC clears both thresholds
+    const once = applyReimplementationConcentrationGate(dense, 1000);
+    expect(once).not.toBe(dense); // gate fired
+    expect(tags(once, "ml-reimplementation-concentrated")).toBe(5);
+    const twice = applyReimplementationConcentrationGate(once, 1000);
+    expect(twice).toBe(once); // second pass: same reference, untouched
+  });
+});

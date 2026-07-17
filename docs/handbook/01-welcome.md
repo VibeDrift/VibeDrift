@@ -5,7 +5,7 @@ VibeDrift is a drift scanner for AI-assisted codebases. It measures one thing: h
 That identity is the most important sentence in this handbook, because it rules out two things people expect from a code scanner:
 
 - **VibeDrift is not a generic code-quality tool.** SonarQube, Semgrep, and CodeQL already exist. A finding here needs a baseline it deviates from; a peer group is a precondition, not a nice-to-have. `CONTRIBUTING.md` states the test every change must pass: does this make us measure drift more accurately or more confidently?
-- **VibeDrift is not a vulnerability scanner.** The Security Consistency category measures how uniformly a repo applies its *own* auth and validation patterns, not the absence of vulnerabilities. The terminal report renders that disclaimer permanently under the security bar (`src/output/terminal.ts`): consistent does not mean safe.
+- **VibeDrift is not a vulnerability scanner.** The Security Consistency category measures how uniformly a repo applies its *own* auth, validation, and rate-limit patterns, not the absence of vulnerabilities. The terminal report renders that disclaimer permanently under the security bar (`src/output/terminal.ts`): consistent does not mean safe.
 
 The distinction is enforced in code, not just in copy. Every signal is classified as either **drift-kind** (grounded in a dominance vote, similarity signal, or taint flow) or **hygiene-kind** (classic linter territory: empty catches, dead code, generic security rules). Only drift-kind findings feed the headline Vibe Drift Score; hygiene findings render in their own pane with their own parallel score (`src/scoring/categories.ts`). Chapter 08 covers the mechanics.
 

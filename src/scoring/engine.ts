@@ -141,7 +141,7 @@ export function applyReimplementationConcentrationGate(
  */
 export const MIN_SECURITY_PEERS = 4;
 const SECURITY_DRIFT_ID = "drift-security_posture";
-const SECURITY_ADVISORY_ID = "security_posture-advisory";
+export const SECURITY_ADVISORY_ID = "security_posture-advisory";
 
 export function applySecurityMinPeerFloor(findings: Finding[]): Finding[] {
   let changed = false;

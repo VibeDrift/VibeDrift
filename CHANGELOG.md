@@ -6,6 +6,27 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Honest N/A copy.** A category with no score now says why: "nothing to measure in this
+  repo" (e.g. Security Consistency in a repo with no web routes), or "not scored (evidence
+  below floor); advisory findings below" when the peer floor demoted the findings — instead
+  of "no findings in this repo", which read as a clean bill for a check that never ran.
+  Terminal and HTML report alike.
+- **The security disclaimer names all three sub-conventions** it actually measures: auth,
+  validation, and rate-limit patterns.
+- **Per-file Drift/Static tallies match the report's sections.** A finding demoted to
+  advisory now tallies as Static in the per-file table, the same split the section
+  headings use, instead of counting as Drift in one place and listing as Static in another.
+- **Concentrated reimplementation is labeled drift everywhere.** When the concentration
+  gate fires, the re-tag now reaches every output surface (terminal, HTML, CSV, DOCX,
+  context.md), matching the score it already moves.
+- **The per-category breakdown no longer credits an unmeasured Security Consistency with
+  full health.** When the category is N/A, the breakdown (including the copy uploaded to
+  the dashboard) omits it instead of showing a full-score bar next to the N/A.
+- Removed a crash risk on extremely large finding sets (whole-array argument spreads
+  replaced with loops).
+
 ## 0.16.2 — 2026-07-16
 
 ### Fixed

@@ -13,7 +13,7 @@ A scan produces one `ScanResult`; everything the user sees is a renderer over th
 Two other honesty rules render here:
 
 - The Hygiene Score is printed as a separate scalar explicitly labeled as not part of the Vibe Drift Score, keeping the drift-vs-hygiene split visible at the surface.
-- Under the Security Consistency bar a permanent disclaimer renders: "consistent ≠ safe: measures how uniformly this repo applies its own auth and validation patterns, not the absence of vulnerabilities". VibeDrift measures drift, and this line stops the security category from being misread as a vulnerability audit.
+- Under the Security Consistency bar a permanent disclaimer renders: "consistent ≠ safe: measures how uniformly this repo applies its own auth, validation, and rate-limit patterns, not the absence of vulnerabilities". VibeDrift measures drift, and this line stops the security category from being misread as a vulnerability audit.
 
 ### Hedged security copy
 

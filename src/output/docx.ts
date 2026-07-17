@@ -395,7 +395,10 @@ function buildDocxPerFileTable(result: ScanResult): string {
     tableCellSimple("Static", "D9E2F3", true),
   ]);
   const fileDataRows = fileSorted.slice(0, 40).map(([path, data]) => {
-    const driftCount = data.findings.filter((f) => f.tags?.includes("drift") || f.tags?.includes("codedna")).length;
+    // Kind-based, matching the headline sections: a demoted advisory finding
+    // (hygiene-kind, still tagged "drift" from its origin) must tally as
+    // Static here or the per-file table contradicts the section it renders in.
+    const driftCount = data.findings.filter((f) => getAnalyzerKind(f.analyzerId) === "drift").length;
     const staticCount = data.findings.length - driftCount;
     return tableRow([
       tableCellSimple(path),
