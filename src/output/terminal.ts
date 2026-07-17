@@ -493,6 +493,10 @@ function renderDiffBanner(result: ScanResult): string[] {
   if (result.previousScoresMismatch === "scoring-version-mismatch") return [];
   const diff = result.diff;
   if (!diff) return [];
+  // Same silence when the diffed PAIR spans scoring versions (e.g. `--since`
+  // targeting a scan from a prior engine) — the mismatch flag above only
+  // covers the latest scan.
+  if (diff.versionMismatch) return [];
 
   const lines: string[] = [];
   const when = relativeTime(diff.fromTimestamp);

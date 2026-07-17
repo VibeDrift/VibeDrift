@@ -184,15 +184,12 @@
   text into the committed `.vibedrift/context.md` in the same scenario (a more
   durable surface than the ephemeral terminal line).
   This is deliberate for now: the baseline (`assembleBaseline`) and diff track
-  the raw representation for continuity. CORRECTION (2026-07-08 audit, issue #34
-  item C1): the claim below that the first-scan-after-upgrade case is "already
-  silenced by the SCORING_VERSION-mismatch guard" is FALSE — verified against
-  source. `diffScans` (`src/output/history-diff.ts`) only gates on
-  `previous.schemaVersion`, never on `scoringVersion`; `previousScoresMismatch`
-  (the actual guard, set in `scan.ts`) is never read by `diffScans` or
-  `src/output/context-md.ts`. A scan taken right after a `SCORING_VERSION` bump
-  WILL diff its `compositeScore` against the prior version's and can commit a
-  cross-version "Vibe Drift Score delta" into `.vibedrift/context.md`. If we
+  the raw representation for continuity. (The CROSS-VERSION case is FIXED as of
+  2026-07-16: `diffScans` now takes the current scan's `scoringVersion` and
+  refuses comparison when the pair spans versions — `versionMismatch: true`
+  zeroes deltas, empties the resolved set, and both the terminal banner and the
+  committed `context.md` trajectory stay silent, `--since` included. What
+  remains here is the SAME-VERSION raw-vs-rendered concern only.) If we
   want the diff to match the rendered (scored) view, feed `scoredDriftView(...).driftFindings` to
   both the diff digest (buildScanResult) and `saveScanResult` together (keep the
   two sources identical or a spurious per-scan diff reappears).

@@ -483,6 +483,10 @@ async function buildScanResult(
         hygieneScore,
         findingDigests: allFindings.slice(0, 200).map(computeFindingDigest),
         driftFindingDigests: (driftResult.driftFindings ?? []).slice(0, 100).map(computeDriftFindingDigest),
+        // Lets diffScans refuse cross-version comparisons for THIS pair —
+        // `previousScoresMismatch` only covers the latest scan, but `--since`
+        // can target any older scan, including one from a prior engine.
+        scoringVersion,
       });
     }
   }

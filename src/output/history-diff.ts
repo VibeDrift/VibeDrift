@@ -29,6 +29,16 @@ export interface DiffResult {
   toTimestamp: string | null;
   /** True when the previous scan is too old to compare meaningfully. */
   incomparable: boolean;
+  /**
+   * True when the two scans were scored under different SCORING_VERSIONs
+   * (or the previous scan predates the field). Both the score delta AND the
+   * resolved/new classification would then be artifacts of an engine change,
+   * not the user's code, so all comparisons are refused: deltas are 0 and
+   * every finding lands in `new`. Renderers must stay SILENT on this flag
+   * (no banner, no trajectory) — the one-time scoring-refined notice is the
+   * only surface that explains a version shift.
+   */
+  versionMismatch: boolean;
 }
 
 export interface FindingDelta {
@@ -81,23 +91,36 @@ function diffBy(
  * persisted), the diff is marked `incomparable: true` and everything
  * lands in `new` (we can't claim anything was "resolved" because we
  * don't know what used to be there).
+ *
+ * When the current scan carries a `scoringVersion` and the previous scan
+ * was scored under a different one (or predates the field), the diff is
+ * marked `versionMismatch: true` and every comparison is refused the same
+ * way: subtracting numbers produced by different formulas, or attributing
+ * detector-set changes to the user's code, yields misleading results. This
+ * implements the refusal that SavedScan.scoringVersion's contract promises.
  */
 export function diffScans(
   previous: SavedScan | null,
-  current: Pick<SavedScan, "compositeScore" | "hygieneScore" | "findingDigests" | "driftFindingDigests" | "timestamp">,
+  current: Pick<SavedScan, "compositeScore" | "hygieneScore" | "findingDigests" | "driftFindingDigests" | "timestamp"> & { scoringVersion?: string },
 ): DiffResult {
   const incomparable = previous !== null && (previous.schemaVersion ?? 1) < MIN_SCHEMA_FOR_DIFF;
+  const versionMismatch =
+    previous !== null &&
+    current.scoringVersion !== undefined &&
+    previous.scoringVersion !== current.scoringVersion;
+  // Either condition means the two scans cannot be honestly compared.
+  const blind = incomparable || versionMismatch;
 
-  const prevFindings = incomparable || previous === null ? undefined : previous.findingDigests;
-  const prevDrift = incomparable || previous === null ? undefined : previous.driftFindingDigests;
+  const prevFindings = blind || previous === null ? undefined : previous.findingDigests;
+  const prevDrift = blind || previous === null ? undefined : previous.driftFindingDigests;
 
   const findingsDiff = diffBy(prevFindings, current.findingDigests);
   const driftFindingsDiff = diffBy(prevDrift, current.driftFindingDigests);
 
-  const scoreDelta = previous && !incomparable
+  const scoreDelta = previous && !blind
     ? Math.round(((current.compositeScore ?? 0) - (previous.compositeScore ?? 0)) * 10) / 10
     : 0;
-  const hygieneDelta = previous && !incomparable
+  const hygieneDelta = previous && !blind
     ? Math.round(((current.hygieneScore ?? 0) - (previous.hygieneScore ?? 0)) * 10) / 10
     : 0;
 
@@ -109,6 +132,7 @@ export function diffScans(
     fromTimestamp: previous?.timestamp ?? null,
     toTimestamp: current.timestamp,
     incomparable,
+    versionMismatch,
   };
 }
 

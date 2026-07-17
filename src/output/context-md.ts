@@ -93,7 +93,10 @@ export function buildContextMarkdown(result: ScanResult, projectName: string, is
 
   // Recent trajectory — scan-over-scan diff. Lets AI agents see what
   // changed since the last run without re-reading the whole codebase.
-  if (result.diff && !result.diff.incomparable) {
+  // versionMismatch stays silent like the terminal banner: a cross-version
+  // delta is an engine artifact, and this file is COMMITTED, so a false
+  // "score delta" or "new findings" claim here would outlive the scan.
+  if (result.diff && !result.diff.incomparable && !result.diff.versionMismatch) {
     const d = result.diff;
     const resolved = d.driftFindingsDiff.resolved.length + d.findingsDiff.resolved.length;
     const added = d.driftFindingsDiff.new.length + d.findingsDiff.new.length;

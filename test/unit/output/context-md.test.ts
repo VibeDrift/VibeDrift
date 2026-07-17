@@ -35,6 +35,33 @@ describe("buildContextMarkdown referral link", () => {
   });
 });
 
+describe("buildContextMarkdown trajectory — cross-version silence", () => {
+  const diffBase = {
+    findingsDiff: { resolved: [], new: [{ analyzerId: "naming", severity: "warning", message: "new drift thing", key: "k1" }], persistent: [] },
+    driftFindingsDiff: { resolved: [], new: [], persistent: [] },
+    scoreDelta: 4.2,
+    hygieneDelta: 0,
+    fromTimestamp: "2026-07-15T10:00:00Z",
+    toTimestamp: "2026-07-16T10:00:00Z",
+    incomparable: false,
+  };
+
+  it("renders the trajectory for a same-version diff", () => {
+    const r = { ...minimalResult(), diff: { ...diffBase, versionMismatch: false } };
+    const md = buildContextMarkdown(r, "acme-app");
+    expect(md).toContain("Recent trajectory");
+    expect(md).toContain("+4.2");
+  });
+
+  it("stays silent when the diff spans scoring versions — a committed context.md must never carry a cross-version delta", () => {
+    const r = { ...minimalResult(), diff: { ...diffBase, versionMismatch: true } };
+    const md = buildContextMarkdown(r, "acme-app");
+    expect(md).not.toContain("Recent trajectory");
+    expect(md).not.toContain("Score delta");
+    expect(md).not.toContain("New findings since last scan");
+  });
+});
+
 describe("writeContextFiles — fix prompts are paid", () => {
   const dirs: string[] = [];
   afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));

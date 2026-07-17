@@ -109,6 +109,68 @@ describe("diffScans", () => {
     expect(d.scoreDelta).toBe(0);
   });
 
+  it("refuses every comparison when the pair spans scoring versions", () => {
+    const A = computeFindingDigest(f({ message: "A", locations: [{ file: "a.ts", line: 10 }] }));
+    const B = computeFindingDigest(f({ message: "B", locations: [{ file: "b.ts", line: 20 }] }));
+    const prev = saved({ findingDigests: [A], compositeScore: 60, scoringVersion: "v11" });
+    const d = diffScans(prev, {
+      timestamp: "2026-04-19T12:00:00Z",
+      compositeScore: 71,
+      hygieneScore: 90,
+      findingDigests: [B],
+      driftFindingDigests: [],
+      scoringVersion: "v12",
+    });
+    expect(d.versionMismatch).toBe(true);
+    // Numbers from different formulas are never subtracted…
+    expect(d.scoreDelta).toBe(0);
+    expect(d.hygieneDelta).toBe(0);
+    // …and nothing is claimed resolved against the old detector set.
+    expect(d.findingsDiff.resolved).toHaveLength(0);
+    expect(d.findingsDiff.new).toHaveLength(1);
+  });
+
+  it("treats a previous scan with no scoringVersion as a mismatch", () => {
+    const prev = saved({ compositeScore: 60 }); // predates the field
+    const d = diffScans(prev, {
+      timestamp: "2026-04-19T12:00:00Z",
+      compositeScore: 70,
+      hygieneScore: 100,
+      findingDigests: [],
+      driftFindingDigests: [],
+      scoringVersion: "v12",
+    });
+    expect(d.versionMismatch).toBe(true);
+    expect(d.scoreDelta).toBe(0);
+  });
+
+  it("compares normally when both scans share a scoring version", () => {
+    const prev = saved({ compositeScore: 60, scoringVersion: "v12" });
+    const d = diffScans(prev, {
+      timestamp: "2026-04-19T12:00:00Z",
+      compositeScore: 70,
+      hygieneScore: 100,
+      findingDigests: [],
+      driftFindingDigests: [],
+      scoringVersion: "v12",
+    });
+    expect(d.versionMismatch).toBe(false);
+    expect(d.scoreDelta).toBe(10);
+  });
+
+  it("claims no mismatch when the current scan omits its version (legacy callers)", () => {
+    const prev = saved({ compositeScore: 60, scoringVersion: "v11" });
+    const d = diffScans(prev, {
+      timestamp: "2026-04-19T12:00:00Z",
+      compositeScore: 70,
+      hygieneScore: 100,
+      findingDigests: [],
+      driftFindingDigests: [],
+    });
+    expect(d.versionMismatch).toBe(false);
+    expect(d.scoreDelta).toBe(10);
+  });
+
   it("classifies drift findings independently from generic findings", () => {
     const prevDrift = computeDriftFindingDigest(drift({ finding: "old drift" }));
     const newDrift = computeDriftFindingDigest(drift({ finding: "new drift" }));
