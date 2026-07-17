@@ -1,5 +1,11 @@
 # CLI backlog
 
+- **Next publish: consider a `SCORING_VERSION` v12 bump + release-notes entry.** Three
+  unpublished commits on main change scan verdicts (Fiber/Gorilla router constructors in the
+  Go security lane, dependency scan ignoring import-like text in comments/strings, codedna
+  regex-metacharacter escape). If they ship, bump the version so stored scores backfill
+  silently, and describe the change on vibedrift.ai/releases before/at publish.
+
 - **Import-style drift is JS/TS only ([#56](https://github.com/VibeDrift/VibeDrift/issues/56)).** No import
   convention check for Python, Go, or Rust (`imports` analyzer and the `import-consistency` detector are both
   JS/TS-gated). Other languages get import parsing only for dependency/dead-code, not a style signal. Candidate
@@ -37,10 +43,6 @@
   "before_request hook / dependency", Go "middleware", Rust "extractor / layer"),
   which needs threading the finding's language into `hedgeRecommendationSuffix`
   and the terminal read-back regex in lockstep. Low priority.
-- **Batched `SCORING_VERSION` bump before the next publish.** The Rust auth lane
-  and the Python hook reconciliation change stored auth verdicts; fold into the
-  next version bump + silent backfill so users don't see per-scan version churn.
-
 - **No per-call logging in the MCP server (tool calls are invisible).** The stdio
   server (`src/mcp/server.ts`) only writes startup (`vibedrift-mcp running on
   stdio`), a one-time baseline-index line, and `Fatal:` to stderr — never a line
@@ -108,16 +110,6 @@
   `test/unit/output/security-hedge-surfaces.test.ts`); a follow-up could add a
   short "N routes could not be confirmed (hooks: ...)" line so the AI-agent
   context file carries the same hedge the report surfaces do.
-
-- **Landing-page release notes for SCORING_VERSION v10 (cross-repo).** The
-  security release bumps `SCORING_VERSION` v9 -> v10 (Express `.all()` + Flask
-  `@app.route(methods=[...])` mutating routes now enter the security auth vote,
-  so repos with those shapes reflect security_posture drift they always had).
-  The one-time scoring-refined notice (`src/core/scoring-notice.ts`) points
-  users to `https://vibedrift.ai/releases`, so that page must describe the v10
-  change before/at publish. Calibration corpus is byte-identical (no percentile
-  regeneration needed). Belongs in `vibedrift-landing-page`, tracked here so the
-  CLI publish does not ship a notice pointing at an undocumented change.
 
 - **Gin `.Any()` / Chi `.Method()` routes are not extracted at all.** Task B1
   (2026-07-08, canonical mutating-method classification) fixed the
