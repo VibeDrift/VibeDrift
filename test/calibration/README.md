@@ -84,7 +84,7 @@ Injection  Composite  Drift   Δ composite  Δ drift
      90%       42.2    35.8        -12.8   -12.8
 
 monotonicity: ✓  (composite + drift both strictly decrease)
-responsiveness: ✓  (each +25% drift yields ≥5pt score drop)
+responsiveness: ✓  (each +25% drift yields ≥3pt score drop)
 ```
 
 ## Python security fixture (the multilang calibration gate)
@@ -371,11 +371,11 @@ row at >= 0.95, unaffected by this row).
 
 ## Adding a new injection type
 
-Drop a generator in `generators/`. Signature:
+Add an injector function to `test/calibration/injectors.ts`. Signature:
 
 ```ts
-export function injectFoo(baseline: Baseline, rate: number): Baseline
+export function injectFoo(baseline: BaselineFile[], rate: number): BaselineFile[]
 ```
 
 Where `rate` is 0-1 (fraction of files to deviate). Add it to
-`run.ts`'s list of generators and it'll sweep alongside the others.
+`run.ts`'s list of injectors and it'll sweep alongside the others.
