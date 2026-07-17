@@ -299,6 +299,46 @@ function goDisplayModule(importPath: string): string {
   return segments.length >= 3 ? segments.slice(0, 3).join("/") : importPath;
 }
 
+// One Go module's dependency-check state. Built per module (root + every
+// nested go.mod); `.go` files are attributed to the nearest enclosing one.
+interface ModuleScope {
+  /** Module root relative to the scan root, `/`-separated; "" for the root module. */
+  dir: string;
+  module: string;
+  goModPath: string;
+  /** require paths WITHOUT `// indirect` — drives the "unused module" (phantom) check. */
+  directPaths: string[];
+  /** all require paths (direct + indirect) — drives the "not in go.mod" (missing) check. */
+  allPaths: string[];
+  imports: Set<string>;
+  fileCount: number;
+}
+
+// Nearest enclosing module for a file, resolved by walking the file's
+// directory ancestors deepest-first against a sparse directory→module index
+// (only real module dirs are keyed, so this is the practical form of a
+// per-directory "has go.mod" trie without a node per directory). O(path depth)
+// per file with O(1) lookups, independent of how many modules the repo has.
+// Returns null when the nearest enclosing module is one we couldn't parse
+// (opaque): such a file has no dependency list to check, so it is excluded
+// rather than mis-attributed to the root module. The root module ("") is
+// always present, so the walk always terminates.
+function nearestModuleScope(
+  rel: string,
+  scopeByDir: Map<string, ModuleScope>,
+  opaqueDirs: Set<string>,
+): ModuleScope | null {
+  let dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+  for (;;) {
+    if (opaqueDirs.has(dir)) return null;
+    const scope = scopeByDir.get(dir);
+    if (scope) return scope;
+    if (dir === "") return null; // unreachable: the root scope keys "".
+    const slash = dir.lastIndexOf("/");
+    dir = slash === -1 ? "" : dir.slice(0, slash);
+  }
+}
+
 function analyzeGoDeps(ctx: AnalysisContext): Finding[] {
   const findings: Finding[] = [];
   const goMod = ctx.goMod!;
@@ -311,7 +351,7 @@ function analyzeGoDeps(ctx: AnalysisContext): Finding[] {
   // them "unused" would be a false positive. `allPaths` (direct + indirect)
   // drives the missing-import check — an import satisfied by an indirect entry
   // is still declared.
-  const scopes = [
+  const scopes: ModuleScope[] = [
     {
       dir: "",
       module: goMod.module,
@@ -321,7 +361,7 @@ function analyzeGoDeps(ctx: AnalysisContext): Finding[] {
       imports: new Set<string>(),
       fileCount: 0,
     },
-    ...(goMod.nestedModules ?? []).map((n) => ({
+    ...(goMod.nestedModules ?? []).map((n): ModuleScope => ({
       dir: n.dir,
       module: n.module,
       goModPath: `${n.dir}/go.mod`,
@@ -331,12 +371,13 @@ function analyzeGoDeps(ctx: AnalysisContext): Finding[] {
       fileCount: 0,
     })),
   ];
-  // Nearest ancestor wins: deepest module dir first; root ("") matches last.
-  const byDepth = [...scopes].sort((a, b) => b.dir.length - a.dir.length);
+  // Sparse directory→module index for nearest-ancestor resolution (see
+  // nearestModuleScope). Keyed only by real module dirs, not every directory.
+  const scopeByDir = new Map<string, ModuleScope>(scopes.map((s) => [s.dir, s]));
   // Nested go.mod files we couldn't parse: a file under one of these has no
   // dependency list to check against, so it must be EXCLUDED, not attributed
   // to root (which would flag that module's own deps as missing at root).
-  const opaqueByDepth = [...(goMod.opaqueModuleDirs ?? [])].sort((a, b) => b.length - a.length);
+  const opaqueDirs = new Set<string>(goMod.opaqueModuleDirs ?? []);
   // Imports of any module that lives in this repo (root or nested sibling)
   // are never "missing" — the code is physically present, and whether a
   // workspace declares the cross-module require is build tooling, not drift.
@@ -345,11 +386,9 @@ function analyzeGoDeps(ctx: AnalysisContext): Finding[] {
   const goFiles = ctx.files.filter((f) => f.language === "go");
   for (const file of goFiles) {
     const rel = file.relativePath.replace(/\\/g, "/");
-    const scope = byDepth.find((s) => s.dir === "" || rel.startsWith(s.dir + "/"))!;
-    // If an unparseable nested module encloses this file more tightly than the
-    // chosen (parsed) scope, we can't judge its imports — skip the file.
-    const opaqueDir = opaqueByDepth.find((d) => rel.startsWith(d + "/"));
-    if (opaqueDir !== undefined && opaqueDir.length > scope.dir.length) continue;
+    const scope = nearestModuleScope(rel, scopeByDir, opaqueDirs);
+    // null ⇒ the file's nearest module is one we couldn't parse; skip it.
+    if (scope === null) continue;
     scope.fileCount++;
     for (const importPath of extractGoImports(file.content)) {
       // Skip stdlib (no dots in first segment)

@@ -313,6 +313,78 @@ export function run() { return readFile("./x"); }
     expect(findings.find((f) => f.tags.includes("phantom"))).toBeUndefined();
   });
 
+  it("Go: a module nested inside another module wins for its own files (deepest ancestor)", async () => {
+    // root at "", nested at "a", deeper nested at "a/b". Each file must resolve
+    // to its NEAREST enclosing module, and each module's own import is declared,
+    // so nothing is missing.
+    const ctx: AnalysisContext = {
+      ...BASE,
+      packageJson: null,
+      goMod: {
+        module: "example.com/root",
+        require: [{ path: "github.com/root/dep", version: "v1.0.0" }],
+        hasNestedModule: true,
+        nestedModules: [
+          { dir: "a", module: "example.com/a", require: [{ path: "github.com/a/dep", version: "v1.0.0" }] },
+          { dir: "a/b", module: "example.com/a/b", require: [{ path: "github.com/b/dep", version: "v1.0.0" }] },
+        ],
+      },
+      files: [
+        {
+          path: "/test/main.go", relativePath: "main.go", language: "go",
+          content: 'package main\n\nimport "github.com/root/dep"\n', lineCount: 3,
+        },
+        {
+          path: "/test/a/svc.go", relativePath: "a/svc.go", language: "go",
+          content: 'package a\n\nimport "github.com/a/dep"\n', lineCount: 3,
+        },
+        {
+          path: "/test/a/b/deep.go", relativePath: "a/b/deep.go", language: "go",
+          content: 'package b\n\nimport "github.com/b/dep"\n', lineCount: 3,
+        },
+      ],
+      totalLines: 9,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    // Every import resolves against its own module — no missing, no phantom.
+    expect(findings.find((f) => f.tags.includes("missing"))).toBeUndefined();
+    expect(findings.find((f) => f.tags.includes("phantom"))).toBeUndefined();
+  });
+
+  it("Go: a file under a module nested in an OPAQUE module is skipped (deepest opaque wins)", async () => {
+    // "a" is unparseable (opaque); "a/b" parses. A file at a/b/x.go belongs to
+    // the parsed a/b module (deeper than the opaque "a") and is analyzed; a file
+    // directly under the opaque "a" is skipped, not blamed on root.
+    const ctx: AnalysisContext = {
+      ...BASE,
+      packageJson: null,
+      goMod: {
+        module: "example.com/root",
+        require: [],
+        hasNestedModule: true,
+        opaqueModuleDirs: ["a"],
+        nestedModules: [
+          { dir: "a/b", module: "example.com/a/b", require: [{ path: "github.com/b/dep", version: "v1.0.0" }] },
+        ],
+      },
+      files: [
+        {
+          path: "/test/a/legacy.go", relativePath: "a/legacy.go", language: "go",
+          content: 'package a\n\nimport "github.com/opaque/thing"\n', lineCount: 3,
+        },
+        {
+          path: "/test/a/b/ok.go", relativePath: "a/b/ok.go", language: "go",
+          content: 'package b\n\nimport "github.com/b/dep"\n', lineCount: 3,
+        },
+      ],
+      totalLines: 6,
+    };
+    const findings = await dependenciesAnalyzer.analyze(ctx);
+    // a/legacy.go excluded (opaque); a/b/ok.go's import is declared in a/b.
+    expect(findings.find((f) => f.tags.includes("missing"))).toBeUndefined();
+    expect(findings.find((f) => f.tags.includes("phantom"))).toBeUndefined();
+  });
+
   it("Go: still flags a genuinely undeclared import inside a nested module, at that module's go.mod", async () => {
     const ctx: AnalysisContext = {
       ...BASE,
