@@ -1,11 +1,5 @@
 # CLI backlog
 
-- **Next publish: consider a `SCORING_VERSION` v12 bump + release-notes entry.** Three
-  unpublished commits on main change scan verdicts (Fiber/Gorilla router constructors in the
-  Go security lane, dependency scan ignoring import-like text in comments/strings, codedna
-  regex-metacharacter escape). If they ship, bump the version so stored scores backfill
-  silently, and describe the change on vibedrift.ai/releases before/at publish.
-
 - **Import-style drift is JS/TS only ([#56](https://github.com/VibeDrift/VibeDrift/issues/56)).** No import
   convention check for Python, Go, or Rust (`imports` analyzer and the `import-consistency` detector are both
   JS/TS-gated). Other languages get import parsing only for dependency/dead-code, not a style signal. Candidate

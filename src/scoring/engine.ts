@@ -66,12 +66,21 @@ import {
  *        false-positive import/dependency drift. Repos without Python/Go/Rust
  *        routes or import-drift false positives are byte identical; the bundled
  *        calibration corpus is unchanged.
+ *   v12: detection-precision batch. (1) The Go security auth vote now extracts
+ *        routes registered on Fiber and Gorilla mux router constructors, so a
+ *        Go repo using those frameworks reflects the security_posture drift it
+ *        always had. (2) The dependency scan ignores import-like text inside
+ *        comments and strings, dropping false dependency-drift findings.
+ *        (3) Code-DNA filename-derived patterns escape regex metacharacters,
+ *        fixing misclassification for files with special characters in their
+ *        names. Only repos in those three slices move; every other repo is
+ *        byte identical, and the bundled calibration corpus is unchanged.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v11";
+export const SCORING_VERSION = "v12";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;

@@ -6,12 +6,35 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.16.1 — 2026-07-16
+
 ### Changed
 
 - **Deep-scan results now show in the default output.** The default terminal summary
   surfaces the AI results a deep scan produced — the coherence grade (paid plans), the
   AI summary, the top AI finding, and the AI-validated finding count — instead of only
   under `--format terminal` or in the report. Non-deep scans are unchanged.
+- **Scoring refined (recalibration).** Three precision fixes move the score only for
+  repos they touch: the Go security auth check now reads routes registered on Fiber and
+  Gorilla mux routers, dependency drift no longer counts import-like text sitting inside
+  comments or strings, and files with regex special characters in their names classify
+  correctly. Affected repos may see their Vibe Drift Score move to reflect drift that was
+  always there (or shed false positives); every other repo is unchanged. Saved scores are
+  kept as-is, the new method applies to new scans, and the CLI shows a one-time notice.
+  CI users gating on `--fail-on-score` for such repos should re-check their threshold.
+
+### Added
+
+- **Go: Fiber and Gorilla mux route coverage.** Routes registered through Fiber and
+  Gorilla mux router constructors now enter the security auth-consistency check, so an
+  unauthed mutating route in those frameworks is flagged like its Gin and Echo peers.
+
+### Fixed
+
+- **Dependency drift ignores imports in comments and strings.** An import statement
+  quoted in a doc comment or a string literal no longer shows up as dependency drift.
+- **Filenames with special characters classify correctly.** Code-DNA patterns derived
+  from file names now escape regex metacharacters instead of misreading them.
 
 ## 0.16.0 — 2026-07-16
 
