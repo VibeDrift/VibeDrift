@@ -301,7 +301,7 @@ function goDisplayModule(importPath: string): string {
 
 // One Go module's dependency-check state. Built per module (root + every
 // nested go.mod); `.go` files are attributed to the nearest enclosing one.
-interface ModuleScope {
+export interface ModuleScope {
   /** Module root relative to the scan root, `/`-separated; "" for the root module. */
   dir: string;
   module: string;
@@ -322,8 +322,9 @@ interface ModuleScope {
 // Returns null when the nearest enclosing module is one we couldn't parse
 // (opaque): such a file has no dependency list to check, so it is excluded
 // rather than mis-attributed to the root module. The root module ("") is
-// always present, so the walk always terminates.
-function nearestModuleScope(
+// always present, so the walk always terminates. `rel` must already be
+// normalized to `/` separators (the caller does this for Windows paths).
+export function nearestModuleScope(
   rel: string,
   scopeByDir: Map<string, ModuleScope>,
   opaqueDirs: Set<string>,
