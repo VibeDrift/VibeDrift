@@ -4,7 +4,7 @@ A scan produces one `ScanResult`; everything the user sees is a renderer over th
 
 ## Terminal rendering
 
-`renderTerminalOutput` in `src/output/terminal.ts` composes the full authenticated view: update banner, score section, scan-over-scan diff banner, category bars, peer percentile, fix plan, drift findings grouped by category, the hygiene pane, deep-scan sections when present, and closing calls to action. `renderBriefOutput` is the unauthenticated variant, `renderConciseSummary` the authenticated three-fix summary, and `renderJsonOutput` the machine shape for `--json`.
+`renderTerminalOutput` in `src/output/terminal.ts` composes the full authenticated view: update banner, score section, scan-over-scan diff banner, category bars, peer percentile, fix plan, drift findings grouped by category, the hygiene pane, deep-scan sections when present, and closing calls to action. `renderBriefOutput` is the unauthenticated variant, `renderConciseSummary` the authenticated three-fix summary, and `renderJsonOutput` the machine shape for `--json`. On a deep scan the concise summary also carries a short AI block (`renderConciseAiSummary`): the coherence grade, the top AI finding, and a pointer to the full analysis, so the paid results are visible in the default output and not only under `--format terminal`.
 
 ### The score block
 

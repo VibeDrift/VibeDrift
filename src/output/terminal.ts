@@ -901,6 +901,40 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
 }
 
 /**
+ * Compact AI-results block for the concise (default) summary. A deep scan
+ * spends the user's metered allowance on real AI analysis — the coherence
+ * audit and AI-validated findings — but until this block the default output
+ * never surfaced any of it (the detail only appeared under --format terminal
+ * and in the report). Three lines: grade, top finding, where the rest lives.
+ * Renders nothing when no deep results are present, so non-deep scans and
+ * the unauthenticated path are byte-identical to before.
+ */
+function renderConciseAiSummary(result: ScanResult): string[] {
+  const c = result.coherenceReport;
+  const insightCount = result.deepInsights.length;
+  if (!c && insightCount === 0) return [];
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("── AI Deep Analysis ───────────────────────────────"));
+  if (c) {
+    // Same grade string as renderCoherenceReport, so the two views never disagree.
+    const gradeStr = c.coherenceGrade ? `${c.coherenceGrade} (${c.coherenceScore}/100)` : `${c.coherenceScore}/100`;
+    lines.push(`  ${chalk.bold("Coherence:")} ${chalk.cyan(gradeStr)} — graded against this codebase's own patterns`);
+  }
+  const topTitle = c?.rankedIssues[0]?.title ?? result.deepInsights[0]?.title;
+  if (topTitle) {
+    lines.push(`  ${chalk.bold("Top AI finding:")} ${topTitle}`);
+  }
+  const rest =
+    insightCount > 0
+      ? `${insightCount} AI-validated finding${insightCount === 1 ? "" : "s"} — full analysis: --format terminal or the report link below`
+      : "Full analysis: --format terminal or the report link below";
+  lines.push(chalk.dim(`  ${rest}`));
+  lines.push("");
+  return lines;
+}
+
+/**
  * Brief terminal output for unauthenticated users.
  * Shows: score, category bars, top findings — enough to prove value,
  * not enough to replace the full report.
@@ -917,6 +951,7 @@ function renderBriefOutput(result: ScanResult, plan?: Plan, opts?: { concise?: b
     ...renderScoreSection(result),
     ...renderCategoryBars(result),
     ...renderPeerPercentile(result, plan),
+    ...renderConciseAiSummary(result),
     ...renderFixPlan(result, true, maxFixes),  // drift-first mix, capped
   ];
 
