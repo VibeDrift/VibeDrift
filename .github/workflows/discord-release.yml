@@ -69,21 +69,37 @@ jobs:
           # --arg (safe from shell injection); newlines come from jq's \n so there
           # are no raw line breaks in this YAML block. allowed_mentions: users lets
           # mapped contributor pings fire while still blocking @everyone/@here.
+          #
+          # Discord hard-caps `content` at 2000 characters and 400s anything
+          # longer (v0.16.1's notes + three contributor links hit 2062 and the
+          # announcement silently never went out). So: strip image markdown
+          # (Discord renders it as raw text anyway), always link the full
+          # release notes, and truncate the body to fit a 1990-char budget.
           PAYLOAD=$(jq -n \
             --arg v "$VERSION" \
             --arg body "$BODY" \
             --arg mentions "$MENTIONS" \
-            '{
-              username: "Release Bot",
-              content: (
-                "🚀 **@vibedrift/cli " + $v + " is out.**\n\n"
-                + ($body | sub("^\\s+"; "") | sub("\\s+$"; ""))
-                + "\n\n`npm i -g @vibedrift/cli@latest`"
-                + (if $mentions != "" then "\n\nThanks to contributors: " + $mentions else "" end)
-              ),
-              allowed_mentions: { parse: ["users"] }
-            }')
-          curl -fsS -X POST "$WEBHOOK" \
+            --arg url "https://github.com/$REPO/releases/tag/$TAG" \
+            '
+            def clean: gsub("!\\[[^\\]]*\\]\\([^)]*\\)\\n*"; "") | sub("^\\s+"; "") | sub("\\s+$"; "");
+            ("🚀 **@vibedrift/cli " + $v + " is out.**\n\n") as $head
+            | ("\n\n`npm i -g @vibedrift/cli@latest`"
+               + (if $mentions != "" then "\n\nThanks to contributors: " + $mentions else "" end)
+               + "\n\nFull notes: " + $url) as $tail
+            | ($body | clean) as $b
+            | (1990 - ($head | length) - ($tail | length)) as $max
+            | (if ($b | length) > $max then ($b | .[0:$max]) + "…" else $b end) as $fit
+            | {
+                username: "Release Bot",
+                content: ($head + $fit + $tail),
+                allowed_mentions: { parse: ["users"] }
+              }')
+          HTTP=$(curl -sS -o /tmp/discord-resp.txt -w "%{http_code}" -X POST "$WEBHOOK" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+            -d "$PAYLOAD")
+          if [ "$HTTP" -ge 300 ]; then
+            echo "Discord webhook returned $HTTP:"
+            cat /tmp/discord-resp.txt
+            exit 1
+          fi
           echo "Announced $TAG to Discord (contributors: ${MENTIONS:-none})."
