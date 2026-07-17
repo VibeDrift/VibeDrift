@@ -486,6 +486,15 @@ async function buildScanResult(
   parts.push(`Total: ${(scanTimeMs / 1000).toFixed(1)}s`);
   console.error(chalk.dim(`  ${parts.join(" · ")}`));
 
+  // The DRIFT representation that rendering reads excludes below-floor
+  // route-consistency security findings (demoted to advisory; still present in
+  // `allFindings`/`result.findings` as hygiene-kind so we are never silent).
+  // Applied before the diff so saved scans and the diff digest agree with the
+  // rendered output — a below-floor advisory never appears as "new drift" in
+  // the comparison banner. driftResult.driftFindings itself is untouched so
+  // the baseline (assembleBaseline) still reads the raw representation.
+  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines);
+
   // Scan-over-scan diff. Defaults to enabled; `--no-compare` opts out.
   // `--since` overrides the default "latest prior scan" target.
   let diff: ScanResult["diff"];
@@ -499,7 +508,7 @@ async function buildScanResult(
         compositeScore,
         hygieneScore,
         findingDigests: allFindings.slice(0, 200).map(computeFindingDigest),
-        driftFindingDigests: (driftResult.driftFindings ?? []).slice(0, 100).map(computeDriftFindingDigest),
+        driftFindingDigests: (rendered.driftFindings ?? []).slice(0, 100).map(computeDriftFindingDigest),
         // Lets diffScans refuse cross-version comparisons for THIS pair —
         // `previousScoresMismatch` only covers the latest scan, but `--since`
         // can target any older scan, including one from a prior engine.
@@ -507,18 +516,6 @@ async function buildScanResult(
       });
     }
   }
-
-  // The DRIFT representation that rendering reads excludes below-floor
-  // route-consistency security findings (demoted to advisory; still present in
-  // `allFindings`/`result.findings` as hygiene-kind so we are never silent).
-  // Applying it here, at the single point where result.driftFindings /
-  // result.driftScores are produced, keeps every raw-driftFindings consumer
-  // (findings library, codebase intent, coherence heatmap, pattern consensus,
-  // CSV/DOCX, context.md) and the per-category breakdown consistent with the
-  // category's N/A WITHOUT a gate in each widget. driftResult.driftFindings
-  // itself is untouched, so the baseline (assembleBaseline) and the diff
-  // digests below keep reading the raw drift representation unchanged.
-  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines);
 
   const result: ScanResult = {
     context: ctx,
@@ -1302,7 +1299,9 @@ export async function runScan(
   // scan-over-scan diff computes from the same raw array (see buildScanResult).
   // If these two sources diverged, a below-floor security finding present in
   // one but not the other would show as a spurious "new/resolved drift finding"
-  // on every scan. Baseline + diff track the raw representation for continuity.
+  // Save using the scored (rendered) drift view so the persisted scan matches
+  // the diff digest. A below-floor advisory never produces a spurious diff.
+  // The baseline (assembleBaseline) still reads the raw representation.
   await saveScanResult(
     rootDir,
     result.scores,
@@ -1310,7 +1309,7 @@ export async function runScan(
     result.hygieneScores,
     result.hygieneScore,
     result.findings,
-    pipeline.driftResult.driftFindings,
+    result.driftFindings,
     result.scoringVersion,
   );
 
