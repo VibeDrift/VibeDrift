@@ -66,7 +66,7 @@ vibedrift --include "src/**"          # scan only these for a single scan
 - Security gaps: hardcoded secrets, injection risks, and routes that skip the auth the rest of your code applies
 - Dead code, complexity hotspots, and half-finished or placeholder implementations
 
-Under the hood, VibeDrift learns your repo's dominant patterns by majority vote, fingerprints logic with Code DNA to catch near-duplicates, and rolls findings into a **Vibe Drift Score** and a **Hygiene Score**. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the engine and the [scoring guide](https://vibedrift.ai/guide) for how findings are weighted.
+Under the hood, VibeDrift learns your repo's dominant patterns by majority vote, fingerprints logic with Code DNA to catch near-duplicates, and rolls findings into a **Vibe Drift Score** and a **Hygiene Score**. See the [Developer Handbook](./docs/handbook/) for the engine and the [scoring guide](https://vibedrift.ai/guide) for how findings are weighted.
 
 **Supported languages:** JavaScript, TypeScript, Python, Go, Rust.
 
@@ -123,13 +123,14 @@ Deep scan sends function snippets only (never full files or file paths), process
 
 ## MCP server
 
-VibeDrift ships an MCP server so an AI coding agent can consult your repo's own conventions while it writes — turning drift detection into drift prevention. It exposes five tools:
+VibeDrift ships an MCP server so an AI coding agent can consult your repo's own conventions while it writes — turning drift detection into drift prevention. It exposes six tools — five your agent calls in-loop, plus setup:
 
 - `get_intent_hints` reads the conventions your `CLAUDE.md` / `AGENTS.md` / `.cursorrules` declare
 - `get_dominant_pattern` returns the repo's majority pattern for a dimension, with examples to copy
 - `check_file_drift` checks whether a file matches the repo's patterns
 - `find_similar_function` finds an existing near-duplicate so the agent reuses instead of rewriting
 - `validate_change` checks whether a proposed function would introduce drift or duplicate something
+- `init` sets the repo up (writes `.vibedriftignore` and `.vibedrift/config.json`, refreshes the baseline)
 
 These tools run on your machine, send no code, and need no login. They build the repo's baseline automatically on first use. (The `validate_change` and `find_similar_function` tools can opt into a deeper semantic pass, which is the only part that's metered.)
 
@@ -208,7 +209,7 @@ Want to know how VibeDrift actually works inside? The **Developer Handbook** wal
 
 - **Read it on the web:** [vibedrift.ai/handbook](https://vibedrift.ai/handbook)
 - **Read it here on GitHub:** [`docs/handbook/`](./docs/handbook/) (the chapters render as normal markdown)
-- **Offline:** open [`DEVELOPER_HANDBOOK_OSS.html`](./DEVELOPER_HANDBOOK_OSS.html), a single self-contained file
+- **Offline:** open [`docs/handbook/DEVELOPER_HANDBOOK_OSS.html`](./docs/handbook/DEVELOPER_HANDBOOK_OSS.html), a single self-contained file
 
 The handbook is compiled from the markdown chapters in `docs/handbook/` by a zero-dependency script (`npm run handbook`). To improve it, edit a chapter and rebuild. See [`docs/handbook/README.md`](./docs/handbook/README.md).
 

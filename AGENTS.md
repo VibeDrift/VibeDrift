@@ -53,11 +53,13 @@ npx tsx src/cli/index.ts /path/to/a/project
 
 | Layer | Where | Cost |
 | --- | --- | --- |
-| **Layer 1** (static + drift) | `src/analyzers/` (12 static analyzers) + `src/drift/` (8 cross-file drift detectors) | local, free |
+| **Layer 1** (static + drift) | `src/analyzers/` (13 static analyzers) + `src/drift/` (14 cross-file drift detectors) | local, free |
 | **Layer 1.7** (Code DNA) | `src/codedna/` — fingerprinting, op sequences, pattern classification, taint, deviation | local, free |
 | **Layer 2** (deep scan) | `src/ml-client/` + `src/mcp/deep-client.ts` — client that talks to the hosted cloud service; embeddings and LLM validation run server-side | cloud, metered |
 
-Supporting modules: `src/scoring/` turns findings into 5 categories of 0-20 into a composite of 0-100; `src/output/` renders reports (HTML, terminal, JSON, CSV, DOCX); `src/mcp/` is the MCP server (5 local tools plus the in-editor deep-scan client); `src/cli/` holds the Commander.js commands.
+Supporting modules: `src/scoring/` turns findings into 5 categories of 0-20 into a composite of 0-100; `src/output/` renders reports (HTML, terminal, JSON, CSV, DOCX); `src/mcp/` is the MCP server (6 local tools — the 5 in-loop tools plus `init` setup — and the in-editor deep-scan client); `src/cli/` holds the Commander.js commands.
+
+The registries are the source of truth for what runs: `src/analyzers/index.ts` and `src/drift/index.ts`. For the deep reference — code paths, constants, invariants, and the why behind them — read the **Developer Handbook** in [`docs/handbook/`](./docs/handbook/) (published at [vibedrift.ai/handbook](https://www.vibedrift.ai/handbook)).
 
 ## Conventions
 
@@ -78,6 +80,8 @@ Supporting modules: `src/scoring/` turns findings into 5 categories of 0-20 into
 - Format: `feat|fix|docs(scope): description` (for example `fix(drift): handle empty directories in the dominance vote`).
 - New behavior needs tests; bug fixes need a regression test.
 - Update `README.md` whenever you add or change a CLI flag, command, or feature.
+- When a change makes a Developer Handbook chapter stale, update the chapter in
+  `docs/handbook/` and rebuild (`npm run handbook`) in the same PR.
 
 ## What does not belong here
 

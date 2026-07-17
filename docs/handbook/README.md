@@ -4,8 +4,8 @@ How VibeDrift is engineered, chapter by chapter. These files render as normal
 markdown right here on GitHub, so you can read the whole handbook without
 leaving the repo. For the styled single-page version, see
 [vibedrift.ai/handbook](https://vibedrift.ai/handbook) or open
-[`DEVELOPER_HANDBOOK_OSS.html`](../../DEVELOPER_HANDBOOK_OSS.html) at the repo
-root.
+[`DEVELOPER_HANDBOOK_OSS.html`](./DEVELOPER_HANDBOOK_OSS.html) in this
+directory.
 
 ## Chapters
 
@@ -26,8 +26,9 @@ root.
 
 ## Source of truth
 
-This directory is the source of truth for `DEVELOPER_HANDBOOK_OSS.html` at the
-repo root. The HTML is a build artifact. Never edit it by hand.
+This directory is the source of truth for `DEVELOPER_HANDBOOK_OSS.html`, which
+is built into this same directory. The HTML is a build artifact. Never edit it
+by hand.
 
 ## Updating the handbook
 

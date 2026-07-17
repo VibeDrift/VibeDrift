@@ -13,7 +13,7 @@ Concretely, the product in this repo is a TypeScript CLI (`npx @vibedrift/cli`) 
 
 ## Who this handbook is for
 
-A developer who is new to this codebase and wants to change it: add an analyzer or a drift detector, extend a language, fix a scoring behavior, or embed the in-loop tools somewhere new. It assumes you are a competent engineer and assumes nothing about this repo. It goes one level deeper than `ARCHITECTURE.md`: where that file is the map, these chapters walk the actual code paths, constants, and invariants, and say why they are the way they are.
+A developer who is new to this codebase and wants to change it: add an analyzer or a drift detector, extend a language, fix a scoring behavior, or embed the in-loop tools somewhere new. It assumes you are a competent engineer and assumes nothing about this repo. Chapter 2 is the map; the rest of the chapters walk the actual code paths, constants, and invariants, and say why they are the way they are.
 
 ## Reading map
 
