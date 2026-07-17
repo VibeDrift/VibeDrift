@@ -777,6 +777,14 @@ function renderScoreSection(result: ScanResult): string[] {
   return lines;
 }
 
+/**
+ * Grade string shared by the full coherence renderer and the concise AI
+ * block, so the two views can never disagree on how a grade reads.
+ */
+function coherenceGradeString(c: NonNullable<ScanResult["coherenceReport"]>): string {
+  return c.coherenceGrade ? `${c.coherenceGrade} (${c.coherenceScore}/100)` : `${c.coherenceScore}/100`;
+}
+
 function renderCoherenceReport(result: ScanResult): string[] {
   const c = result.coherenceReport;
   if (!c) return [];
@@ -790,8 +798,7 @@ function renderCoherenceReport(result: ScanResult): string[] {
 
   const lines: string[] = [];
   lines.push(chalk.bold("── Coherence Audit (AI-Powered) ───────────────────"));
-  const gradeStr = c.coherenceGrade ? `${c.coherenceGrade} (${c.coherenceScore}/100)` : `${c.coherenceScore}/100`;
-  lines.push(`  ${chalk.bold("Coherence:")} ${chalk.cyan(gradeStr)} — graded against this codebase's own patterns`);
+  lines.push(`  ${chalk.bold("Coherence:")} ${chalk.cyan(coherenceGradeString(c))} — graded against this codebase's own patterns`);
   if (c.verdict) lines.push(chalk.dim(`  ${c.verdict}`));
   lines.push("");
 
@@ -901,6 +908,47 @@ export function renderTerminalOutput(result: ScanResult, opts?: { brief?: boolea
 }
 
 /**
+ * Compact AI-results block for the concise (default) summary. A deep scan
+ * spends the user's metered allowance on real AI analysis, but until this
+ * block the default output never surfaced any of it (the detail only appeared
+ * under --format terminal and in the report). Shows whichever deep artifacts
+ * this scan actually produced: the coherence grade (fetched on paid plans),
+ * the AI summary line, the top AI finding, and the AI-validated finding
+ * count — so a free-tier deep scan surfaces its results too. Renders nothing
+ * when the scan produced no AI results, so non-deep scans and the
+ * unauthenticated path are byte-identical to before.
+ */
+function renderConciseAiSummary(result: ScanResult): string[] {
+  const c = result.coherenceReport;
+  // AI-validated findings ship merged into result.findings tagged "ml"
+  // (ml-duplicate / ml-intent / ml-anomaly / ml-reimplementation) — the same
+  // filter the HTML report's deep section uses.
+  const mlFindings = result.findings.filter((f) => f.tags?.includes("ml"));
+  const aiCount = mlFindings.length + result.deepInsights.length;
+  if (!c && !result.aiSummary && aiCount === 0) return [];
+
+  const lines: string[] = [];
+  lines.push(chalk.bold("── AI Deep Analysis ───────────────────────────────"));
+  if (c) {
+    lines.push(`  ${chalk.bold("Coherence:")} ${chalk.cyan(coherenceGradeString(c))} — graded against this codebase's own patterns`);
+  } else if (result.aiSummary?.summary) {
+    const s = result.aiSummary.summary;
+    lines.push(`  ${chalk.bold("AI summary:")} ${s.slice(0, 160)}${s.length > 160 ? "..." : ""}`);
+  }
+  const topTitle = c?.rankedIssues[0]?.title ?? result.deepInsights[0]?.title ?? mlFindings[0]?.message;
+  if (topTitle) {
+    lines.push(`  ${chalk.bold("Top AI finding:")} ${topTitle}`);
+  }
+  const rest =
+    aiCount > 0
+      ? `${aiCount} AI-validated finding${aiCount === 1 ? "" : "s"} — full analysis: --format terminal or the report link below`
+      : "Full analysis: --format terminal or the report link below";
+  lines.push(chalk.dim(`  ${rest}`));
+  lines.push("");
+  return lines;
+}
+
+/**
  * Brief terminal output for unauthenticated users.
  * Shows: score, category bars, top findings — enough to prove value,
  * not enough to replace the full report.
@@ -917,6 +965,7 @@ function renderBriefOutput(result: ScanResult, plan?: Plan, opts?: { concise?: b
     ...renderScoreSection(result),
     ...renderCategoryBars(result),
     ...renderPeerPercentile(result, plan),
+    ...renderConciseAiSummary(result),
     ...renderFixPlan(result, true, maxFixes),  // drift-first mix, capped
   ];
 

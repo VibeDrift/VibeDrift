@@ -110,7 +110,7 @@ Run `vibedrift --help` for the complete list.
 
 ## Deep scan
 
-`vibedrift --deep` adds cloud-powered analysis that local static checks cannot do: semantic duplicate detection, name-versus-behavior intent checks, an in-loop Claude verdict on borderline matches, and a synthesized coherence report graded against your own patterns. Scope it to your change set with `--diff`:
+`vibedrift --deep` adds cloud-powered analysis that local static checks cannot do: semantic duplicate detection, name-versus-behavior intent checks, an in-loop Claude verdict on borderline matches, and a synthesized coherence report graded against your own patterns. The default output summarizes the AI results the scan produced inline (the coherence grade on paid plans, the AI summary, and the top finding); the full AI analysis is in the report and under `--format terminal`. Scope it to your change set with `--diff`:
 
 ```bash
 vibedrift login
