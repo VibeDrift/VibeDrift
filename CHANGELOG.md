@@ -10,9 +10,9 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 - **Honest N/A copy.** A category with no score now says why: "nothing to measure in this
   repo" (e.g. Security Consistency in a repo with no web routes), or "not scored (evidence
-  below floor); advisory findings below" when the peer floor demoted the findings — instead
-  of "no findings in this repo", which read as a clean bill for a check that never ran.
-  Terminal and HTML report alike.
+  below floor); findings kept as advisory" when the peer floor demoted the findings —
+  instead of "no findings in this repo", which read as a clean bill for a check that never
+  ran. Terminal and HTML report alike.
 - **The security disclaimer names all three sub-conventions** it actually measures: auth,
   validation, and rate-limit patterns.
 - **Per-file Drift/Static tallies match the report's sections.** A finding demoted to

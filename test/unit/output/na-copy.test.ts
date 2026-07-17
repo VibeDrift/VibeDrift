@@ -71,10 +71,13 @@ describe("N/A copy is honest about WHY there is no score (terminal)", () => {
     expect(out).not.toContain("no findings in this repo");
   });
 
-  it("points at the advisory findings when the floor demoted them", () => {
+  it("names the advisory demotion when the floor demoted the findings", () => {
     const out = renderTerminalOutput(minimalScanResult({ findings: [advisoryFinding()] }));
-    expect(out).toContain("not scored (evidence below floor); advisory findings below");
+    expect(out).toContain("not scored (evidence below floor); findings kept as advisory");
     expect(out).not.toContain("no findings in this repo");
+    // No locational claim: this line also renders in the concise summary,
+    // which has no findings list below it.
+    expect(out).not.toContain("advisory findings below");
   });
 
   it("gloss names all three security sub-conventions", () => {
@@ -90,9 +93,9 @@ describe("N/A copy is honest about WHY there is no score (HTML)", () => {
     expect(html).not.toContain("No findings in this repo");
   });
 
-  it("points at the advisory findings when the floor demoted them", () => {
+  it("names the advisory demotion when the floor demoted the findings", () => {
     const html = renderHtmlReport(minimalScanResult({ findings: [advisoryFinding()] }), "summary", {}, { isPaid: false });
-    expect(html).toContain("Not scored (evidence below floor)");
+    expect(html).toContain("Not scored (evidence below floor) — findings kept as advisory");
     expect(html).not.toContain("No findings in this repo");
   });
 

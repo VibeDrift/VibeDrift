@@ -1,5 +1,19 @@
 # CLI backlog
 
+- **DOCX sections are still tag/kind-mixed for analyzer findings.** The per-file
+  Drift/Static tally is now kind-based (matching terminal/HTML and the composite), but
+  DOCX's "STATIC ANALYSIS FINDINGS" section lists drift-kind analyzer findings (naming,
+  imports, ml-*) because they lack "drift" tags and DOCX has no analyzer-findings drift
+  section to hold them. Within one DOCX a naming finding tallies Drift but lists under
+  Static. Proper fix is structural (a dedicated analyzer-drift section), not a filter
+  tweak — a kind-based filter alone would make those findings vanish from DOCX entirely.
+
+- **One-time diff churn when the reimpl concentration gate fires post-upgrade.** Finding
+  digests key on analyzerId, so the first scan after the gate-propagation fix reports the
+  re-tagged findings as N resolved + N new (same finding, new id). Deep-scan-only, only
+  repos where the gate fires, self-heals on the next scan. If it warrants suppression,
+  fold into the next SCORING_VERSION bump so diffScans refuses the pair.
+
 - **Import-style drift is JS/TS only ([#56](https://github.com/VibeDrift/VibeDrift/issues/56)).** No import
   convention check for Python, Go, or Rust (`imports` analyzer and the `import-consistency` detector are both
   JS/TS-gated). Other languages get import parsing only for dependency/dead-code, not a style signal. Candidate

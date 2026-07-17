@@ -223,11 +223,16 @@ function buildDocxScoreTable(result: ScanResult): string {
     tableCellSimple("Findings", "D9E2F3", true),
   ]);
   const dataRows = catRows.map(({ name, cs, na }) => {
+    // An absent breakdown entry means "not measured" (drift/index.ts omits
+    // security_posture with zero detector findings) — render it as N/A even
+    // when the composite scored the category from another signal (e.g. taint),
+    // never as a scored-looking "0 | 0 | 0" row.
+    const isNa = na || !cs;
     return tableRow([
       tableCellSimple(name),
-      tableCellSimple(na ? "N/A" : String(cs?.score ?? 0)),
-      tableCellSimple(na ? "N/A" : String(cs?.maxScore ?? 0)),
-      tableCellSimple(na ? "N/A" : String(cs?.findings ?? 0)),
+      tableCellSimple(isNa ? "N/A" : String(cs.score ?? 0)),
+      tableCellSimple(isNa ? "N/A" : String(cs.maxScore ?? 0)),
+      tableCellSimple(isNa ? "N/A" : String(cs.findings ?? 0)),
     ]);
   }).join("");
 

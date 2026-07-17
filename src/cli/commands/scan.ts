@@ -255,7 +255,7 @@ async function runAnalysisPipeline(
     ctx,
     { rootDir, cacheEnabled },
   );
-  allFindings.push(...analyzerFindings);
+  for (const f of analyzerFindings) allFindings.push(f); // loop, not spread: unbounded set
 
   timings.analyzers = Date.now() - t2;
 
@@ -286,7 +286,7 @@ async function runAnalysisPipeline(
     if (spinner) spinner.text = "Running Code DNA analysis...";
     const { runCodeDnaAnalysis } = await import("../../codedna/index.js");
     codeDnaResult = runCodeDnaAnalysis(ctx);
-    allFindings.push(...codeDnaResult.findings);
+    for (const f of codeDnaResult.findings) allFindings.push(f); // loop, not spread: unbounded set
     timings.codedna = Date.now() - t4;
     if (isTerminal && options.verbose) {
       console.error(`[codedna] ${codeDnaResult.functions.length} functions analyzed in ${codeDnaResult.timings.totalMs}ms`);

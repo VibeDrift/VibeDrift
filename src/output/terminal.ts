@@ -642,8 +642,12 @@ function renderCategoryBars(result: ScanResult): string[] {
       // bill for a check that never ran.
       const hasAdvisory =
         cat === "securityPosture" && result.findings.some((f) => f.analyzerId === SECURITY_ADVISORY_ID);
+      // "kept as advisory", not "below": this line also renders in the concise
+      // summary, which has no findings list below it — a locational claim
+      // would be false there. The advisory findings render in the full-format
+      // hygiene pane and in the report.
       const note = hasAdvisory
-        ? "N/A — not scored (evidence below floor); advisory findings below"
+        ? "N/A — not scored (evidence below floor); findings kept as advisory"
         : "N/A — nothing to measure in this repo";
       lines.push(chalk.dim(`  ${label}   ${note}`));
     } else {

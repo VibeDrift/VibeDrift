@@ -468,7 +468,7 @@ function buildCategoryBreakdown(result: ScanResult): string {
       const hasAdvisory =
         cat === "securityPosture" && result.findings.some((f) => f.analyzerId === SECURITY_ADVISORY_ID);
       const naNote = hasAdvisory
-        ? "Not scored (evidence below floor) — see advisory findings"
+        ? "Not scored (evidence below floor) — findings kept as advisory"
         : "Nothing to measure in this repo";
       return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div>${gloss}</div>`;
     }
