@@ -37,6 +37,5 @@ export function isDebugEnabled(scope = "*"): boolean {
 /** Emit a scoped debug line to stderr when the scope is enabled. */
 export function debug(scope: string, ...args: unknown[]): void {
   if (!enabledFor(scope)) return;
-  // eslint-disable-next-line no-console
   console.error(`[debug:${scope}]`, ...args);
 }

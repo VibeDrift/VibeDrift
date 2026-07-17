@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
-import { tmpdir, homedir } from "os";
+import { tmpdir } from "os";
 import { join } from "path";
 import { semverGreater } from "../../../src/core/update-check.js";
 

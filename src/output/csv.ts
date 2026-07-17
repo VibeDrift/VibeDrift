@@ -8,6 +8,7 @@
  */
 
 import type { ScanResult } from "../core/types.js";
+import type { CodeDnaResult } from "../codedna/types.js";
 
 function csvEscape(val: string): string {
   if (val.includes(",") || val.includes('"') || val.includes("\n")) {
@@ -55,7 +56,7 @@ function csvScoreCategories(result: ScanResult): string[] {
     for (const [key, val] of Object.entries(ds)) {
       if (key === "composite" || key === "grade") continue;
       if (key === "security_posture" && securityIsNa) continue;
-      const v = val as any;
+      const v = val as { score: number; maxScore: number; findings?: number };
       if (v?.score !== undefined) {
         lines.push(row(key, v.score, v.maxScore, v.findings ?? 0));
       }
@@ -86,21 +87,21 @@ function csvDriftFindings(result: ScanResult): string[] {
   return lines;
 }
 
-function csvDuplicateGroups(dna: any): string[] {
+function csvDuplicateGroups(dna: CodeDnaResult): string[] {
   if (!dna.duplicateGroups?.length) return [];
   const lines: string[] = [];
   lines.push("CODE DNA: SEMANTIC DUPLICATES");
   lines.push(row("Group", "Functions", "Files"));
   for (const g of dna.duplicateGroups) {
-    const fns = g.functions.map((f: any) => f.name + "()").join("; ");
-    const files = g.functions.map((f: any) => f.relativePath || f.file).join("; ");
+    const fns = g.functions.map((f) => f.name + "()").join("; ");
+    const files = g.functions.map((f) => f.relativePath || f.file).join("; ");
     lines.push(row(g.groupId, fns, files));
   }
   lines.push("");
   return lines;
 }
 
-function csvSequenceSimilarities(dna: any): string[] {
+function csvSequenceSimilarities(dna: CodeDnaResult): string[] {
   if (!dna.sequenceSimilarities?.length) return [];
   const lines: string[] = [];
   lines.push("CODE DNA: OPERATION SEQUENCE MATCHES");
@@ -116,7 +117,7 @@ function csvSequenceSimilarities(dna: any): string[] {
   return lines;
 }
 
-function csvTaintFlows(dna: any): string[] {
+function csvTaintFlows(dna: CodeDnaResult): string[] {
   if (!dna.taintFlows?.length) return [];
   const lines: string[] = [];
   lines.push("CODE DNA: TAINT FLOWS");
@@ -132,7 +133,7 @@ function csvTaintFlows(dna: any): string[] {
   return lines;
 }
 
-function csvDeviations(dna: any): string[] {
+function csvDeviations(dna: CodeDnaResult): string[] {
   if (!dna.deviationJustifications?.length) return [];
   const lines: string[] = [];
   lines.push("CODE DNA: DEVIATION ANALYSIS");
@@ -147,7 +148,7 @@ function csvDeviations(dna: any): string[] {
   return lines;
 }
 
-function csvPatterns(dna: any): string[] {
+function csvPatterns(dna: CodeDnaResult): string[] {
   if (!dna.patternDistributions?.length) return [];
   const lines: string[] = [];
   lines.push("CODE DNA: PATTERN DISTRIBUTIONS");

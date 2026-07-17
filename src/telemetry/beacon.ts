@@ -14,7 +14,6 @@
  * `--local-only` flag (skip when set).
  */
 
-import { getVersion } from "../core/version.js";
 import { readConfig, patchConfig } from "../auth/config.js";
 import { resolveApiUrl } from "../auth/resolver.js";
 

@@ -121,7 +121,7 @@ export interface MlAnalyzeResponse {
   deviations: MlDeviationResult[];
   /** Panel-confirmed redundant reimplementations. Optional for old-server compat. */
   reimplementations?: MlReimplementationResult[];
-  llm_validations: any[];
+  llm_validations: unknown[];
 }
 
 // ──── Confidence-filtered results ────
@@ -129,7 +129,7 @@ export interface MlAnalyzeResponse {
 export interface MlFindingForLlm {
   type: "duplicate" | "intent_mismatch" | "anomaly";
   confidence: number;
-  detail: any;
+  detail: MlDuplicateResult | MlIntentMismatchResult | MlAnomalyResult;
   snippetA?: string;
   snippetB?: string;
   question: string;

@@ -32,8 +32,7 @@
  *     requiring the source variable to be from a recognized taint source.
  */
 
-import type { SourceFile, SupportedLanguage } from "../core/types.js";
-import type { TaintFlow, TaintSource, TaintSink } from "./types.js";
+import type { TaintFlow, TaintSource } from "./types.js";
 import type { Finding } from "../core/types.js";
 import type { ExtractedFunction } from "./types.js";
 

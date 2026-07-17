@@ -11,8 +11,6 @@ import type { AnalysisContext, Finding } from "../core/types.js";
 import { getLineNumber } from "../utils/text.js";
 
 const EMPTY_CATCH_PATTERN = /catch\s*\([^)]*\)\s*\{\s*\}/g;
-const TRY_CATCH_PATTERN = /\btry\s*\{/g;
-const ASYNC_PATTERN = /\basync\s+(?:function|\(|[a-zA-Z])/g;
 
 export const errorHandlingAnalyzer: Analyzer = {
   id: "error-handling",

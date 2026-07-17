@@ -393,13 +393,6 @@ function collectGoRouterNames(root: SyntaxNode): Set<string> {
   return names;
 }
 
-interface GoRoute {
-  method: string;
-  path: string;
-  call: SyntaxNode;    // the route-ANCHOR call (line + arg scanning)
-  receiver: string;
-}
-
 /** Chained `.Methods(...)` recovery, walking UP from the route-ANCHOR call
  *  (probe-verified against the pinned tree-sitter-go grammar: the OUTER node
  *  of `router.HandleFunc(x).Methods("POST")` is the `Methods` call, and

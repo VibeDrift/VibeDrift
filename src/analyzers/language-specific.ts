@@ -1,5 +1,5 @@
 import type { Analyzer } from "./base.js";
-import type { AnalysisContext, Finding } from "../core/types.js";
+import type { AnalysisContext, Finding, SourceFile } from "../core/types.js";
 import { getLineNumber } from "../utils/text.js";
 
 export const languageSpecificAnalyzer: Analyzer = {
@@ -27,7 +27,7 @@ export const languageSpecificAnalyzer: Analyzer = {
 // ===== Go Analysis =====
 
 function detectGoUncheckedErrors(
-  files: any[],
+  files: SourceFile[],
 ): { count: number; locations: { file: string; line: number; snippet: string }[] } {
   let count = 0;
   const locations: { file: string; line: number; snippet: string }[] = [];
@@ -65,7 +65,7 @@ function detectGoUncheckedErrors(
 }
 
 function detectGoNakedGoroutines(
-  files: any[],
+  files: SourceFile[],
 ): { count: number; locations: { file: string; line: number }[] } {
   let count = 0;
   const locations: { file: string; line: number }[] = [];
@@ -92,7 +92,7 @@ function detectGoNakedGoroutines(
 }
 
 function detectGoUnsafeMutex(
-  files: any[],
+  files: SourceFile[],
 ): { count: number; locations: { file: string; line: number }[] } {
   let count = 0;
   const locations: { file: string; line: number }[] = [];
@@ -117,7 +117,7 @@ function detectGoUnsafeMutex(
   return { count, locations };
 }
 
-function analyzeGo(files: any[]): Finding[] {
+function analyzeGo(files: SourceFile[]): Finding[] {
   const findings: Finding[] = [];
 
   const uncheckedErrors = detectGoUncheckedErrors(files);
@@ -162,7 +162,7 @@ function analyzeGo(files: any[]): Finding[] {
 
 // ===== Python Analysis =====
 
-function analyzePython(files: any[]): Finding[] {
+function analyzePython(files: SourceFile[]): Finding[] {
   const findings: Finding[] = [];
 
   let bareExcepts = 0;
@@ -225,7 +225,7 @@ function analyzePython(files: any[]): Finding[] {
 
 // ===== Rust Analysis =====
 
-function analyzeRust(files: any[]): Finding[] {
+function analyzeRust(files: SourceFile[]): Finding[] {
   const findings: Finding[] = [];
 
   let unwrapCount = 0;

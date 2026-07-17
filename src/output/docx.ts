@@ -1,5 +1,6 @@
 import { deflateRawSync } from "zlib";
 import type { ScanResult } from "../core/types.js";
+import type { CodeDnaResult } from "../codedna/types.js";
 import { getVersion } from "../core/version.js";
 import { formatCount } from "./format.js";
 import { getAnalyzerKind } from "../scoring/categories.js";
@@ -147,12 +148,12 @@ function boldPara(text: string, color?: string): string {
   return `<w:p><w:r>${rPr}<w:t xml:space="preserve">${xml(text)}</w:t></w:r></w:p>`;
 }
 
-function colorRun(text: string, color: string, bold?: boolean): string {
+function _colorRun(text: string, color: string, bold?: boolean): string {
   const rPr = `<w:rPr>${bold ? "<w:b/>" : ""}<w:color w:val="${color}"/></w:rPr>`;
   return `<w:r>${rPr}<w:t xml:space="preserve">${xml(text)}</w:t></w:r>`;
 }
 
-function multiRunPara(runs: string[]): string {
+function _multiRunPara(runs: string[]): string {
   return `<w:p>${runs.join("")}</w:p>`;
 }
 
@@ -208,7 +209,7 @@ function buildDocxScoreTable(result: ScanResult): string {
   // (security_posture -> 14/14, 0 findings), so render that row as N/A to match
   // the composite instead of a scored-looking value.
   const securityIsNa = result.scores.securityPosture?.applicable === false;
-  const catRows: { name: string; cs: any; na: boolean }[] = [
+  const catRows: { name: string; cs: { score?: number; maxScore?: number; findings?: number } | undefined; na: boolean }[] = [
     { name: "Architectural Consistency", cs: ds.architectural_consistency, na: false },
     { name: "Security Consistency", cs: ds.security_posture, na: securityIsNa },
     { name: "Semantic Duplication", cs: ds.semantic_duplication, na: false },
@@ -308,19 +309,19 @@ function buildDocxDriftSection(result: ScanResult): string {
   return parts.join("\n    ");
 }
 
-function docxDnaDuplicates(dna: any): string[] {
+function docxDnaDuplicates(dna: CodeDnaResult): string[] {
   if (!dna.duplicateGroups?.length) return [];
   const parts: string[] = [];
   parts.push(para("Semantic Fingerprint Duplicates", "Heading2"));
   for (const g of dna.duplicateGroups) {
-    const fns = g.functions.map((f: any) => `${f.name}() in ${f.relativePath || f.file}`).join(", ");
+    const fns = g.functions.map((f) => `${f.name}() in ${f.relativePath || f.file}`).join(", ");
     parts.push(para(`  Group: ${fns}`));
   }
   parts.push(para(""));
   return parts;
 }
 
-function docxDnaSequences(dna: any): string[] {
+function docxDnaSequences(dna: CodeDnaResult): string[] {
   if (!dna.sequenceSimilarities?.length) return [];
   const parts: string[] = [];
   parts.push(para("Operation Sequence Matches", "Heading2"));
@@ -331,7 +332,7 @@ function docxDnaSequences(dna: any): string[] {
   return parts;
 }
 
-function docxDnaTaintFlows(dna: any): string[] {
+function docxDnaTaintFlows(dna: CodeDnaResult): string[] {
   if (!dna.taintFlows?.length) return [];
   const parts: string[] = [];
   parts.push(para("Taint Flows", "Heading2"));
@@ -342,7 +343,7 @@ function docxDnaTaintFlows(dna: any): string[] {
   return parts;
 }
 
-function docxDnaDeviations(dna: any): string[] {
+function docxDnaDeviations(dna: CodeDnaResult): string[] {
   if (!dna.deviationJustifications?.length) return [];
   const parts: string[] = [];
   parts.push(para("Deviation Justification Analysis", "Heading2"));
@@ -354,7 +355,7 @@ function docxDnaDeviations(dna: any): string[] {
   return parts;
 }
 
-function docxDnaPatterns(dna: any): string[] {
+function docxDnaPatterns(dna: CodeDnaResult): string[] {
   if (!dna.patternDistributions?.length) return [];
   const parts: string[] = [];
   parts.push(para("Pattern Classification", "Heading2"));

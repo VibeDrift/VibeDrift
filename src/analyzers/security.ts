@@ -1,5 +1,5 @@
 import type { Analyzer } from "./base.js";
-import type { AnalysisContext, Finding, FileLocation, SupportedLanguage } from "../core/types.js";
+import type { AnalysisContext, Finding, SupportedLanguage } from "../core/types.js";
 import { getLineNumber } from "../utils/text.js";
 
 interface SecurityPattern {
@@ -31,7 +31,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
   {
     id: "hardcoded-api-key",
     name: "Hardcoded API key",
-    pattern: /(?:api[_-]?key|apikey|api[_-]?secret)\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]/gi,
+    pattern: /(?:api[_-]?key|apikey|api[_-]?secret)\s*[:=]\s*['"][A-Za-z0-9_-]{16,}['"]/gi,
     severity: "error",
     confidence: 0.85,
     message: "Potential hardcoded API key",
@@ -47,7 +47,7 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
   {
     id: "hardcoded-token",
     name: "Hardcoded token",
-    pattern: /(?:token|bearer|jwt|auth[_-]?token|access[_-]?token|secret[_-]?key)\s*[:=]\s*['"][A-Za-z0-9_.\-]{20,}['"]/gi,
+    pattern: /(?:token|bearer|jwt|auth[_-]?token|access[_-]?token|secret[_-]?key)\s*[:=]\s*['"][A-Za-z0-9_.-]{20,}['"]/gi,
     severity: "error",
     confidence: 0.8,
     message: "Potential hardcoded authentication token",

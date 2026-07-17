@@ -1,4 +1,4 @@
-import type { Finding, FileGitMetadata } from "../core/types.js";
+import type { FileGitMetadata } from "../core/types.js";
 import type { ProjectConfig } from "../core/project-config.js";
 import type { Tree } from "web-tree-sitter";
 

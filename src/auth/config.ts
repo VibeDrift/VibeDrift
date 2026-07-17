@@ -95,10 +95,11 @@ export async function readConfig(): Promise<VibeDriftConfig> {
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return {};
     return parsed as VibeDriftConfig;
-  } catch (err: any) {
-    if (err?.code === "ENOENT") return {};
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e?.code === "ENOENT") return {};
     // Corrupt config: don't crash, but warn loudly
-    process.stderr.write(`vibedrift: warning — config at ${DEFAULT_FILE} is unreadable (${err?.message ?? err}). Treating as empty.\n`);
+    process.stderr.write(`vibedrift: warning — config at ${DEFAULT_FILE} is unreadable (${e?.message ?? err}). Treating as empty.\n`);
     return {};
   }
 }
@@ -118,8 +119,8 @@ export async function writeConfig(config: VibeDriftConfig): Promise<void> {
 export async function clearConfig(): Promise<void> {
   try {
     await unlink(DEFAULT_FILE);
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") throw err;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
   }
 }
 

@@ -287,7 +287,7 @@ async function runOnce(
 async function snapshotMtimes(rootDir: string): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   async function walk(dir: string): Promise<void> {
-    let entries: string[] = [];
+    let entries: string[];
     try {
       entries = await readdir(dir);
     } catch {

@@ -259,12 +259,6 @@ function findingConsequence(f: Finding): string | null {
   return null;
 }
 
-function isDriftFinding(f: Finding): boolean {
-  return f.analyzerId.startsWith("drift-") ||
-    f.analyzerId.startsWith("codedna-") ||
-    (f.tags ?? []).includes("drift");
-}
-
 /**
  * Priority multiplier for Fix Plan sorting. High-stakes categories
  * (security, architectural drift) bubble to the top even if their raw
@@ -334,10 +328,8 @@ function renderFixPlan(result: ScanResult, driftFirst = false, maxItems = 5): st
   lines.push(chalk.dim("  Highest-impact drifts to re-align first."));
   lines.push("");
 
-  let sumImpact = 0;
   top.forEach((f, idx) => {
     const impact = f.consistencyImpact ?? 0;
-    sumImpact += impact;
     const loc = f.locations[0];
     const where = loc ? `${loc.file}${loc.line ? ":" + loc.line : ""}` : "(project-wide)";
     const msg = f.message.replace(/^DRIFT:\s*/, "").slice(0, 90);

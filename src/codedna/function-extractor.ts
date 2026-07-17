@@ -41,7 +41,7 @@ export function tokenizeBody(body: string): string[] {
   cleaned = cleaned.replace(/"(?:[^"\\]|\\.)*"/g, '""');
   cleaned = cleaned.replace(/'(?:[^'\\]|\\.)*'/g, "''");
   cleaned = cleaned.replace(/`(?:[^`\\]|\\.)*`/g, "``");
-  return cleaned.match(/[a-zA-Z_]\w*|[0-9]+|[{}()\[\];,.:=<>!+\-*/%&|^~?]/g) ?? [];
+  return cleaned.match(/[a-zA-Z_]\w*|[0-9]+|[{}()[\];,.:=<>!+\-*/%&|^~?]/g) ?? [];
 }
 
 // djb2-style hash — fast, deterministic, and sufficient for grouping

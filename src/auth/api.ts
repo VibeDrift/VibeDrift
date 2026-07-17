@@ -126,12 +126,12 @@ async function jsonFetch<T>(url: string, init: RequestInit = {}, timeoutMs: numb
     }
 
     return await res.json() as T;
-  } catch (err: any) {
-    if (err?.name === "AbortError") {
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
       throw new VibeDriftApiError(0, `Request timed out after ${timeoutMs / 1000}s`);
     }
     if (err instanceof VibeDriftApiError) throw err;
-    throw new VibeDriftApiError(0, err?.message ?? String(err));
+    throw new VibeDriftApiError(0, err instanceof Error ? err.message : String(err));
   } finally {
     clearTimeout(timer);
   }

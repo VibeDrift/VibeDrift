@@ -197,18 +197,6 @@ function findChild(node: SyntaxNode, type: string): SyntaxNode | null {
   return null;
 }
 
-/** Find the first descendant (DFS) with the given type. */
-function findDescendant(node: SyntaxNode, type: string): SyntaxNode | null {
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i)!;
-    if (child.type === type) return child;
-    const found = findDescendant(child, type);
-    if (found) return found;
-  }
-  return null;
-}
-
-
 /**
  * Recursively scan the entire tree for dynamic import() and require() calls
  * nested inside functions, if-blocks, loops, etc.

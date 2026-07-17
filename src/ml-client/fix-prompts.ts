@@ -174,7 +174,7 @@ export async function synthesizeFixPrompts(
     if (options.verbose) {
       console.error(`[fix-prompts] attached prose to ${attached}/${ranked.length} findings in ${Date.now() - t0}ms`);
     }
-  } catch (err: any) {
-    if (options.verbose) console.error(`[fix-prompts] request failed: ${err.message ?? err}`);
+  } catch (err) {
+    if (options.verbose) console.error(`[fix-prompts] request failed: ${(err as Error).message ?? err}`);
   }
 }

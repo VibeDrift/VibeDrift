@@ -29,6 +29,21 @@ import { applyIncludeExclude, suggestExclusions } from "../../core/file-filter.j
 import { resolveToken, resolveApiUrl } from "../../auth/resolver.js";
 import { fetchCredits } from "../../auth/api.js";
 import type { Finding, ScanResult, ScanOptions } from "../../core/types.js";
+import type { CodeDnaResult } from "../../codedna/types.js";
+
+/**
+ * ScanResult augmented with the internal, non-persisted markers this command
+ * stashes on the result object during upload/render (all optional, prefixed
+ * `__`). Kept local so the shared ScanResult type stays free of CLI-only state.
+ */
+type ScanResultAugmented = ScanResult & {
+  __scanId?: string;
+  __apiUrl?: string;
+  __dashboardUrl?: string;
+  __uploadTrimNote?: string;
+  __uploadError?: string;
+  __fixPromptsDone?: boolean;
+};
 
 /**
  * True when stdout must carry ONLY the machine-readable JSON document and
@@ -222,7 +237,7 @@ async function runAnalysisPipeline(
   ctx: Awaited<ReturnType<typeof buildAnalysisContext>>["ctx"];
   allFindings: Finding[];
   driftResult: ReturnType<typeof runDriftDetection>;
-  codeDnaResult: any;
+  codeDnaResult: CodeDnaResult | undefined;
   timings: Record<string, number>;
 }> {
   const isTerminal = options.format === "terminal" && !options.json;
@@ -280,7 +295,7 @@ async function runAnalysisPipeline(
   timings.drift = Date.now() - t3;
 
   // Run Code DNA analysis (Layer 1.7)
-  let codeDnaResult: any = undefined;
+  let codeDnaResult: CodeDnaResult | undefined = undefined;
   if (options.codedna !== false) {
     const t4 = Date.now();
     if (spinner) spinner.text = "Running Code DNA analysis...";
@@ -304,7 +319,7 @@ async function runDeepAnalysis(
   pipeline: {
     allFindings: Finding[];
     ctx: Awaited<ReturnType<typeof buildAnalysisContext>>["ctx"];
-    codeDnaResult: any;
+    codeDnaResult: CodeDnaResult | undefined;
     driftResult: ReturnType<typeof runDriftDetection>;
   },
   options: ScanOptions,
@@ -317,7 +332,7 @@ async function runDeepAnalysis(
   const timings: Record<string, number> = {};
 
   // Run AI deep analysis (Layer 2) — opt-in with --deep
-  let mlMediumConfidence: any[] = [];
+  let mlMediumConfidence: import("../../ml-client/types.js").MlFindingForLlm[] = [];
   const t5 = Date.now();
   if (spinner) spinner.text = "Running AI deep analysis (may take ~30s on cold start)...";
   try {
@@ -344,8 +359,8 @@ async function runDeepAnalysis(
       // exceeded the validation cap — we don't ship those as confident findings.
       console.error(`[deep] ${mlResult.highConfidence.length} high-confidence findings shipped (incl. Claude-confirmed), ${mlResult.mediumConfidence.length} unresolved, ${mlResult.droppedCount} dropped`);
     }
-  } catch (err: any) {
-    console.error(chalk.red(`[deep] AI analysis failed: ${err.message}`));
+  } catch (err) {
+    console.error(chalk.red(`[deep] AI analysis failed: ${(err as Error).message}`));
     console.error(chalk.dim("       The local scan will continue. Run `vibedrift doctor` if this persists."));
   }
   timings.deep = Date.now() - t5;
@@ -383,7 +398,7 @@ async function buildScanResult(
     ctx: Awaited<ReturnType<typeof buildAnalysisContext>>["ctx"];
     allFindings: Finding[];
     driftResult: ReturnType<typeof runDriftDetection>;
-    codeDnaResult: any;
+    codeDnaResult: CodeDnaResult | undefined;
   },
   options: ScanOptions,
   startTime: number,
@@ -561,8 +576,8 @@ async function buildScanResult(
       } else {
         if (options.verbose) console.error(`[summary] API returned null`);
       }
-    } catch (err: any) {
-      if (options.verbose) console.error(`[summary] Failed: ${err.message}`);
+    } catch (err) {
+      if (options.verbose) console.error(`[summary] Failed: ${(err as Error).message}`);
     }
   }
 
@@ -605,8 +620,8 @@ async function writeContextIfRequested(
       const injected = await injectContext(rootDir, md);
       console.log(chalk.green(`  ✓ Injected context into ${injected.join(", ")}`));
     }
-  } catch (err: any) {
-    console.error(chalk.red(`  ✗ Failed to write/inject context: ${err.message}`));
+  } catch (err) {
+    console.error(chalk.red(`  ✗ Failed to write/inject context: ${(err as Error).message}`));
   }
 }
 
@@ -619,7 +634,7 @@ export async function logAndRender(
   bearerToken: string | null,
   apiUrl: string | undefined,
   rootDir: string,
-  codeDnaResult: any,
+  codeDnaResult: CodeDnaResult | undefined,
   paid: boolean,
   plan?: import("../../auth/plan.js").Plan,
 ): Promise<void> {
@@ -636,7 +651,7 @@ export async function logAndRender(
   // dashboard/HTML report. Skipped if already synthesized (--write-context does
   // it earlier, before its files are written). Best-effort.
   const needsFixPrompts = (): boolean =>
-    !!bearerToken && paid && !(result as any).__fixPromptsDone;
+    !!bearerToken && paid && !(result as ScanResultAugmented).__fixPromptsDone;
   const runFixPrompts = async (): Promise<void> => {
     if (!needsFixPrompts()) return;
     try {
@@ -646,10 +661,10 @@ export async function logAndRender(
         apiUrl,
         verbose: options.verbose,
       });
-    } catch (err: any) {
-      if (options.verbose) console.error(`[fix-prompts] skipped: ${err.message ?? err}`);
+    } catch (err) {
+      if (options.verbose) console.error(`[fix-prompts] skipped: ${(err as Error).message ?? err}`);
     } finally {
-      (result as any).__fixPromptsDone = true;
+      (result as ScanResultAugmented).__fixPromptsDone = true;
     }
   };
 
@@ -744,7 +759,7 @@ async function serveHtmlReportOnLocalhost(
     res.end((req.url ?? "/").includes("detailed") ? detailedHtml : summaryHtml);
   });
   // Don't crash if the port is taken — surface it and keep the scan a success.
-  server.on("error", (err: any) => {
+  server.on("error", (err: Error) => {
     notice(options, chalk.yellow(`  ⚠ Couldn't start the local report server: ${err.message}`));
     if (options.output) notice(options, chalk.dim(`    The report was written to ${options.output}.`));
   });
@@ -787,7 +802,7 @@ async function uploadScanToDashboard(
   bearerToken: string,
   apiUrl: string | undefined,
   rootDir: string,
-  codeDnaResult: any,
+  codeDnaResult: CodeDnaResult | undefined,
   opts: { showSyncLine: boolean; quiet: boolean },
 ): Promise<void> {
   const { findings: allFindings, compositeScore, maxCompositeScore, scanTimeMs } = result;
@@ -854,12 +869,12 @@ async function uploadScanToDashboard(
       },
     });
     if (logResult.scanId) {
-      (result as any).__scanId = logResult.scanId;
-      (result as any).__apiUrl = apiUrl;
+      (result as ScanResultAugmented).__scanId = logResult.scanId;
+      (result as ScanResultAugmented).__apiUrl = apiUrl;
       // The scan is on the dashboard. Its project page URL is the first 12 chars
       // of the project hash (matches the dashboard's own links), so authed users
       // get a link there instead of a local HTML file.
-      (result as any).__dashboardUrl =
+      (result as ScanResultAugmented).__dashboardUrl =
         `https://vibedrift.ai/dashboard/projects/${projectIdentity.hash.slice(0, 12)}`;
       // Surface a trim notice if the payload was compacted before upload.
       if (logResult.trimmedFields && logResult.trimmedFields.length > 0) {
@@ -869,7 +884,7 @@ async function uploadScanToDashboard(
           `  ⓘ Result trimmed for upload: ${before}MB → ${after}MB ` +
             `(stripped ${logResult.trimmedFields.join(", ")}). Local report unaffected.`,
         );
-        if (opts.quiet) (result as any).__uploadTrimNote = msg;
+        if (opts.quiet) (result as ScanResultAugmented).__uploadTrimNote = msg;
         else notice(options, msg);
       }
     } else {
@@ -879,20 +894,20 @@ async function uploadScanToDashboard(
           ? ` (payload ${Math.round(logResult.finalBytes / 1024 / 1024)}MB)`
           : "";
       if (opts.quiet) {
-        (result as any).__uploadError = `${reason}${sizeNote}`;
+        (result as ScanResultAugmented).__uploadError = `${reason}${sizeNote}`;
       } else {
         notice(options, chalk.yellow(`  ⚠ Couldn't upload scan to dashboard${sizeNote}: ${reason}`));
         notice(options, chalk.dim(`    Run with --verbose for full details. Local report still saved.`));
       }
     }
-  } catch (err: any) {
+  } catch (err) {
     if (opts.quiet) {
-      (result as any).__uploadError = err.message;
+      (result as ScanResultAugmented).__uploadError = (err as Error).message;
     } else {
-      notice(options, chalk.yellow(`  ⚠ Couldn't upload scan to dashboard: ${err.message}`));
+      notice(options, chalk.yellow(`  ⚠ Couldn't upload scan to dashboard: ${(err as Error).message}`));
     }
     if (options.verbose) {
-      console.error(chalk.dim(err.stack ?? ""));
+      console.error(chalk.dim((err as Error).stack ?? ""));
     }
   }
 }
@@ -955,8 +970,8 @@ async function renderToFormat(
       }
     }
 
-    const dashboardUrl = (result as any).__dashboardUrl as string | undefined;
-    const trimNote = (result as any).__uploadTrimNote as string | undefined;
+    const dashboardUrl = (result as ScanResultAugmented).__dashboardUrl;
+    const trimNote = (result as ScanResultAugmented).__uploadTrimNote;
     if (trimNote) console.log(trimNote);
 
     // Authenticated + uploaded: the scan lives on the dashboard (persistent,
@@ -966,8 +981,8 @@ async function renderToFormat(
     const writeLocalReport = !dashboardUrl || !!options.output;
 
     if (writeLocalReport) {
-      const scanId = (result as any).__scanId as string | undefined;
-      const beaconApiUrl = (result as any).__apiUrl as string | undefined;
+      const scanId = (result as ScanResultAugmented).__scanId;
+      const beaconApiUrl = (result as ScanResultAugmented).__apiUrl;
       const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
       const summaryHtml = renderHtmlReport(result, "summary", {}, beaconOpts);
       const detailedHtml = renderHtmlReport(result, "detailed", {}, beaconOpts);
@@ -980,7 +995,7 @@ async function renderToFormat(
         // No dashboard entry. Open the local report directly via file:// — the
         // report links to the detailed file by relative path, so file:// works.
         // No long-lived server, no 10-minute hang.
-        const uploadError = (result as any).__uploadError as string | undefined;
+        const uploadError = (result as ScanResultAugmented).__uploadError;
         if (uploadError) {
           console.log(
             `\n  ${chalk.yellow("⚠")} ${chalk.dim(`Couldn't sync to your dashboard (${uploadError}). Opened a local report instead.`)}`,
@@ -1160,7 +1175,6 @@ export async function runScan(
   })();
 
   const startTime = Date.now();
-  const isTerminal = options.format === "terminal" && !options.json;
   // Show spinner for ALL interactive formats (html, terminal, csv, docx).
   // Only suppress for --json (piped to stdout, spinner would corrupt JSON).
   const spinner = !options.json ? ora("Discovering files...").start() : null;
@@ -1186,8 +1200,8 @@ export async function runScan(
       const { assembleBaseline, writeBaseline } = await import("../../core/baseline.js");
       await writeBaseline(assembleBaseline(rootDir, pipeline.ctx, pipeline.driftResult.driftFindings));
       if (options.verbose) console.error("[baseline] wrote MCP drift baseline");
-    } catch (err: any) {
-      if (options.verbose) console.error(`[baseline] skipped: ${err.message ?? err}`);
+    } catch (err) {
+      if (options.verbose) console.error(`[baseline] skipped: ${(err as Error).message ?? err}`);
     }
   }
 
@@ -1225,9 +1239,9 @@ export async function runScan(
         apiUrl,
         verbose: options.verbose,
       });
-      (result as any).__fixPromptsDone = true;
-    } catch (err: any) {
-      if (options.verbose) console.error(`[fix-prompts] skipped: ${err.message ?? err}`);
+      (result as ScanResultAugmented).__fixPromptsDone = true;
+    } catch (err) {
+      if (options.verbose) console.error(`[fix-prompts] skipped: ${(err as Error).message ?? err}`);
     }
   }
 
@@ -1244,8 +1258,8 @@ export async function runScan(
       if (options.verbose && report) {
         console.error(`[coherence] grade ${report.coherenceGrade}, ${report.rankedIssues.length} ranked issues`);
       }
-    } catch (err: any) {
-      if (options.verbose) console.error(`[coherence] skipped: ${err.message ?? err}`);
+    } catch (err) {
+      if (options.verbose) console.error(`[coherence] skipped: ${(err as Error).message ?? err}`);
     }
   }
 

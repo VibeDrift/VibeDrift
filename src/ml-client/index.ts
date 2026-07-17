@@ -195,11 +195,11 @@ export async function runMlAnalysis(
   if (response.deviations?.length > 0 && codeDnaResult?.deviationJustifications) {
     for (const mlDev of response.deviations) {
       const local = codeDnaResult.deviationJustifications.find(
-        (dj: any) => dj.relativePath === mlDev.file || dj.file === mlDev.file,
+        (dj) => dj.relativePath === mlDev.file || dj.file === mlDev.file,
       );
       if (local && mlDev.confidence > 0.6) {
         // ML classifier overrides local heuristic
-        (local as any).verdict = mlDev.verdict === "justified" ? "likely_justified"
+        local.verdict = mlDev.verdict === "justified" ? "likely_justified"
           : mlDev.verdict === "accidental" ? "likely_accidental" : local.verdict;
       }
     }

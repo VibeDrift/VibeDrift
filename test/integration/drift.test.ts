@@ -8,7 +8,7 @@ const FIXTURES = resolve(__dirname, "../fixtures");
 describe("drift detection engine", () => {
   it("detects architectural contradictions in drift-project fixture", async () => {
     const { ctx } = await buildAnalysisContext(resolve(FIXTURES, "drift-project"));
-    const { driftFindings, driftScores } = runDriftDetection(ctx);
+    const { driftFindings } = runDriftDetection(ctx);
 
     // Should find data access pattern drift (raw SQL vs ORM/repository)
     const archFindings = driftFindings.filter(
