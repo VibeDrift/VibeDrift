@@ -6,6 +6,8 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+## 0.16.2 — 2026-07-16
+
 ### Fixed
 
 - **Cross-version score deltas are now fully suppressed.** The scan-over-scan diff refuses
@@ -13,7 +15,9 @@ explicitly under **Breaking** so CI users can recalibrate.
   resolved/new claims, in the terminal banner and in the committed `.vibedrift/context.md`
   trajectory alike, including when `--since` targets a scan from an older engine.
   Previously the suppression covered the score header, but a cross-version delta could
-  still reach the diff surfaces and be committed into `context.md`.
+  still reach the diff surfaces and be committed into `context.md`. The first scan after
+  a scoring upgrade simply shows no "since last scan" section; normal diffs resume from
+  the very next scan.
 
 ## 0.16.1 — 2026-07-16
 
