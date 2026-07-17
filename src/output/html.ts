@@ -1,7 +1,7 @@
 import type { ScanResult, Finding, DriftFindingReport } from "../core/types.js";
 import { getVersion } from "../core/version.js";
 import { buildFixPromptMarkdown, buildFullFixPlanMarkdown, findingKey, type FixPromptContext } from "./fix-prompt.js";
-import { estimateScoreAfterFixes } from "../scoring/engine.js";
+import { estimateScoreAfterFixes, SECURITY_ADVISORY_ID } from "../scoring/engine.js";
 import { hasMeaningfulImpact } from "./fix-plan-select.js";
 import { getAnalyzerKind, DRIFT_DISPLAY_CATEGORIES } from "../scoring/categories.js";
 import { applicableCategoryCount, compositeScopeNote } from "./terminal.js";
@@ -282,8 +282,11 @@ function buildFileCoherence(result: ScanResult): FileCoherence[] {
       return { category: categories[i], matches: !dev, actual: dev?.pattern };
     });
     const matchCount = alignments.filter((a) => a.matches).length;
-    const driftCount = data.findings.filter((f) => f.tags?.includes("drift") || f.tags?.includes("codedna")).length;
-    const staticCount = data.findings.filter((f) => !f.tags?.includes("drift") && !f.tags?.includes("codedna")).length;
+    // Kind-based, matching the headline sections: a demoted advisory finding
+    // (hygiene-kind, still tagged "drift" from its origin) must tally as
+    // Static here or the per-file table contradicts the section it renders in.
+    const driftCount = data.findings.filter((f) => getAnalyzerKind(f.analyzerId) === "drift").length;
+    const staticCount = data.findings.length - driftCount;
 
     return {
       path,
@@ -455,11 +458,18 @@ function buildCategoryBreakdown(result: ScanResult): string {
       : "";
     const gloss =
       cat === "securityPosture"
-        ? `<div class="note">Consistency of this repo's own auth and validation patterns, not the absence of vulnerabilities.</div>${floorNote}`
+        ? `<div class="note">Consistency of this repo's own auth, validation, and rate-limit patterns, not the absence of vulnerabilities.</div>${floorNote}`
         : "";
     if (!s || !s.applicable) {
-      // These drift detectors ran but found no applicable code in this repo.
-      const naNote = "No findings in this repo";
+      // Not-measured is not "clean" — either no applicable surface exists in
+      // this repo, or everything fell below an evidence floor and was demoted
+      // to advisory (rendered in the hygiene section). "No findings" would
+      // read as a clean bill for a check that never ran.
+      const hasAdvisory =
+        cat === "securityPosture" && result.findings.some((f) => f.analyzerId === SECURITY_ADVISORY_ID);
+      const naNote = hasAdvisory
+        ? "Not scored (evidence below floor) — findings kept as advisory"
+        : "Nothing to measure in this repo";
       return `<div class="va-cat na"><div class="top"><span class="name">${label}</span></div><div class="val">N/A</div><div class="note">${naNote}</div>${gloss}</div>`;
     }
     const catPct = s.maxScore > 0 ? (s.score / s.maxScore) * 100 : 0;

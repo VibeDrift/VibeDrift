@@ -7,7 +7,7 @@ import { buildAnalysisContext, recomputeContextStats } from "../../core/discover
 import { parseFiles } from "../../utils/ast.js";
 import { createAnalyzerRegistry } from "../../analyzers/index.js";
 import { runDriftDetection, attachEngineComposite, scoredDriftView } from "../../drift/index.js";
-import { computeScores, applySecurityMinPeerFloor, SCORING_VERSION } from "../../scoring/engine.js";
+import { computeScores, applySecurityMinPeerFloor, applyReimplementationConcentrationGate, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
 import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, renderLocalReportLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
@@ -255,7 +255,7 @@ async function runAnalysisPipeline(
     ctx,
     { rootDir, cacheEnabled },
   );
-  allFindings.push(...analyzerFindings);
+  for (const f of analyzerFindings) allFindings.push(f); // loop, not spread: unbounded set
 
   timings.analyzers = Date.now() - t2;
 
@@ -286,7 +286,7 @@ async function runAnalysisPipeline(
     if (spinner) spinner.text = "Running Code DNA analysis...";
     const { runCodeDnaAnalysis } = await import("../../codedna/index.js");
     codeDnaResult = runCodeDnaAnalysis(ctx);
-    allFindings.push(...codeDnaResult.findings);
+    for (const f of codeDnaResult.findings) allFindings.push(f); // loop, not spread: unbounded set
     timings.codedna = Date.now() - t4;
     if (isTerminal && options.verbose) {
       console.error(`[codedna] ${codeDnaResult.functions.length} functions analyzed in ${codeDnaResult.timings.totalMs}ms`);
@@ -358,9 +358,11 @@ async function runDeepAnalysis(
     console.error(`[dedup] Removed ${dedupedCount - dedupedFindings.length} cross-layer duplicate findings`);
   }
   debug("deep", "after ML merge =", allFindings.length, "→ deduped =", dedupedFindings.length);
-  // Replace allFindings with deduplicated version
+  // Replace allFindings with deduplicated version. Loop, not spread: spreading
+  // a whole finding set as call arguments risks a RangeError past the engine's
+  // argument limit on very large repos.
   allFindings.length = 0;
-  allFindings.push(...dedupedFindings);
+  for (const f of dedupedFindings) allFindings.push(f);
   debug("deep", "findings handed to scoring =", allFindings.length);
 
   // mlMediumConfidence now holds only the findings the server-side Claude
@@ -416,7 +418,22 @@ async function buildScanResult(
   const flooredFindings = applySecurityMinPeerFloor(allFindings);
   if (flooredFindings !== allFindings) {
     allFindings.length = 0;
-    allFindings.push(...flooredFindings);
+    for (const f of flooredFindings) allFindings.push(f);
+  }
+
+  // Same "local copy" propagation class as the floor above: computeScores
+  // applies the reimplementation concentration gate to its own copy of the
+  // findings, so a re-tag happening only there never reaches result.findings —
+  // a concentrated reimplementation finding would dent the score yet still
+  // render and label as hygiene on every surface (terminal, HTML, CSV, DOCX,
+  // context.md). Hoist the gate here, mutating allFindings in place, so every
+  // downstream reader sees the drift-kind id the score is built on.
+  // computeScores re-applies the gate to the already re-tagged set as a no-op
+  // (it only matches the hygiene id), so standalone callers stay correct.
+  const gatedFindings = applyReimplementationConcentrationGate(allFindings, ctx.totalLines);
+  if (gatedFindings !== allFindings) {
+    allFindings.length = 0;
+    for (const f of gatedFindings) allFindings.push(f);
   }
 
   // Score

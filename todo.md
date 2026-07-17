@@ -1,5 +1,19 @@
 # CLI backlog
 
+- **DOCX sections are still tag/kind-mixed for analyzer findings.** The per-file
+  Drift/Static tally is now kind-based (matching terminal/HTML and the composite), but
+  DOCX's "STATIC ANALYSIS FINDINGS" section lists drift-kind analyzer findings (naming,
+  imports, ml-*) because they lack "drift" tags and DOCX has no analyzer-findings drift
+  section to hold them. Within one DOCX a naming finding tallies Drift but lists under
+  Static. Proper fix is structural (a dedicated analyzer-drift section), not a filter
+  tweak — a kind-based filter alone would make those findings vanish from DOCX entirely.
+
+- **One-time diff churn when the reimpl concentration gate fires post-upgrade.** Finding
+  digests key on analyzerId, so the first scan after the gate-propagation fix reports the
+  re-tagged findings as N resolved + N new (same finding, new id). Deep-scan-only, only
+  repos where the gate fires, self-heals on the next scan. If it warrants suppression,
+  fold into the next SCORING_VERSION bump so diffScans refuses the pair.
+
 - **Import-style drift is JS/TS only ([#56](https://github.com/VibeDrift/VibeDrift/issues/56)).** No import
   convention check for Python, Go, or Rust (`imports` analyzer and the `import-consistency` detector are both
   JS/TS-gated). Other languages get import parsing only for dependency/dead-code, not a style signal. Candidate
@@ -203,36 +217,3 @@
 - **`watch` renderer shows signed-out copy while authenticated** (v0.14.8): watch
   output includes the "Sign in with `vibedrift login`…" hint and free-tier deep
   tease even on a logged-in session. Fix the auth-state branch in the renderer.
-- **Issue #34 audit findings (2026-07-08). B1-B4 RELEASE BLOCKERS + D2 are
-  FIXED on branch `security-blockers-34` (2026-07-08); the items below are
-  correctness/polish, NOT release blockers:**
-  - **C2 — `computeDriftScores` credits an empty security_posture category
-    full health** (`drift/index.ts:115-154`, `categoryHealth([...], ...)`
-    returns 1 for an empty array with no "not measured" branch, unlike
-    `computeCategoryScore`). Produces `{score:14, maxScore:14, findings:0}`,
-    uploaded as-is in `result_json.driftScores` next to the composite's N/A.
-  - **C4 — `applyReimplementationConcentrationGate` re-tag never propagates
-    out of `computeScores`** (`engine.ts:88-103,732`; re-tags a local copy of
-    `findings`, not returned). Same "local copy" bug class already fixed once
-    for the security floor (see `scan.ts:405-420`'s comment) but never
-    hoisted here — a concentrated reimplementation finding correctly dents the
-    score but still renders/labels as hygiene everywhere (CSV/HTML/DOCX/context.md).
-  - **C5 — per-file Drift/Static tallies still tag-based, headline is
-    kind-based (mismatch)** (`docx.ts:398-399`, `html.ts:285-286` use
-    `f.tags?.includes("drift")`; the headline sections
-    (`docx.ts:424-427`, `html.ts:827-829`) were fixed to use
-    `getAnalyzerKind`). A demoted `security_posture-advisory` finding tallies
-    as "Drift" in the per-file table but lists under "Static"/"Hygiene" in the
-    headline.
-  - **D1 — N/A category card says "No findings in this repo"**
-    (`html.ts:462`, `terminal.ts:588`) even when a demoted advisory finding
-    exists and its actual message renders further down the same output
-    (hygiene section, `html.ts:827-829` / `terminal.ts:512-533`).
-  - **D3 — "consistent, not safe" gloss omits rate limiting**
-    (`terminal.ts:604`, `html.ts:458` say "auth and validation patterns" only;
-    `SECURITY_SUBCATEGORIES` has a third sub-convention, `rateLimit`).
-  - **E1 — `allFindings.push(...flooredFindings)` spreads a whole array as
-    call args** (`scan.ts:419`, also `:363`) — RangeError risk on very large
-    finding sets.
-  Full file:line evidence + quotes: see `LOGBOOK.md` "2026-07-08 (later 4)"
-  at the workspace root.

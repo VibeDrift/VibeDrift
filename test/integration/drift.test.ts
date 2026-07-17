@@ -64,12 +64,17 @@ describe("drift detection engine", () => {
     const { ctx } = await buildAnalysisContext(resolve(FIXTURES, "drift-project"));
     const { driftScores } = runDriftDetection(ctx);
 
-    // Scores should exist for all 5 categories
+    // Scores should exist for the always-measured categories.
     expect(driftScores.architectural_consistency).toBeDefined();
-    expect(driftScores.security_posture).toBeDefined();
     expect(driftScores.semantic_duplication).toBeDefined();
     expect(driftScores.naming_conventions).toBeDefined();
     expect(driftScores.phantom_scaffolding).toBeDefined();
+    // security_posture is surface-specific: present only when the fixture
+    // produced security findings, absent (not a free full-health bar) when
+    // there was nothing to measure — mirroring the composite's N/A rule.
+    if (driftScores.security_posture) {
+      expect(driftScores.security_posture.findings).toBeGreaterThan(0);
+    }
 
     // Dual-engine collapse (Phase 0): driftScores no longer computes its own
     // composite/grade via a second (linear) formula. The single authoritative
@@ -80,7 +85,8 @@ describe("drift detection engine", () => {
 
     // Max scores should match spec weights
     expect(driftScores.architectural_consistency.maxScore).toBe(16);
-    expect(driftScores.security_posture.maxScore).toBe(14);
+    // security_posture may be absent (not measured) — weight applies only when present.
+    if (driftScores.security_posture) expect(driftScores.security_posture.maxScore).toBe(14);
     expect(driftScores.semantic_duplication.maxScore).toBe(14);
     expect(driftScores.naming_conventions.maxScore).toBe(12);
     expect(driftScores.phantom_scaffolding.maxScore).toBe(12);

@@ -66,7 +66,8 @@ export function buildDriftContext(ctx: AnalysisContext): DriftContext {
 
 export interface DriftScores {
   architectural_consistency: { score: number; maxScore: number; findings: number };
-  security_posture: { score: number; maxScore: number; findings: number };
+  /** Absent when not measured (no routes, or all findings below the peer floor). */
+  security_posture?: { score: number; maxScore: number; findings: number };
   semantic_duplication: { score: number; maxScore: number; findings: number };
   naming_conventions: { score: number; maxScore: number; findings: number };
   phantom_scaffolding: { score: number; maxScore: number; findings: number };
@@ -149,6 +150,16 @@ function computeDriftScores(findings: Finding[], totalLines: number): DriftScore
     // composite (the 5-bucket health is the product of its detectors' (1-damage),
     // and each bar shows one of those (1-damage) components). No second formula.
     const catFindings = findings.filter((f) => f.analyzerId === `drift-${cat}`);
+    if (cat === "security_posture" && catFindings.length === 0) {
+      // Mirror the composite's surface-specific rule (SURFACE_SPECIFIC_DRIFT_
+      // CATEGORIES in scoring/engine.ts): zero security findings means "no
+      // measured surface" (no routes, or everything demoted below the peer
+      // floor), not "perfect consistency". Omit the key — every consumer
+      // (CSV, DOCX, the dashboard admin view) treats absence as not measured,
+      // whereas a `{score: weight, findings: 0}` entry uploads a scored-looking
+      // full-health bar right next to the composite's N/A.
+      continue;
+    }
     const health = categoryHealth(catFindings, true, klocCount);
     scores[cat] = {
       score: Math.round(weight * health * 10) / 10,
@@ -157,7 +168,8 @@ function computeDriftScores(findings: Finding[], totalLines: number): DriftScore
     };
   }
 
-  // The loop populates every DriftCategory key, so the cast is safe.
+  // The loop populates every DriftCategory key except a not-measured
+  // security_posture (see above), which the type marks optional.
   return scores as unknown as DriftScores;
 }
 

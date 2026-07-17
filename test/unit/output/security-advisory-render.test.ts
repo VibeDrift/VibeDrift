@@ -224,10 +224,13 @@ describe("min-peer-floor render consistency (root fix)", () => {
       expect(driftScores.security_posture.findings).toBe(1);
     });
 
-    it("all-below-floor security yields zero security drift findings and an empty-category breakdown", () => {
+    it("all-below-floor security yields zero security drift findings and NO security breakdown entry", () => {
       const { driftFindings, driftScores } = scoredDriftView([rawSecuritySub("Auth middleware", 2, 1)], TOTAL_LINES);
       expect(driftFindings.length).toBe(0);
-      expect(driftScores.security_posture.findings).toBe(0);
+      // Not measured ≠ perfectly healthy: the old `{score: 14, maxScore: 14,
+      // findings: 0}` entry uploaded a scored-looking full-health bar next to
+      // the composite's N/A. The key is now omitted entirely.
+      expect(driftScores.security_posture).toBeUndefined();
     });
   });
 

@@ -10,7 +10,7 @@ import chalk from "chalk";
 import type { ScanResult, Finding } from "../core/types.js";
 import { CATEGORY_CONFIG, ALL_CATEGORIES, DRIFT_DISPLAY_CATEGORIES, getAnalyzerKind } from "../scoring/categories.js";
 import { scoreBar, padRight, formatCount } from "./format.js";
-import { scorePercentiles } from "../scoring/engine.js";
+import { scorePercentiles, SECURITY_ADVISORY_ID } from "../scoring/engine.js";
 import { isPeerGroundedEntitled, type Plan } from "../auth/plan.js";
 import { hasFloorTrip } from "./floor-badge.js";
 
@@ -634,10 +634,22 @@ function renderCategoryBars(result: ScanResult): string[] {
     const label = padRight(config.name, 28);
 
     if (!s.applicable) {
-      // These are drift categories whose detector ran but found no applicable
-      // code in this repo (Dependency Health is not shown here — it has no drift
-      // detector and lives on the Hygiene track).
-      lines.push(chalk.dim(`  ${label}   N/A — no findings in this repo`));
+      // Not-measured is not "clean" — say WHY there is no score. Two cases
+      // share this branch: the detector found no applicable surface at all
+      // (a CLI repo has no web routes to vote over), or every finding fell
+      // below an evidence floor and was demoted to advisory (those still
+      // render in the hygiene sections). "No findings" would read as a clean
+      // bill for a check that never ran.
+      const hasAdvisory =
+        cat === "securityPosture" && result.findings.some((f) => f.analyzerId === SECURITY_ADVISORY_ID);
+      // "kept as advisory", not "below": this line also renders in the concise
+      // summary, which has no findings list below it — a locational claim
+      // would be false there. The advisory findings render in the full-format
+      // hygiene pane and in the report.
+      const note = hasAdvisory
+        ? "N/A — not scored (evidence below floor); findings kept as advisory"
+        : "N/A — nothing to measure in this repo";
+      lines.push(chalk.dim(`  ${label}   ${note}`));
     } else {
       const color = scoreColorFn(s.score, s.maxScore);
       const bar = color(scoreBar(s.score, s.maxScore));
@@ -653,7 +665,7 @@ function renderCategoryBars(result: ScanResult): string[] {
     if (cat === "securityPosture") {
       lines.push(
         chalk.dim(
-          `  ${padRight("", 28)}   consistent ≠ safe: measures how uniformly this repo applies its own auth and validation patterns, not the absence of vulnerabilities`,
+          `  ${padRight("", 28)}   consistent ≠ safe: measures how uniformly this repo applies its own auth, validation, and rate-limit patterns, not the absence of vulnerabilities`,
         ),
       );
     }

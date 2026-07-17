@@ -54,7 +54,7 @@ export async function runAnalyzers(
   let cacheHits = 0;
   let cacheMisses = 0;
   for (const r of perAnalyzer) {
-    findings.push(...r.findings); // in-order: Promise.all preserves analyzer order
+    for (const f of r.findings) findings.push(f); // in-order (Promise.all preserves analyzer order); loop, not spread: unbounded set
     if (r.hit) cacheHits++;
     else cacheMisses++;
   }
