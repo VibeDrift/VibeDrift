@@ -8,9 +8,10 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ### Changed
 
-- **Deep-scan results now show in the default output.** A deep scan's AI results — the
-  coherence grade and the top AI finding — appear inline in the default terminal summary,
-  instead of only under `--format terminal` or in the report. Non-deep scans are unchanged.
+- **Deep-scan results now show in the default output.** The default terminal summary
+  surfaces the AI results a deep scan produced — the coherence grade (paid plans), the
+  AI summary, the top AI finding, and the AI-validated finding count — instead of only
+  under `--format terminal` or in the report. Non-deep scans are unchanged.
 
 ## 0.16.0 — 2026-07-16
 
