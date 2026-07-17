@@ -8,6 +8,15 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ### Fixed
 
+- **Go multi-module repos no longer get false "imports not in go.mod" errors.** The
+  dependency scan now checks each `.go` file against its nearest enclosing `go.mod`
+  instead of the repo root, so a package declared in a nested module (a `tools/`
+  module, an example module, a `go.work` service) is recognized as declared. Declared
+  modules are also matched by import path prefix, so multi-segment module paths like
+  `github.com/org/sdk/submodule` and `/vN` major-version suffixes are no longer truncated
+  to three segments and mislabeled missing. Imports of a sibling in-repo module, and
+  `// indirect` requires, are handled correctly too. Fixes the 2 false errors on go-chi/chi
+  and 38 on Terraform reported in issue #48. Single-module repos are unchanged.
 - **Honest N/A copy.** A category with no score now says why: "nothing to measure in this
   repo" (e.g. Security Consistency in a repo with no web routes), or "not scored (evidence
   below floor); findings kept as advisory" when the peer floor demoted the findings —

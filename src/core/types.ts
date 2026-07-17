@@ -119,7 +119,13 @@ export interface PackageJson {
 export interface GoMod {
   module: string;
   goVersion?: string;
-  require: { path: string; version: string }[];
+  /**
+   * `indirect` mirrors the `// indirect` marker go mod tidy writes for
+   * transitive dependencies. Indirect deps are never imported directly, so
+   * the dependency analyzer excludes them from "potentially unused"
+   * detection (they still satisfy the missing-import check).
+   */
+  require: { path: string; version: string; indirect?: boolean }[];
   /**
    * True when go.mod declares any `replace` directive (single-line
    * `replace a => b` or the `replace (` block form). A replace remaps an
@@ -135,6 +141,29 @@ export interface GoMod {
    * `hasReplace` — it disables Go cross-file auth resolution wholesale.
    */
   hasNestedModule?: boolean;
+  /**
+   * Every nested `go.mod` found under the scan root (multi-module repos:
+   * go workspaces, tools modules, example modules). `dir` is the module
+   * root relative to the scan root with `/` separators, e.g.
+   * "internal/backend/remote-state/azure". Sorted by `dir` for determinism.
+   * The dependency analyzer checks each .go file against its nearest
+   * enclosing module's `require` list, not the root's.
+   */
+  nestedModules?: NestedGoModule[];
+  /**
+   * Dirs (relative, `/`-separated) of nested `go.mod` files that were found
+   * but could not be parsed (no module line, unreadable). Their `.go` files
+   * must NOT be attributed to the root module — we have no dependency list to
+   * check them against — so the dependency analyzer skips files under these
+   * dirs entirely. Sorted for determinism.
+   */
+  opaqueModuleDirs?: string[];
+}
+
+export interface NestedGoModule {
+  dir: string;
+  module: string;
+  require: { path: string; version: string; indirect?: boolean }[];
 }
 
 export interface CargoToml {

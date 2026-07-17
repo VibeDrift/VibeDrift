@@ -79,7 +79,10 @@ export const dependenciesAnalyzer: Analyzer = {
   applicableLanguages: "all",
   // v2: credit deps referenced only in build/config files (require.resolve,
   // loader/plugin strings) so they aren't flagged as phantom.
-  version: 2,
+  // v3: Go multi-module support — each .go file is checked against its
+  // nearest enclosing go.mod, and declared-module matching is path-prefix
+  // aware instead of truncating imports to three segments.
+  version: 3,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -280,50 +283,138 @@ function analyzeJsDeps(ctx: AnalysisContext): Finding[] {
   return findings;
 }
 
+// Go import paths match a declared module by path segments: the declared
+// module path is either the import itself or a segment-prefix of it. This is
+// how the Go toolchain resolves imports; the old first-3-segments truncation
+// broke multi-segment module paths (github.com/org/sdk/submodule) and /vN
+// major-version suffixes.
+function goModuleCovers(modulePath: string, importPath: string): boolean {
+  return importPath === modulePath || importPath.startsWith(modulePath + "/");
+}
+
+// Display grouping only: collapse full import paths to their host/org/repo
+// stem so a finding message lists modules, not every subpackage.
+function goDisplayModule(importPath: string): string {
+  const segments = importPath.split("/");
+  return segments.length >= 3 ? segments.slice(0, 3).join("/") : importPath;
+}
+
 function analyzeGoDeps(ctx: AnalysisContext): Finding[] {
   const findings: Finding[] = [];
   const goMod = ctx.goMod!;
-  const declaredPaths = new Set(goMod.require.map((r) => r.path));
 
-  const importedPaths = new Set<string>();
+  // Multi-module repos (go workspaces, tools/ and example modules, nested
+  // service modules): each .go file is checked against its NEAREST enclosing
+  // go.mod, not the root one. Nested modules declare their own dependencies.
+  // `directPaths` drives phantom detection: `// indirect` requires are
+  // transitive deps go mod tidy records, never imported directly, so flagging
+  // them "unused" would be a false positive. `allPaths` (direct + indirect)
+  // drives the missing-import check — an import satisfied by an indirect entry
+  // is still declared.
+  const scopes = [
+    {
+      dir: "",
+      module: goMod.module,
+      goModPath: "go.mod",
+      directPaths: goMod.require.filter((r) => !r.indirect).map((r) => r.path),
+      allPaths: goMod.require.map((r) => r.path),
+      imports: new Set<string>(),
+      fileCount: 0,
+    },
+    ...(goMod.nestedModules ?? []).map((n) => ({
+      dir: n.dir,
+      module: n.module,
+      goModPath: `${n.dir}/go.mod`,
+      directPaths: n.require.filter((r) => !r.indirect).map((r) => r.path),
+      allPaths: n.require.map((r) => r.path),
+      imports: new Set<string>(),
+      fileCount: 0,
+    })),
+  ];
+  // Nearest ancestor wins: deepest module dir first; root ("") matches last.
+  const byDepth = [...scopes].sort((a, b) => b.dir.length - a.dir.length);
+  // Nested go.mod files we couldn't parse: a file under one of these has no
+  // dependency list to check against, so it must be EXCLUDED, not attributed
+  // to root (which would flag that module's own deps as missing at root).
+  const opaqueByDepth = [...(goMod.opaqueModuleDirs ?? [])].sort((a, b) => b.length - a.length);
+  // Imports of any module that lives in this repo (root or nested sibling)
+  // are never "missing" — the code is physically present, and whether a
+  // workspace declares the cross-module require is build tooling, not drift.
+  const inRepoModules = scopes.map((s) => s.module).filter((m) => m.length > 0);
+
   const goFiles = ctx.files.filter((f) => f.language === "go");
-
   for (const file of goFiles) {
-    const goImports = extractGoImports(file.content);
-    for (const importPath of goImports) {
+    const rel = file.relativePath.replace(/\\/g, "/");
+    const scope = byDepth.find((s) => s.dir === "" || rel.startsWith(s.dir + "/"))!;
+    // If an unparseable nested module encloses this file more tightly than the
+    // chosen (parsed) scope, we can't judge its imports — skip the file.
+    const opaqueDir = opaqueByDepth.find((d) => rel.startsWith(d + "/"));
+    if (opaqueDir !== undefined && opaqueDir.length > scope.dir.length) continue;
+    scope.fileCount++;
+    for (const importPath of extractGoImports(file.content)) {
       // Skip stdlib (no dots in first segment)
       if (!importPath.includes(".")) continue;
       // Skip URLs
       if (importPath.startsWith("http://") || importPath.startsWith("https://")) continue;
-      // Skip internal module imports
-      if (importPath.startsWith(goMod.module)) continue;
-      // Extract module path (first 3 segments for github.com/x/y style)
-      const segments = importPath.split("/");
-      const modPath = segments.length >= 3 ? segments.slice(0, 3).join("/") : importPath;
-      importedPaths.add(modPath);
+      scope.imports.add(importPath);
     }
   }
 
-  const phantom = [...declaredPaths].filter((d) => !importedPaths.has(d));
+  const phantom: string[] = [];
+  const phantomLocations: { file: string }[] = [];
+  const missing: string[] = [];
+  const missingSeen = new Set<string>();
+  const missingLocations: { file: string }[] = [];
+
+  for (const scope of scopes) {
+    const imports = [...scope.imports];
+    // Only phantom-check a module we actually saw files for. A module whose
+    // .go files were filtered out of the scan (gitignore, file-count cap,
+    // size limit — none of which the nested-go.mod walk applies) would
+    // otherwise report EVERY declared dep as unused. No files scanned ⇒ no
+    // evidence of what it imports ⇒ no phantom claim.
+    const phantomHere = scope.fileCount === 0
+      ? []
+      : scope.directPaths.filter(
+          (d) => !imports.some((imp) => goModuleCovers(d, imp)),
+        );
+    if (phantomHere.length > 0) {
+      phantom.push(...phantomHere);
+      phantomLocations.push({ file: scope.goModPath });
+    }
+
+    let missingHere = false;
+    for (const imp of imports) {
+      if (inRepoModules.some((m) => goModuleCovers(m, imp))) continue;
+      if (scope.allPaths.some((d) => goModuleCovers(d, imp))) continue;
+      missingHere = true;
+      const display = goDisplayModule(imp);
+      if (!missingSeen.has(display)) {
+        missingSeen.add(display);
+        missing.push(display);
+      }
+    }
+    if (missingHere) missingLocations.push({ file: scope.goModPath });
+  }
+
   if (phantom.length > 0) {
     findings.push({
       analyzerId: "dependencies",
       severity: "warning",
       confidence: 0.7,
       message: `${phantom.length} potentially unused Go modules: ${phantom.slice(0, 3).join(", ")}${phantom.length > 3 ? "..." : ""}`,
-      locations: [{ file: "go.mod" }],
+      locations: phantomLocations,
       tags: ["deps", "phantom", "go"],
     });
   }
 
-  const missing = [...importedPaths].filter((i) => !declaredPaths.has(i));
   if (missing.length > 0) {
     findings.push({
       analyzerId: "dependencies",
       severity: "error",
       confidence: 0.8,
       message: `${missing.length} Go imports not in go.mod: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "..." : ""}`,
-      locations: [{ file: "go.mod" }],
+      locations: missingLocations,
       tags: ["deps", "missing", "go"],
     });
   }

@@ -1,6 +1,6 @@
 # Scoring: From Findings to the Vibe Drift Score
 
-Every analyzer, drift detector, and Code DNA module ends in the same place: a flat list of `Finding` objects. The scoring engine (`src/scoring/engine.ts`) turns that list into the headline Vibe Drift Score, a parallel Hygiene Score, five category scores, per-file scores, and per-finding fix impacts. This chapter documents the real engine as shipped, `SCORING_VERSION = "v11"`, including the design history that explains why it is not a weighted sum.
+Every analyzer, drift detector, and Code DNA module ends in the same place: a flat list of `Finding` objects. The scoring engine (`src/scoring/engine.ts`) turns that list into the headline Vibe Drift Score, a parallel Hygiene Score, five category scores, per-file scores, and per-finding fix impacts. This chapter documents the real engine as shipped, `SCORING_VERSION = "v13"`, including the design history that explains why it is not a weighted sum.
 
 ## Two tracks, one engine
 
@@ -146,7 +146,7 @@ There is also a peer-percentile hook: `compositeToPercentile` places the composi
 
 ## SCORING_VERSION: shipping score changes without gaslighting users
 
-Scoring methodology changes make raw scores from different versions incomparable, and a user who sees their score drop 6 points wants to know whether their code got worse or the ruler changed. The engine's answer is `SCORING_VERSION` (currently `"v11"`), with three coordinated behaviors:
+Scoring methodology changes make raw scores from different versions incomparable, and a user who sees their score drop 6 points wants to know whether their code got worse or the ruler changed. The engine's answer is `SCORING_VERSION` (currently `"v13"`), with three coordinated behaviors:
 
 1. **Cross-version delta suppression.** History stores the `scoringVersion` alongside each scan's scores. When `computeScores` receives previous scores from a different version, it refuses to compute per-category deltas (they would be in different units) and returns `previousScoresMismatch: "scoring-version-mismatch"`, which downstream silently hides delta arrows.
 2. **A one-time notice, never a banner.** `shouldShowScoringNotice` (`src/core/scoring-notice.ts`) shows a single line ("We refined how the Vibe Drift Score is calculated this release... What changed → https://vibedrift.ai/releases") exactly once per version change, then records `lastSeenScoringVersion`. Brand-new users with no history see nothing. Users never see the version string itself.
@@ -163,6 +163,8 @@ Scoring methodology changes make raw scores from different versions incomparable
 | v7 | concentrated reimplementation feeds the composite via the density gate |
 | v10 | Express `.all()` and Flask `methods=[...]` mutating routes enter the security auth/validation votes |
 | v11 | multi-language security auth (body-first route and auth extraction for Python/Go/Rust, cross-file hook resolution, conservative "unsure"); AST import graph with real module resolution |
+| v12 | detection-precision batch: Go Fiber and Gorilla mux routes enter the security auth vote; dependency scan ignores import-like text in comments and strings; Code DNA escapes regex metacharacters in filename-derived patterns |
+| v13 | Go multi-module dependency resolution: each `.go` file is checked against its nearest enclosing `go.mod`, declared-module matching is path-prefix aware, sibling in-repo and `// indirect` requires are handled (issue #48) |
 
 (The comment records no v8 or v9 entries.)
 

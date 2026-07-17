@@ -12,6 +12,7 @@ import type {
   SourceFile,
   PackageJson,
   GoMod,
+  NestedGoModule,
   CargoToml,
   AnalysisContext,
   SupportedLanguage,
@@ -145,6 +146,20 @@ export async function loadGoMod(rootDir: string): Promise<GoMod | null> {
     return null;
   }
 
+  const result = parseGoModSource(raw);
+  if (!result) return null;
+  const { modules: nested, opaqueDirs } = await findNestedGoMods(rootDir);
+  // The guard fires on ANY nested go.mod, parseable or not — over-detection
+  // only ever over-disables cross-file auth resolution (safe). The parsed
+  // list carries only real modules for the dependency analyzer; opaqueDirs
+  // carries the ones it must exclude rather than mis-attribute to root.
+  if (nested.length > 0 || opaqueDirs.length > 0) result.hasNestedModule = true;
+  if (nested.length > 0) result.nestedModules = nested;
+  if (opaqueDirs.length > 0) result.opaqueModuleDirs = opaqueDirs;
+  return result;
+}
+
+function parseGoModSource(raw: string): GoMod | null {
   const lines = raw.split("\n");
   const result: GoMod = { module: "", require: [] };
 
@@ -169,12 +184,16 @@ export async function loadGoMod(rootDir: string): Promise<GoMod | null> {
     } else if (inRequire && trimmed && !trimmed.startsWith("//")) {
       const parts = trimmed.split(/\s+/);
       if (parts.length >= 2) {
-        result.require.push({ path: parts[0], version: parts[1] });
+        const entry: { path: string; version: string; indirect?: boolean } = { path: parts[0], version: parts[1] };
+        if (/\/\/\s*indirect/.test(trimmed)) entry.indirect = true;
+        result.require.push(entry);
       }
     } else if (trimmed.startsWith("require ") && !trimmed.includes("(")) {
       const parts = trimmed.slice(8).trim().split(/\s+/);
       if (parts.length >= 2) {
-        result.require.push({ path: parts[0], version: parts[1] });
+        const entry: { path: string; version: string; indirect?: boolean } = { path: parts[0], version: parts[1] };
+        if (/\/\/\s*indirect/.test(trimmed)) entry.indirect = true;
+        result.require.push(entry);
       }
     } else if (trimmed.startsWith("replace ") && !trimmed.includes("(")) {
       hasReplace = true; // single-line: `replace a => b`
@@ -183,37 +202,57 @@ export async function loadGoMod(rootDir: string): Promise<GoMod | null> {
 
   if (!result.module) return null;
   if (hasReplace) result.hasReplace = true;
-  if (await hasNestedGoMod(rootDir)) result.hasNestedModule = true;
   return result;
 }
 
 /**
- * True when a `go.mod` exists in ANY subdirectory under `rootDir` (the root's
- * own go.mod does not count). A nested module breaks the single-root-prefix
- * assumption Go cross-file package resolution relies on, so detecting one
- * disables that resolution wholesale. Short-circuits on the first hit; skips
- * the same vendored/ignored dirs the main file walk skips. Over-detection only
- * ever over-disables (safe); a boolean result is order-independent.
+ * Collects every `go.mod` in a subdirectory under `rootDir` (the root's own
+ * go.mod does not count). A nested module breaks the single-root-prefix
+ * assumption Go cross-file package resolution relies on, so any hit still
+ * disables that resolution wholesale (via `hasNestedModule`); the parsed list
+ * additionally lets the dependency analyzer check each .go file against its
+ * nearest enclosing module instead of the root. Unparseable nested go.mod
+ * files are returned as `opaqueDirs` so the analyzer can EXCLUDE their files
+ * rather than mis-attribute them to root. Sorted for determinism.
+ *
+ * This walk skips `SKIP_DIRS` and dotdirs but does NOT apply the main file
+ * walk's `.gitignore`, file-count cap, or file-size limit — so it can surface
+ * a nested module whose `.go` files were filtered out of `ctx.files`. The
+ * analyzer guards against that by only phantom-checking modules that actually
+ * contributed a scanned file.
  */
-async function hasNestedGoMod(rootDir: string): Promise<boolean> {
-  async function walk(dir: string, isRoot: boolean): Promise<boolean> {
+async function findNestedGoMods(
+  rootDir: string,
+): Promise<{ modules: NestedGoModule[]; opaqueDirs: string[] }> {
+  const found: NestedGoModule[] = [];
+  const opaque: string[] = [];
+  async function walk(dir: string, relDir: string): Promise<void> {
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
-      return false;
+      return;
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
-        if (await walk(join(dir, entry.name), false)) return true;
-      } else if (!isRoot && entry.isFile() && entry.name === "go.mod") {
-        return true;
+        await walk(join(dir, entry.name), relDir ? `${relDir}/${entry.name}` : entry.name);
+      } else if (relDir !== "" && entry.isFile() && entry.name === "go.mod") {
+        let parsed = null;
+        try {
+          parsed = parseGoModSource(await readFile(join(dir, entry.name), "utf-8"));
+        } catch {
+          // unreadable nested go.mod
+        }
+        if (parsed) found.push({ dir: relDir, module: parsed.module, require: parsed.require });
+        else opaque.push(relDir);
       }
     }
-    return false;
   }
-  return walk(rootDir, true);
+  await walk(rootDir, "");
+  found.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
+  opaque.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { modules: found, opaqueDirs: opaque };
 }
 
 export async function loadCargoToml(rootDir: string): Promise<CargoToml | null> {

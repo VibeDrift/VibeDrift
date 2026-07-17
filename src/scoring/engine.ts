@@ -75,12 +75,24 @@ import {
  *        fixing misclassification for files with special characters in their
  *        names. Only repos in those three slices move; every other repo is
  *        byte identical, and the bundled calibration corpus is unchanged.
+ *   v13: Go multi-module dependency resolution (issue #48). Each .go file is
+ *        now checked against its NEAREST enclosing go.mod instead of the root
+ *        one, declared-module matching is path-prefix aware (multi-segment
+ *        module paths like github.com/org/sdk/submodule and /vN major
+ *        suffixes no longer truncate to three segments), and imports of
+ *        sibling in-repo modules are never "missing". Kills false "imports
+ *        not in go.mod" findings in multi-module Go repos (chi, Terraform);
+ *        per-module accounting can also surface real root-level unused
+ *        modules that nested imports previously masked. Only Go repos with
+ *        nested go.mod files or multi-segment module paths move; every other
+ *        repo is byte identical, and the bundled calibration corpus is
+ *        unchanged.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v12";
+export const SCORING_VERSION = "v13";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;

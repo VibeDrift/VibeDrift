@@ -138,11 +138,11 @@ Example: `export function retrieveData(id)` in the fixture's `src/data.ts` is ex
 
 ### `dependencies`: Dependency Health
 
-Cross-references what a manifest declares against what the code imports, in both directions, for all four ecosystems (`src/analyzers/dependencies.ts`, v2).
+Cross-references what a manifest declares against what the code imports, in both directions, for all four ecosystems (`src/analyzers/dependencies.ts`, v3).
 
 For JS/TS: declared means dependencies, devDependencies, peerDependencies, optionalDependencies, plus the package's own name; imports are collected from the AST when a tree exists, regex otherwise. The interesting engineering is in the false-positive suppression for **phantom dependencies** (declared, never imported): dev-tool names (linters, bundlers, type packages) are excluded by pattern, and build-config references count as usage, so a webpack loader named only as a string in `webpack.config.js` is not phantom. Error above 5 phantoms, confidence 0.75. For **missing dependencies** (imported, not declared): path-alias and virtual-module imports are skipped, and detected monorepos drop severity to warning and confidence to 0.4, because the package is usually declared in a sibling workspace manifest the analyzer is not looking at.
 
-Go compares `go.mod` requires against imports (stdlib detected by the absence of a dot anywhere in the import path, module-internal imports skipped); Python compares requirements against `import`/`from` statements with 40+ stdlib names excluded and flags phantoms only above 2; Rust compares Cargo dependencies against `use` statements with `-` to `_` normalization.
+Go compares `go.mod` requires against imports (stdlib detected by the absence of a dot anywhere in the import path). Multi-module repos are handled per module: every nested `go.mod` under the scan root is parsed, and each `.go` file is checked against its **nearest enclosing** module, not the root one, so a dependency declared in a `tools/` module, an example module, or a `go.work` service is recognized as declared. A declared module matches an import when it is the import path or a path-segment prefix of it, so multi-segment module paths (`github.com/org/sdk/submodule`) and `/vN` major-version suffixes resolve correctly. Imports of a sibling in-repo module are never counted missing, and `// indirect` requires are excluded from the unused-module check (they are transitive, never imported directly). Python compares requirements against `import`/`from` statements with 40+ stdlib names excluded and flags phantoms only above 2; Rust compares Cargo dependencies against `use` statements with `-` to `_` normalization.
 
 Example: the fixture's `package.json` declares `moment`, `unused-package`, and `another-unused`, none of which any source file imports. All three land in one phantom-dependencies finding, but the emitted message is `4 phantom dependencies (declared but unused): moment, unused-package, another-unused, messy-project`: the analyzer adds the package's own name to the declared set (so self-imports are not reported as missing), and the phantom check does not exclude that entry, so the self-name is counted too.
 
@@ -214,7 +214,7 @@ Example flagged: `return "placeholder";` inside a production request handler.
 | `duplicates` | hygiene | Redundancy | 3 | all | LCS similarity 0.7 or above |
 | `todo-density` | hygiene | Redundancy | 2 | all | Poisson `P < 0.05` per file |
 | `dead-code` | hygiene | Redundancy | 7 | all | over 3 dead exports |
-| `dependencies` | hygiene | Dependency Health | 2 | all | error above 5 phantoms |
+| `dependencies` | hygiene | Dependency Health | 3 | all | error above 5 phantoms |
 | `config-drift` | hygiene | Dependency Health | 2 | all | per missing env var |
 | `security` (+ `security-floor`) | hygiene | Security Consistency | 3 | all | 20 rules; 5 floor, 5 demoted |
 | `intent-clarity` | hygiene | Intent Clarity | 2 | all | 50/100-line functions; generic names |
