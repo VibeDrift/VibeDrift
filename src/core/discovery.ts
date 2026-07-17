@@ -65,7 +65,7 @@ export async function discoverFiles(rootDir: string): Promise<{ files: SourceFil
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
-    } catch (err: any) {
+    } catch {
       // Permission denied, etc — skip this directory, don't crash
       warnings.skippedDirs.push(relative(rootDir, dir) || dir);
       return;
@@ -292,7 +292,7 @@ export async function loadRequirementsTxt(rootDir: string): Promise<string[] | n
       for (const line of raw.split("\n")) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("-")) continue;
-        const name = trimmed.split(/[>=<!\[\s]/)[0];
+        const name = trimmed.split(/[>=<!\s[]/)[0];
         if (name) deps.push(name.toLowerCase());
       }
       return deps.length > 0 ? deps : null;

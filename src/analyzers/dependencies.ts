@@ -194,7 +194,7 @@ function detectPhantomDeps(declared: Set<string>, imported: Set<string>, devTool
       severity: realPhantom.length > 5 ? "error" : "warning",
       confidence: 0.75,
       message: `${realPhantom.length} phantom dependencies (declared but unused): ${realPhantom.slice(0, 5).join(", ")}${realPhantom.length > 5 ? "..." : ""}`,
-      locations: realPhantom.map((p) => ({ file: "package.json" })),
+      locations: realPhantom.map(() => ({ file: "package.json" })),
       tags: ["deps", "phantom", "js"],
     }];
   }
@@ -247,7 +247,7 @@ function analyzeJsDeps(ctx: AnalysisContext): Finding[] {
     ...Object.keys(pkg.dependencies ?? {}),
     ...Object.keys(pkg.devDependencies ?? {}),
     ...Object.keys(pkg.peerDependencies ?? {}),
-    ...Object.keys((pkg as any).optionalDependencies ?? {}),
+    ...Object.keys(pkg.optionalDependencies ?? {}),
   ]);
 
   // Self-references (importing your own package name) are not missing deps
@@ -260,7 +260,7 @@ function analyzeJsDeps(ctx: AnalysisContext): Finding[] {
     (v) => typeof v === "string" && (v.startsWith("workspace:") || v === "*"),
   );
   // Also check for workspaces field
-  const hasWorkspaces = !!(pkg as any).workspaces;
+  const hasWorkspaces = !!pkg.workspaces;
 
   const jsFiles = ctx.files.filter(
     (f) =>

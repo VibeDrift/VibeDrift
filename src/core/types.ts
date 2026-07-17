@@ -1,5 +1,7 @@
 import type { Tree, Node as SyntaxNode } from "web-tree-sitter";
 import type { ProjectConfig } from "./project-config.js";
+import type { DriftScores } from "../drift/index.js";
+import type { CodeDnaResult } from "../codedna/types.js";
 
 export type { Tree, SyntaxNode };
 
@@ -198,7 +200,12 @@ export interface ScanResult {
   context: AnalysisContext;
   findings: Finding[];
   driftFindings: DriftFindingReport[];
-  driftScores: any;
+  /**
+   * Per-drift-category breakdown with the engine composite attached (see
+   * `attachEngineComposite`). `composite` is optional because sanitized/cloned
+   * copies may carry only the breakdown; the primary scan path always sets it.
+   */
+  driftScores: DriftScores & { composite?: number };
   /**
    * Scan-over-scan diff against the previous saved scan. Populated when
    * history exists and `--no-compare` was not set. Present but all-empty
@@ -256,7 +263,7 @@ export interface ScanResult {
   scanTimeMs: number;
   previousScan?: ScanResult;
   perFileScores: Map<string, PerFileScore>;
-  codeDnaResult?: any; // CodeDnaResult from ../codedna/types
+  codeDnaResult?: CodeDnaResult;
   aiSummary?: { summary: string; highlights: string[] };
   /** Deep-scan hero report (paid-only; null for free/local scans). */
   coherenceReport?: CoherenceReport;

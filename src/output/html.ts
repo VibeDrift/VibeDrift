@@ -158,7 +158,7 @@ function extractIntentPatterns(result: ScanResult): IntentPattern[] {
 
   // Add Code DNA patterns
   const dna = result.codeDnaResult;
-  if (dna?.patternDistributions?.length > 0) {
+  if (dna && dna.patternDistributions.length > 0) {
     const patternCounts = new Map<string, number>();
     for (const pd of dna.patternDistributions) {
       patternCounts.set(pd.dominantPattern, (patternCounts.get(pd.dominantPattern) ?? 0) + 1);
@@ -237,7 +237,7 @@ function buildCodeDnaPatternData(result: ScanResult): { projectDominantPattern: 
   let projectDominantPattern = "";
   const dna = result.codeDnaResult;
 
-  if (dna?.patternDistributions?.length > 0) {
+  if (dna && dna.patternDistributions.length > 0) {
     const patternCounts = new Map<string, number>();
     for (const pd of dna.patternDistributions) {
       if (pd.dominantPattern !== "none") {
@@ -1013,12 +1013,12 @@ function buildEmbeddedData(result: ScanResult): string {
       findings: data.findings.length,
     })),
     codeDna: dna ? {
-      sequences: (dna.sequenceSimilarities ?? []).map((s: any) => ({
+      sequences: (dna.sequenceSimilarities ?? []).map((s) => ({
         a: s.functionA.name + "() in " + (s.functionA.relativePath || s.functionA.file),
         b: s.functionB.name + "() in " + (s.functionB.relativePath || s.functionB.file),
         pct: Math.round(s.similarity * 100),
       })),
-      deviations: (dna.deviationJustifications ?? []).map((dj: any) => ({
+      deviations: (dna.deviationJustifications ?? []).map((dj) => ({
         file: dj.relativePath || dj.file,
         verdict: dj.verdict,
         pattern: dj.deviatingPattern + " vs " + dj.dominantPattern,
