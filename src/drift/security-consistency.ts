@@ -340,6 +340,21 @@ function inheritedRateLimit(perRoute: boolean, fileMw: FileMiddleware | undefine
   return perRoute || (fileMw?.hasRateLimit ?? false);
 }
 
+// ─── Regex-fallback comment skipping ─────────────────────────────────
+// The regex route extractors (used when tree-sitter has no clean parse) match
+// route-shaped text line by line. A commented-out registration must NOT become
+// a phantom route — it would steal a @vibedrift-public annotation from the real
+// route below it (see #64 item 4). JS/TS and Go share C-style comments, so their
+// markers live in one place; Python differs (# line comments, """/''' docstrings).
+const C_STYLE_COMMENT_MARKERS = ["//", "/*"] as const; // JS, TS, Go
+const PYTHON_COMMENT_MARKERS = ["#"] as const;
+
+/** True when a source line is a line comment for the given markers. */
+function isCommentLine(line: string, markers: readonly string[]): boolean {
+  const trimmed = line.trimStart();
+  return markers.some((m) => trimmed.startsWith(m));
+}
+
 function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>, xfile: CrossFileIndex) {
   // AST only on a CLEAN parse: tree-sitter always returns a tree for broken Go
   // (with ERROR nodes), and error recovery SWALLOWS later valid registrations
@@ -368,6 +383,8 @@ function extractGoRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddlewa
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    // Skip comment lines — prevents phantom routes from commented-out code.
+    if (isCommentLine(line, C_STYLE_COMMENT_MARKERS)) continue;
     let method = "", path = "";
     const echoMatch = line.match(echoPattern);
     if (echoMatch) { method = echoMatch[1]; path = echoMatch[2]; }
@@ -406,6 +423,8 @@ function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddlewa
   const expressPattern = /\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]/;
 
   for (let i = 0; i < lines.length; i++) {
+    // Skip comment lines — prevents phantom routes from commented-out code.
+    if (isCommentLine(lines[i], C_STYLE_COMMENT_MARKERS)) continue;
     const match = lines[i].match(expressPattern);
     if (!match) continue;
     const path = match[1];
@@ -500,7 +519,20 @@ function extractPythonRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMidd
   const lines = file.content.split("\n");
   const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
 
+  let inDocstring = false;
   for (let i = 0; i < lines.length; i++) {
+    // Track triple-quoted docstring blocks: a route-shaped line inside a
+    // docstring is documentation, not a real registration. An odd count of
+    // triple-quotes on a line toggles the block state.
+    const tripleQuotes = (lines[i].match(/"""|'''/g) ?? []).length;
+    if (inDocstring) {
+      if (tripleQuotes % 2 === 1) inDocstring = false;
+      continue;
+    }
+    if (tripleQuotes % 2 === 1) { inDocstring = true; continue; }
+    // Skip comment lines — Python uses '#'. Prevents phantom routes from
+    // commented-out code.
+    if (isCommentLine(lines[i], PYTHON_COMMENT_MARKERS)) continue;
     const match = lines[i].match(routePattern);
     if (!match) continue;
     const path = match[1];
