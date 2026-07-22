@@ -9,14 +9,16 @@
  */
 
 import type { DriftFile, Evidence } from "../types.js";
+import type { Axis } from "./labels.js";
 
 /**
  * One independent dimension of import style for a single file — e.g.
  * `path_style` (relative vs alias), `grouping`, `glob`. The `axis` becomes the
- * finding's `subCategory` and must have an entry in `AXES` (labels.ts).
+ * finding's `subCategory` and is a key of `AXES` (labels.ts) — the typed union
+ * makes an unknown axis a compile error, not a silently-dropped finding.
  */
 export interface AxisClassification {
-  axis: string;
+  axis: Axis;
   /** Canonical pattern key for this file on this axis, e.g. "relative" | "alias". */
   pattern: string;
   evidence: Evidence[];

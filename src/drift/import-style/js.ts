@@ -9,6 +9,7 @@ import type { DriftFile, Evidence } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { JS_IMPORT_LINE, JS_FROM_SPECIFIER } from "./patterns.js";
+import { EVIDENCE_LIMIT, binaryMajority } from "./shared.js";
 
 export const jsImportClassifier: ImportStyleClassifier = {
   classify(file: DriftFile): AxisClassification[] {
@@ -36,7 +37,7 @@ export const jsImportClassifier: ImportStyleClassifier = {
         aliasCount++;
       }
 
-      if (evidence.length < 3) {
+      if (evidence.length < EVIDENCE_LIMIT) {
         evidence.push({ line: i + 1, code: line });
       }
     }
@@ -45,10 +46,7 @@ export const jsImportClassifier: ImportStyleClassifier = {
     if (totalLocalImports < 3) return [];
 
     // Majority wins; a pure-alias file classifies as alias even with 0 relative.
-    const pattern =
-      aliasCount === 0 ? "relative" :
-      relativeCount === 0 ? "alias" :
-      relativeCount >= aliasCount ? "relative" : "alias";
+    const pattern = binaryMajority(relativeCount, "relative", aliasCount, "alias");
 
     return [{ axis: "path_style", pattern, evidence }];
   },

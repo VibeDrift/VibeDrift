@@ -19,6 +19,7 @@ import type { DriftFile, Evidence } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { PY_FROM_RELATIVE, PY_FROM_ABSOLUTE, PY_FROM_ANY, PY_WILDCARD } from "./patterns.js";
+import { EVIDENCE_LIMIT, capEvidence, cleanTree, binaryMajority } from "./shared.js";
 
 function pkgSegmentsOf(relativePath: string): Set<string> {
   return new Set(relativePath.split("/").slice(0, -1));
@@ -30,11 +31,8 @@ interface PathCounts { relative: number; absoluteLocal: number; evidence: Eviden
 
 function decidePathStyle(c: PathCounts): AxisClassification | null {
   if (c.relative + c.absoluteLocal < 2) return null;
-  const pattern =
-    c.absoluteLocal === 0 ? "relative" :
-    c.relative === 0 ? "absolute" :
-    c.relative >= c.absoluteLocal ? "relative" : "absolute";
-  return { axis: "py_path_style", pattern, evidence: c.evidence.slice(0, 3) };
+  const pattern = binaryMajority(c.relative, "relative", c.absoluteLocal, "absolute");
+  return { axis: "py_path_style", pattern, evidence: capEvidence(c.evidence) };
 }
 
 function pathStyleFromAst(tree: Tree, pkg: Set<string>): AxisClassification | null {
@@ -48,7 +46,7 @@ function pathStyleFromAst(tree: Tree, pkg: Set<string>): AxisClassification | nu
     else if (mod.type === "dotted_name" && pkg.has(mod.text.split(".")[0])) kind = "absoluteLocal";
     if (!kind) continue;
     if (kind === "relative") c.relative++; else c.absoluteLocal++;
-    if (c.evidence.length < 3) c.evidence.push({ line: node.startPosition.row + 1, code: node.text.split("\n")[0].trim() });
+    if (c.evidence.length < EVIDENCE_LIMIT) c.evidence.push({ line: node.startPosition.row + 1, code: node.text.split("\n")[0].trim() });
   }
   return decidePathStyle(c);
 }
@@ -65,7 +63,7 @@ function pathStyleFromRegex(lines: string[], pkg: Set<string>): AxisClassificati
     }
     if (!kind) continue;
     if (kind === "relative") c.relative++; else c.absoluteLocal++;
-    if (c.evidence.length < 3) c.evidence.push({ line: i + 1, code: line.trim() });
+    if (c.evidence.length < EVIDENCE_LIMIT) c.evidence.push({ line: i + 1, code: line.trim() });
   }
   return decidePathStyle(c);
 }
@@ -74,7 +72,7 @@ function pathStyleFromRegex(lines: string[], pkg: Set<string>): AxisClassificati
 
 function decideWildcard(fromCount: number, wildcardCount: number, evidence: Evidence[]): AxisClassification | null {
   if (wildcardCount === 0 && fromCount < 2) return null;
-  return { axis: "py_wildcard", pattern: wildcardCount > 0 ? "wildcard" : "explicit", evidence: evidence.slice(0, 3) };
+  return { axis: "py_wildcard", pattern: wildcardCount > 0 ? "wildcard" : "explicit", evidence: capEvidence(evidence) };
 }
 
 function wildcardFromAst(tree: Tree): AxisClassification | null {
@@ -85,7 +83,7 @@ function wildcardFromAst(tree: Tree): AxisClassification | null {
     if (!node) continue;
     fromCount++;
     if (node.descendantsOfType("wildcard_import").some((n) => n !== null)) wildcardCount++;
-    if (evidence.length < 3) evidence.push({ line: node.startPosition.row + 1, code: node.text.split("\n")[0].trim() });
+    if (evidence.length < EVIDENCE_LIMIT) evidence.push({ line: node.startPosition.row + 1, code: node.text.split("\n")[0].trim() });
   }
   return decideWildcard(fromCount, wildcardCount, evidence);
 }
@@ -98,7 +96,7 @@ function wildcardFromRegex(lines: string[]): AxisClassification | null {
     if (!PY_FROM_ANY.test(lines[i])) continue;
     fromCount++;
     if (PY_WILDCARD.test(lines[i])) wildcardCount++;
-    if (evidence.length < 3) evidence.push({ line: i + 1, code: lines[i].trim() });
+    if (evidence.length < EVIDENCE_LIMIT) evidence.push({ line: i + 1, code: lines[i].trim() });
   }
   return decideWildcard(fromCount, wildcardCount, evidence);
 }
@@ -107,13 +105,13 @@ export const pythonImportClassifier: ImportStyleClassifier = {
   classify(file: DriftFile): AxisClassification[] {
     if (!isAnalyzableSource(file.relativePath)) return [];
     const pkg = pkgSegmentsOf(file.relativePath);
-    const clean = !!file.tree && !file.tree.rootNode.hasError;
-    const lines = clean ? [] : file.content.split("\n");
+    const tree = cleanTree(file);
+    const lines = tree ? [] : file.content.split("\n");
 
     const out: AxisClassification[] = [];
-    const pathStyle = clean ? pathStyleFromAst(file.tree!, pkg) : pathStyleFromRegex(lines, pkg);
+    const pathStyle = tree ? pathStyleFromAst(tree, pkg) : pathStyleFromRegex(lines, pkg);
     if (pathStyle) out.push(pathStyle);
-    const wildcard = clean ? wildcardFromAst(file.tree!) : wildcardFromRegex(lines);
+    const wildcard = tree ? wildcardFromAst(tree) : wildcardFromRegex(lines);
     if (wildcard) out.push(wildcard);
     return out;
   },

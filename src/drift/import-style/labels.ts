@@ -16,7 +16,7 @@ export interface AxisMeta {
   noConventionRecommendation: string;
 }
 
-export const AXES: Record<string, AxisMeta> = {
+export const AXES = {
   // JS/TS relative-vs-alias path style (the original import-consistency axis).
   path_style: {
     subCategory: "path_style",
@@ -81,4 +81,11 @@ export const AXES: Record<string, AxisMeta> = {
     patternNames: { grouped: "grouped uses (std/external/crate blank-line separated)", flat: "a single flat use block" },
     noConventionRecommendation: "Pick one use-grouping convention (grouped by origin or flat) and apply it consistently.",
   },
-};
+} satisfies Record<string, AxisMeta>;
+
+/**
+ * The set of known axes. Classifiers type `AxisClassification.axis` as this
+ * union, so emitting an axis with no metadata here is a compile error rather
+ * than a silently-dropped classification.
+ */
+export type Axis = keyof typeof AXES;

@@ -18,7 +18,7 @@ import type { DriftDetector, DriftContext, DriftFinding, Evidence } from "./type
 import type { SupportedLanguage } from "../core/types.js";
 import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, noConventionFinding, pickIntentHint } from "./utils.js";
 import type { ImportStyleClassifier } from "./import-style/types.js";
-import { AXES } from "./import-style/labels.js";
+import { AXES, type Axis, type AxisMeta } from "./import-style/labels.js";
 import { jsImportClassifier } from "./import-style/js.js";
 import { goImportClassifier } from "./import-style/go.js";
 import { pythonImportClassifier } from "./import-style/python.js";
@@ -47,7 +47,7 @@ export const importConsistency: DriftDetector = {
 
   detect(ctx: DriftContext): DriftFinding[] {
     // Classify every file across whatever axes its language decides, bucketed by axis.
-    const byAxis = new Map<string, AxisProfile[]>();
+    const byAxis = new Map<Axis, AxisProfile[]>();
     for (const file of ctx.files) {
       if (!file.language || !(file.language in CLASSIFIERS)) continue;
       const classifier = CLASSIFIERS[file.language as SupportedLanguage];
@@ -60,12 +60,18 @@ export const importConsistency: DriftDetector = {
 
     const findings: DriftFinding[] = [];
     const fileAges = buildFileAgeMap(ctx);
-    const seededPattern = pickIntentHint(ctx, "import_style")?.pattern;
+    // The import_style intent hint's vocabulary (e.g. "alias"/"relative") only
+    // describes the axis it names, so it is applied per-axis below — never as a
+    // blanket seed across unrelated axes (which would inject a phantom pattern
+    // and bypass the dominance threshold on, say, go_grouping).
+    const hintPattern = pickIntentHint(ctx, "import_style")?.pattern;
 
     for (const [axis, profiles] of byAxis) {
       if (profiles.length < 3) continue;
-      const meta = AXES[axis];
-      if (!meta) continue; // defensive: a classifier emitted an axis with no metadata
+      const meta: AxisMeta = AXES[axis]; // total by construction — axis is a key of AXES
+
+      // Seed only the axis this declaration actually applies to.
+      const seededPattern = hintPattern && hintPattern in meta.patternNames ? hintPattern : undefined;
 
       // Entropy gate: high project-wide entropy means no dominant convention,
       // so emit one category-level finding whose deviation IS the entropy

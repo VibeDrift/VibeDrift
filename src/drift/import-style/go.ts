@@ -19,6 +19,7 @@ import type { DriftFile } from "../types.js";
 import type { AxisClassification, ImportStyleClassifier } from "./types.js";
 import { isAnalyzableSource } from "../utils.js";
 import { GO_IMPORT_BLOCK_START, GO_IMPORT_BLOCK_END, GO_IMPORT_PATH } from "./patterns.js";
+import { cleanTree, capEvidence } from "./shared.js";
 
 interface Spec { row: number; path: string; category: "stdlib" | "external"; code: string; }
 
@@ -71,7 +72,7 @@ function collectRegex(content: string): Spec[] {
 }
 
 function evidenceOf(specs: Spec[]): { line: number; code: string }[] {
-  return specs.slice(0, 3).map((s) => ({ line: s.row + 1, code: s.code }));
+  return capEvidence(specs.map((s) => ({ line: s.row + 1, code: s.code })));
 }
 
 function grouping(specs: Spec[]): AxisClassification | null {
@@ -103,7 +104,8 @@ function ordering(specs: Spec[]): AxisClassification | null {
 export const goImportClassifier: ImportStyleClassifier = {
   classify(file: DriftFile): AxisClassification[] {
     if (!isAnalyzableSource(file.relativePath)) return [];
-    const specs = file.tree && !file.tree.rootNode.hasError ? collectAst(file.tree) : collectRegex(file.content);
+    const tree = cleanTree(file);
+    const specs = tree ? collectAst(tree) : collectRegex(file.content);
     const out: AxisClassification[] = [];
     const g = grouping(specs);
     if (g) out.push(g);
