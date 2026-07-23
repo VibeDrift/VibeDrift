@@ -9,7 +9,7 @@ That identity is the most important sentence in this handbook, because it rules 
 
 The distinction is enforced in code, not just in copy. Every signal is classified as either **drift-kind** (grounded in a dominance vote, similarity signal, or taint flow) or **hygiene-kind** (classic linter territory: empty catches, dead code, generic security rules). Only drift-kind findings feed the headline Vibe Drift Score; hygiene findings render in their own pane with their own parallel score (`src/scoring/categories.ts`). Chapter 08 covers the mechanics.
 
-Concretely, the product in this repo is a TypeScript CLI (`npx @vibedrift/cli`) and an MCP server, published as `@vibedrift/cli`. It analyzes JavaScript, TypeScript, Python, Go, and Rust and runs its analysis locally; the hosted service is used only for the optional metered deep scan, the dashboard sync for signed-in users, a disclosed opt-out anonymous beacon, and a daily update check (chapter 11 walks the exact boundary).
+Concretely, the product in this repo is a TypeScript CLI (`npx @vibedrift/cli`) and an MCP server, published as `@vibedrift/cli`. It analyzes JavaScript, TypeScript, Python, Go, and Rust and runs its analysis locally; the hosted service is used only for the optional metered deep scan, the dashboard sync for signed-in users, a disclosed opt-out anonymous beacon, and a daily update check (chapter 12 walks the exact boundary).
 
 ## Who this handbook is for
 
@@ -29,11 +29,12 @@ Each chapter answers one question. Read 01 through 03 in order; after that, chap
 | 07 Layer 1.7: Code DNA | How are functions fingerprinted and near-duplicates found, all locally? |
 | 08 Scoring: From Findings to the Vibe Drift Score | How do findings become the composite score and the Hygiene Score? |
 | 09 The MCP Server: Drift Checks in the Agent Loop | How does an AI agent query the repo's conventions while writing code? |
-| 10 Output Surfaces | How do results render: terminal, HTML, JSON, CSV, DOCX, and the committable context files? |
-| 11 The Local/Cloud Boundary | Exactly what does the optional deep scan send, receive, and refuse to send? |
-| 12 Testing, Calibration, and CI | How is correctness enforced: unit suites, fixtures, and the calibration gates? |
-| 13 Extending VibeDrift | Step-by-step recipes: new analyzer, new detector, new language, new output format. |
-| 14 Glossary | Every term of art in the handbook, one definition each. |
+| 10 Drift Sessions | How does VibeDrift ride inside a coding session and flag drift while the agent works? |
+| 11 Output Surfaces | How do results render: terminal, HTML, JSON, CSV, DOCX, and the committable context files? |
+| 12 The Local/Cloud Boundary | Exactly what does the optional deep scan send, receive, and refuse to send? |
+| 13 Testing, Calibration, and CI | How is correctness enforced: unit suites, fixtures, and the calibration gates? |
+| 14 Extending VibeDrift | Step-by-step recipes: new analyzer, new detector, new language, new output format. |
+| 15 Glossary | Every term of art in the handbook, one definition each. |
 
 ## How to update this handbook
 

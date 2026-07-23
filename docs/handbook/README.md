@@ -18,11 +18,12 @@ directory.
 7. [Layer 1.7: Code DNA](./07-code-dna.md) — fingerprinting, MinHash, op sequences, taint
 8. [Scoring](./08-scoring.md) — from findings to the Vibe Drift Score
 9. [The MCP Server](./09-mcp-tools.md) — drift checks in the agent loop
-10. [Output Surfaces](./10-outputs.md) — terminal, HTML, CSV, DOCX, and the generated context block
-11. [The Local/Cloud Boundary](./11-cloud-boundary.md) — every byte that can leave your machine, and how to opt out
-12. [Testing, Calibration, and CI](./12-testing-and-calibration.md) — how a detector change is proven safe
-13. [Extending VibeDrift](./13-extending.md) — recipes for adding analyzers, detectors, languages, and formats
-14. [Glossary](./14-glossary.md) — every term of art, defined
+10. [Drift Sessions](./10-drift-sessions.md) — VibeDrift inside the coding session, live
+11. [Output Surfaces](./11-outputs.md) — terminal, HTML, CSV, DOCX, and the generated context block
+12. [The Local/Cloud Boundary](./12-cloud-boundary.md) — every byte that can leave your machine, and how to opt out
+13. [Testing, Calibration, and CI](./13-testing-and-calibration.md) — how a detector change is proven safe
+14. [Extending VibeDrift](./14-extending.md) — recipes for adding analyzers, detectors, languages, and formats
+15. [Glossary](./15-glossary.md) — every term of art, defined
 
 ## Source of truth
 

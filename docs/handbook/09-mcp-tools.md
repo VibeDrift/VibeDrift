@@ -2,7 +2,7 @@
 
 A batch scan reports drift after the code exists. By the time `vibedrift scan` flags a `.then()` chain in a repo that settled on async/await, the agent that wrote it has moved on, the diff is merged, and fixing the drift is a separate chore someone has to schedule. The MCP server moves the same checks to the moment that matters: while the agent is deciding what to write. An agent that asks "what is this repo's dominant error-handling pattern" before writing a handler, or "does this function already exist" before implementing it, does not introduce the drift in the first place. That is the product thesis, stated in the server's own instructions (`src/mcp/server.ts`): the local in-loop tools are free for everyone and answer conformance questions during coding; batch `--deep --diff` runs remain the recommendation for reviewing a finished change-set.
 
-MCP (Model Context Protocol) is the standard by which coding agents like Claude Code call external tools. VibeDrift's server speaks it over stdio: `vibedrift mcp` (or `node dist/mcp/server.js`) starts a server named `vibedrift` that registers six tools. All logging goes to stderr, because stdout is the JSON-RPC channel; a stray `console.log` would corrupt the protocol stream.
+MCP (Model Context Protocol) is the standard by which coding agents like Claude Code call external tools. VibeDrift's server speaks it over stdio: `vibedrift mcp` (or `node dist/mcp/server.js`) starts a server named `vibedrift` that registers seven tools. All logging goes to stderr, because stdout is the JSON-RPC channel; a stray `console.log` would corrupt the protocol stream.
 
 ## Two layers: tools-core and the MCP adapter
 
@@ -33,7 +33,7 @@ A `no_baseline` response carries `NO_BASELINE_MESSAGE`, which tells the agent ho
 
 Write-time tool results may additionally carry a `NudgeHint`: a gated, cooled-down FYI offering a deep scan (fires only when the user is signed in, after 8 or more write-time calls in a session, at most once per day, and only when the user has never deep-scanned or their last deep scan is older than 3 days; the timestamp lives in the global `~/.vibedrift/config.json`, so it is per-user, not per-repo, and a deep scan of any repo resets it; `src/tools-core/nudge.ts`).
 
-## The six tools
+## The seven tools
 
 | Tool | Question it answers | Key inputs and outputs |
 |---|---|---|
@@ -43,8 +43,15 @@ Write-time tool results may additionally carry a `NudgeHint`: a gated, cooled-do
 | `check_file_drift` | Does this existing file fit the repo? | In: `rootDir`, `filePath`. Out: `{fits, deviations[], more}` capped at 3 deviations, each with `{dimension, yourPattern, dominantPattern, consistency, fixHint}` citing an exemplar file |
 | `find_similar_function` | Does something like this already exist? | In: `rootDir`, `body`, optional `deep`. Out: `{found, matches[{relativePath, name, line, similarity}], more}`; local LCS threshold 0.6, cap 20 |
 | `validate_change` | Would this proposed function drift or duplicate? | In: `rootDir`, `targetPath`, `body`, optional `deep`. Out: `{ok, conflicts[], duplicateOf[], referenceFiles[], confidence}`; the only tool that judges uncommitted code |
+| `respond_to_flag` | Record my call on a Drift Sessions flag (accept / park / decline) | In: `rootDir`, `findingId` (the `DF-<n>` id from the hook advisory), `decision` (`accept`, `park`, or `decline`), `reason` (one line, secret-masked, capped ~2000 chars). Out: `{recorded}` boolean; the decision is appended to the local session ledger as a `decision` event, status is always `ok`, and capture is fail-open; it records intent only and never resolves the flag or blocks the edit |
 
 Dimension names in `get_dominant_pattern` map onto real drift categories (`error_handling` to `return_shape_consistency`, `data_access` to `architectural_consistency`, `auth` to `security_posture`, and so on). When no vote fired for a dimension, the tool reports it as consistent, with a consistency string of 100% annotated "no deviations detected"; when a vote exists but sits below the reliable-sample floor, the consistency string carries an explicit "treat as advisory" hedge.
+
+## respond_to_flag and the decision ledger
+
+The seventh tool belongs to Drift Sessions. While a `vibedrift watch-session` run rides inside a coding session, its hooks feed a one-line advisory back to the agent whenever an edit diverges from the repo's dominant patterns, and each advisory carries a `DF-<n>` id. `respond_to_flag` lets the agent state its call on one of those flags: `accept` (it agrees and will fix it), `park` (defer it to a human reviewer), or `decline` (it judges the flag wrong or unnecessary for this codebase), each with a one-line reason. The call appends a `decision` event to the local session ledger and sends zero bytes (`src/mcp/tools/respond-to-flag.ts`, `src/session/decision.ts`).
+
+A decision is orthogonal to a finding's outcome. Accepting a flag records a stated intent, not a verified resolution: a flag is marked resolved only when a later re-edit re-runs the same finding over the file and it passes, never because the agent answered `accept`. The two are recorded separately and never conflated. Capture is fail-open, matching the rest of the session ledger: the adapter always returns status `ok` with a `recorded` boolean, so a decision it could not persist surfaces as a soft "not recorded" the agent can act on rather than a thrown error that would derail its turn.
 
 ## Baseline cache mechanics
 
