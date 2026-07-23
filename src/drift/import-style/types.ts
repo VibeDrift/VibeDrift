@@ -9,20 +9,19 @@
  */
 
 import type { DriftFile, Evidence } from "../types.js";
-import type { Axis } from "./labels.js";
+import type { Axis, PatternOf } from "./labels.js";
 
 /**
  * One independent dimension of import style for a single file — e.g.
- * `path_style` (relative vs alias), `grouping`, `glob`. The `axis` becomes the
- * finding's `subCategory` and is a key of `AXES` (labels.ts) — the typed union
- * makes an unknown axis a compile error, not a silently-dropped finding.
+ * `path_style` (relative vs alias), `grouping`, `glob`. A distributive union
+ * over {@link Axis}: `pattern` is tied to `axis` via {@link PatternOf}, so a
+ * classifier can only pair an axis with one of *its* pattern keys (a mismatch
+ * is a compile error, not an `undefined` label at runtime). `axis` becomes the
+ * finding's `subCategory`.
  */
-export interface AxisClassification {
-  axis: Axis;
-  /** Canonical pattern key for this file on this axis, e.g. "relative" | "alias". */
-  pattern: string;
-  evidence: Evidence[];
-}
+export type AxisClassification = {
+  [A in Axis]: { axis: A; pattern: PatternOf<A>; evidence: Evidence[] };
+}[Axis];
 
 /**
  * A per-language import-style classifier. Stateless — a plain object satisfies

@@ -36,11 +36,14 @@ function stripGoQuotes(text: string): string {
   return t;
 }
 
-/** Specs of the first block import in the file, in source order. */
+/** Specs of every block import in the file, in source order. Multiple
+ *  `import ( … )` blocks are concatenated; the physical gap between blocks is a
+ *  row-gap > 1, so the grouping/ordering axes treat each block as its own group
+ *  (which matches gofmt sorting each block independently). */
 function collectAst(tree: Tree): Spec[] {
+  const specs: Spec[] = [];
   for (const list of tree.rootNode.descendantsOfType("import_spec_list")) {
     if (!list) continue;
-    const specs: Spec[] = [];
     for (const spec of list.namedChildren) {
       if (!spec || spec.type !== "import_spec") continue;
       const pathNode = spec.childForFieldName("path");
@@ -48,21 +51,20 @@ function collectAst(tree: Tree): Spec[] {
       const path = stripGoQuotes(pathNode.text);
       specs.push({ row: spec.startPosition.row, path, category: goCategory(path), code: spec.text.trim() });
     }
-    if (specs.length > 0) return specs.sort((a, b) => a.row - b.row);
   }
-  return [];
+  return specs.sort((a, b) => a.row - b.row);
 }
 
 function collectRegex(content: string): Spec[] {
   const lines = content.split("\n");
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (GO_IMPORT_BLOCK_START.test(lines[i])) { start = i; break; }
-  }
-  if (start === -1) return [];
   const specs: Spec[] = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    if (GO_IMPORT_BLOCK_END.test(lines[i])) break;
+  let inBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (!inBlock) {
+      if (GO_IMPORT_BLOCK_START.test(lines[i])) inBlock = true;
+      continue;
+    }
+    if (GO_IMPORT_BLOCK_END.test(lines[i])) { inBlock = false; continue; }
     const m = lines[i].match(GO_IMPORT_PATH);
     if (!m) continue;
     const path = m[1] ?? m[2];

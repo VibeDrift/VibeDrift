@@ -89,3 +89,11 @@ export const AXES = {
  * than a silently-dropped classification.
  */
 export type Axis = keyof typeof AXES;
+
+/**
+ * The valid pattern keys for a given axis, derived from that axis's
+ * `patternNames` in {@link AXES} (the single source of truth). Lets
+ * `AxisClassification` tie `pattern` to `axis`, so e.g. a `go_grouping`
+ * classification can only carry `"grouped"` or `"flat"`.
+ */
+export type PatternOf<A extends Axis> = keyof (typeof AXES)[A]["patternNames"] & string;

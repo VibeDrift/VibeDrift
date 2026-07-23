@@ -79,3 +79,24 @@ describe("Go import ordering (go_ordering)", () => {
     expect(axis(goImportClassifier.classify(f), "go_ordering")[0]?.pattern).toBe("unordered");
   });
 });
+
+describe("Go multiple import blocks", () => {
+  // Two separate `import ( … )` blocks in one file (legal Go; codegen/merges).
+  it("AST: reads all blocks — a stdlib block + an external block classify as grouped", async () => {
+    const f = await go("multi.go", `package main\n\nimport (\n\t"fmt"\n\t"net/http"\n)\n\nimport (\n\t"github.com/a/b"\n)\n`);
+    // grouping needs >=2 origins; block #1 alone is stdlib-only, so this only
+    // reaches "grouped" if the second (external) block is also read.
+    expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("grouped");
+  });
+
+  it("AST: checks ordering within a later block, not just the first", async () => {
+    // Block #1 sorted; block #2 out of order (z before a).
+    const f = await go("multi2.go", `package main\n\nimport (\n\t"fmt"\n)\n\nimport (\n\t"github.com/z/z"\n\t"github.com/a/a"\n)\n`);
+    expect(axis(goImportClassifier.classify(f), "go_ordering")[0]?.pattern).toBe("unordered");
+  });
+
+  it("regex fallback: reads all blocks too", () => {
+    const f = treeless("multi.go", `package main\n\nimport (\n\t"fmt"\n)\n\nimport (\n\t"github.com/a/b"\n)\n`);
+    expect(axis(goImportClassifier.classify(f), "go_grouping")[0]?.pattern).toBe("grouped");
+  });
+});
