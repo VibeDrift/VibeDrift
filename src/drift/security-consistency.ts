@@ -32,21 +32,27 @@
  */
 
 import type { DriftDetector, DriftContext, DriftFinding, DriftFile } from "./types.js";
+import type { SupportedLanguage } from "../core/types.js";
 import { SECURITY_SUBCATEGORIES } from "./types.js";
 import { pickIntentHint } from "./utils.js";
-import { extractJsRoutesAst, extractFileMiddlewareAst, SECURITY_AST } from "./security-ast.js";
-import { extractPythonRoutesAst, extractPythonFileMiddlewareAst } from "./security-ast-python.js";
-import { extractGoRoutesAst, extractGoFileMiddlewareAst } from "./security-ast-go.js";
-import { extractRustRoutesAst, extractRustFileMiddlewareAst } from "./security-ast-rust.js";
+import { extractFileMiddlewareAst } from "./security-ast.js";
+import { extractPythonFileMiddlewareAst } from "./security-ast-python.js";
+import { extractGoFileMiddlewareAst } from "./security-ast-go.js";
+import { extractRustFileMiddlewareAst } from "./security-ast-rust.js";
 import { buildXFileIndex } from "./security-xfile-index.js";
 import type { CrossFileIndex } from "./security-xfile-index.js";
 import { applyRouteSuppressions, buildSuppressionAuditFinding } from "./security-suppression.js";
+import type { RouteInfo, FileMiddleware, ExtractDeps, RouteExtractor } from "./route-extractors/types.js";
+import { MUTATION_METHODS } from "./route-extractors/shared.js";
+import { goRouteExtractor } from "./route-extractors/go.js";
+import { jsRouteExtractor } from "./route-extractors/js.js";
+import { pythonRouteExtractor } from "./route-extractors/python.js";
+import { rustRouteExtractor } from "./route-extractors/rust.js";
 
-// Canonical mutating set (upper-cased), shared with the in-loop classifier via
-// SECURITY_AST.MUTATING so batch and in-loop can never disagree. Includes ALL
-// (Express .all() handles every verb) so an unauthed .all() route is not
-// silently excluded from the auth vote.
-const MUTATION_METHODS = [...SECURITY_AST.MUTATING].map((m) => m.toUpperCase());
+// Re-exported for back-compat: security-ast{,-go,-python,-rust}.ts and
+// security-suppression.ts import these types from "./security-consistency.js".
+export type { RouteInfo, FileMiddleware };
+
 // Body-bearing methods for the validation vote (DELETE usually has no body).
 const BODY_METHODS = ["POST", "PUT", "PATCH", "ALL"];
 
@@ -76,14 +82,6 @@ const HOOK_PHRASE: Record<string, string> = {
 };
 const NEUTRAL_HOOK_PHRASE = "an auth hook";
 
-/** Source language of a route's file, by extension. Null when unknown. */
-function langOfFile(file: string): string | null {
-  if (file.endsWith(".py")) return "python";
-  if (file.endsWith(".go")) return "go";
-  if (file.endsWith(".rs")) return "rust";
-  return null;
-}
-
 /** Sentence appended to an auth finding's recommendation when some deviators are
  *  unsure (their hook body could not be verified). Empty string when none are
  *  hedged, so a confident finding's recommendation is byte-identical. The noun is
@@ -91,12 +89,14 @@ function langOfFile(file: string): string | null {
  *  falling back to the neutral "an auth hook" when the hedged hooks span multiple
  *  languages. `names` is the sorted distinct set of hook names. The terminal reads
  *  the noun + names back out of this sentence (noun-agnostic), so its shape —
- *  "could not be confirmed: <a|an> <noun> (<names>)" — must stay stable. */
-function hedgeRecommendationSuffix(deviators: RouteInfo[]): string {
+ *  "could not be confirmed: <a|an> <noun> (<names>)" — must stay stable.
+ *  `langByFile` maps a route's file to the pipeline-computed `file.language`, so
+ *  the noun reuses that property instead of re-deriving language from the path. */
+function hedgeRecommendationSuffix(deviators: RouteInfo[], langByFile: Map<string, string | null>): string {
   const hedged = deviators.filter((r) => r.authUnsureHook);
   if (hedged.length === 0) return "";
   const names = [...new Set(hedged.map((r) => r.authUnsureHook!))].sort().join(", ");
-  const langs = [...new Set(hedged.map((r) => langOfFile(r.file)))];
+  const langs = [...new Set(hedged.map((r) => langByFile.get(r.file) ?? null))];
   const phrase = langs.length === 1 && langs[0] ? (HOOK_PHRASE[langs[0]] ?? NEUTRAL_HOOK_PHRASE) : NEUTRAL_HOOK_PHRASE;
   return ` ${hedged.length} of these could not be confirmed: ${phrase} (${names}) may authenticate them but its body could not be verified. Double check those hooks before treating the routes as unauthenticated.`;
 }
@@ -121,6 +121,7 @@ function repoHasAuthMachinery(files: DriftFile[]): boolean {
 function analyzeUniformAuthGap(
   routes: RouteInfo[],
   opts: { hasMachinery: boolean; hint: ReturnType<typeof pickIntentHint>; healthPaths: RegExp },
+  langByFile: Map<string, string | null>,
 ): DriftFinding | null {
   const mutating = routes.filter((r) => MUTATION_METHODS.includes(r.method) && !opts.healthPaths.test(r.path));
   const unauthed = mutating.filter((r) => !r.hasAuth);
@@ -156,34 +157,8 @@ function analyzeUniformAuthGap(
       (declared
         ? `${opts.hint!.source}:${opts.hint!.line} declares auth is required. Add auth middleware to these ${unauthed.length} mutating route(s), or mark them explicitly public.`
         : `These ${unauthed.length} mutating route(s) have no auth while the codebase authenticates elsewhere. Add auth middleware, or confirm they are intentionally public.`) +
-      hedgeRecommendationSuffix(unauthed),
+      hedgeRecommendationSuffix(unauthed, langByFile),
   };
-}
-
-export interface FileMiddleware {
-  hasAuth: boolean;
-  hasValidation: boolean;
-  hasRateLimit: boolean;
-}
-
-export interface RouteInfo {
-  method: string;
-  path: string;
-  file: string;
-  line: number;
-  hasAuth: boolean;
-  hasValidation: boolean;
-  hasRateLimit: boolean;
-  hasErrorHandler: boolean;
-  /** Python or Go AST path only: the name of a middleware/hook whose BODY is
-   *  auth-flavored but statically unverifiable (an opaque helper, an imported or
-   *  selector/attribute target, a duplicate def). Present ONLY when
-   *  `hasAuth === false`; `hasAuth === true` always omits it. An "unsure" route
-   *  still counts as not-authed in every vote (never blesses) — this field only
-   *  lets a renderer hedge the finding copy to name the exact middleware the user
-   *  should double-check. Never set on the JS/TS AST path or the regex fallback,
-   *  so those routes serialize byte-identically. */
-  authUnsureHook?: string;
 }
 
 // ─── Phase 1: file-level middleware index ────────────────────────────
@@ -299,280 +274,39 @@ function buildFileMiddlewareIndex(files: DriftFile[]): Map<string, FileMiddlewar
 
 // ─── Route extraction (per-route middleware via proximity) ──────────
 
+// Route extraction dispatched by language. Each per-language module is a
+// self-contained functional RouteExtractor (AST on a clean parse, regex
+// fallback otherwise). JS and TS share one extractor.
+// Every SupportedLanguage must appear here: this is a total Record (not Partial),
+// so adding a language to the union without wiring an extractor is a compile
+// error at this literal rather than a silent "zero routes for that language".
+const ROUTE_EXTRACTORS: Record<SupportedLanguage, RouteExtractor> = {
+  go: goRouteExtractor,
+  javascript: jsRouteExtractor,
+  typescript: jsRouteExtractor,
+  python: pythonRouteExtractor,
+  rust: rustRouteExtractor,
+};
+
 function extractRoutes(
   files: DriftFile[],
   fileMw: Map<string, FileMiddleware>,
   xfile: CrossFileIndex,
 ): RouteInfo[] {
   const routes: RouteInfo[] = [];
+  const deps: ExtractDeps = { fileMw, xfile };
   for (const file of files) {
-    if (!file.language) continue;
-    if (file.language === "go") extractGoRoutes(file, routes, fileMw, xfile);
-    else if (file.language === "javascript" || file.language === "typescript") extractJsRoutes(file, routes, fileMw);
-    else if (file.language === "python") extractPythonRoutes(file, routes, fileMw, xfile);
-    else if (file.language === "rust") extractRustRoutes(file, routes);
+    // `in` guard keeps this runtime-safe for files whose language isn't a
+    // SupportedLanguage (or is null) — those are simply skipped.
+    if (!file.language || !(file.language in ROUTE_EXTRACTORS)) continue;
+    routes.push(...ROUTE_EXTRACTORS[file.language as SupportedLanguage].extract(file, deps));
   }
   return routes;
 }
 
-function extractRustRoutes(file: DriftFile, routes: RouteInfo[]) {
-  // AST ONLY, and ONLY on a CLEAN parse. There is NO regex fallback for Rust
-  // anywhere in this codebase: an absent or errored tree yields zero Rust routes
-  // (unchanged from before this module was wired in). A parse error can only
-  // shrink the recognized route set for that file, never emit a wrong route, and
-  // Rust has no legacy regex path whose over-blesses we would need to preserve.
-  // No FileMiddleware argument: Axum .layer scope is CHAIN-scoped, so the AST path
-  // computes covering-layer auth from the tree itself (a file-level OR would
-  // false-bless siblings a layer never wrapped, and the seam-2 index entry is
-  // all-false for rust anyway).
-  if (file.tree && !file.tree.rootNode.hasError) {
-    routes.push(...extractRustRoutesAst(file.tree, file.relativePath));
-  }
-}
+// Per-language route extractors now live in ./route-extractors/{go,js,python,rust}.ts
+// behind the RouteExtractor interface, dispatched via ROUTE_EXTRACTORS above.
 
-function inheritedAuth(perRoute: boolean, fileMw: FileMiddleware | undefined): boolean {
-  return perRoute || (fileMw?.hasAuth ?? false);
-}
-function inheritedValidation(perRoute: boolean, fileMw: FileMiddleware | undefined): boolean {
-  return perRoute || (fileMw?.hasValidation ?? false);
-}
-function inheritedRateLimit(perRoute: boolean, fileMw: FileMiddleware | undefined): boolean {
-  return perRoute || (fileMw?.hasRateLimit ?? false);
-}
-
-// ─── Regex-fallback comment skipping ─────────────────────────────────
-// The regex route extractors (used when tree-sitter has no clean parse) match
-// route-shaped text line by line. A commented-out registration must NOT become
-// a phantom route — it would steal a @vibedrift-public annotation from the real
-// route below it (see #64 item 4). JS/TS and Go share C-style comments, so their
-// markers live in one place; Python differs (# line comments, """/''' docstrings).
-const C_STYLE_COMMENT_MARKERS = ["//", "/*"] as const; // JS, TS, Go
-const PYTHON_COMMENT_MARKERS = ["#"] as const;
-
-/** True when a source line is a line comment for the given markers. */
-function isCommentLine(line: string, markers: readonly string[]): boolean {
-  const trimmed = line.trimStart();
-  return markers.some((m) => trimmed.startsWith(m));
-}
-
-function extractGoRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>, xfile: CrossFileIndex) {
-  // AST only on a CLEAN parse: tree-sitter always returns a tree for broken Go
-  // (with ERROR nodes), and error recovery SWALLOWS later valid registrations
-  // into a broken call's argument_list as clean-looking nested calls (a
-  // cross-bless hazard). Any parse error routes the whole file to the regex,
-  // byte-identical to today's behavior INCLUDING the regex path's known
-  // over-blesses (see the pinned-legacy tests).
-  if (file.tree && !file.tree.rootNode.hasError) {
-    // No FileMiddleware argument: the AST path computes receiver-scoped
-    // inheritance from the tree itself (a file-level OR would false-bless
-    // mixed-receiver files, and the index entry may carry cross-language noise
-    // for non-go files). The cross-file index lets an imported package
-    // middleware selector resolve to its in-repo defining body (blessing still
-    // requires that body to verifiably reject); an unresolved / external / index-
-    // disabled selector stays UNSURE, byte-identical to the in-file-only path.
-    routes.push(...extractGoRoutesAst(file.tree, file.relativePath, xfile));
-    return;
-  }
-  extractGoRoutesRegex(file, routes, fileMw.get(file.relativePath));
-}
-
-function extractGoRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddleware: FileMiddleware | undefined) {
-  const lines = file.content.split("\n");
-  const echoPattern = /\.\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(\s*"([^"]+)"/;
-  const gorillaPattern = /HandleFunc\s*\(\s*"([^"]+)".*\.Methods\s*\(\s*"(\w+)"/;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Skip comment lines — prevents phantom routes from commented-out code.
-    if (isCommentLine(line, C_STYLE_COMMENT_MARKERS)) continue;
-    let method = "", path = "";
-    const echoMatch = line.match(echoPattern);
-    if (echoMatch) { method = echoMatch[1]; path = echoMatch[2]; }
-    const gorillaMatch = line.match(gorillaPattern);
-    if (gorillaMatch) { path = gorillaMatch[1]; method = gorillaMatch[2]; }
-    if (!method || !path) continue;
-
-    const context = lines.slice(Math.max(0, i - 10), i + 10).join("\n");
-    const handlerContent = findHandlerContent(file.content, path);
-
-    const perAuth = /[Aa]uth|[Tt]oken|require[A-Z]|middleware\.\w*[Aa]uth/.test(context);
-    const perVal = /[Bb]ind|[Vv]alidat|[Pp]arse/.test(handlerContent);
-    const perRate = /[Rr]ate[Ll]imit|[Tt]hrottle/.test(context + handlerContent);
-
-    routes.push({
-      method, path, file: file.relativePath, line: i + 1,
-      hasAuth: inheritedAuth(perAuth, fileMiddleware),
-      hasValidation: inheritedValidation(perVal, fileMiddleware),
-      hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
-      hasErrorHandler: /catch|err\s*!=\s*nil|try|except|\.catch/.test(handlerContent),
-    });
-  }
-}
-
-function extractJsRoutes(file: DriftFile, routes: RouteInfo[], fileMw: Map<string, FileMiddleware>) {
-  const fileMiddleware = fileMw.get(file.relativePath);
-  if (file.tree) {
-    routes.push(...extractJsRoutesAst(file.tree, file.relativePath, fileMiddleware));
-    return;
-  }
-  extractJsRoutesRegex(file, routes, fileMiddleware);
-}
-
-function extractJsRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddleware: FileMiddleware | undefined) {
-  const lines = file.content.split("\n");
-  const expressPattern = /\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]/;
-
-  for (let i = 0; i < lines.length; i++) {
-    // Skip comment lines — prevents phantom routes from commented-out code.
-    if (isCommentLine(lines[i], C_STYLE_COMMENT_MARKERS)) continue;
-    const match = lines[i].match(expressPattern);
-    if (!match) continue;
-    const path = match[1];
-    const method = match[0].match(/\.(get|post|put|patch|delete|all)/)?.[1]?.toUpperCase() ?? "ANY";
-    const context = lines.slice(Math.max(0, i - 5), i + 20).join("\n");
-
-    const perAuth = /(?:requireAuth|isAuthenticated|passport\.authenticate|verifyToken|jwt|authMiddleware)/.test(context);
-    const perVal = /validate|joi|zod|yup|celebrate|body\(|query\(/.test(context);
-    const perRate = /rateLimit|throttle|limiter/.test(context);
-
-    routes.push({
-      method, path, file: file.relativePath, line: i + 1,
-      hasAuth: inheritedAuth(perAuth, fileMiddleware),
-      hasValidation: inheritedValidation(perVal, fileMiddleware),
-      hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
-      hasErrorHandler: /catch|try|\.catch|next\(err/.test(context),
-    });
-  }
-}
-
-/** Text inside a Python route decorator's parentheses: from the first "(" on
- *  line `start` to its matching ")", spanning continuation lines. Bounded by
- *  paren depth so `methods=` is read from THIS decorator only and can never
- *  bleed into an adjacent route's decorator. Parens inside string literals
- *  (e.g. a route path like "/weird(path") are skipped, so an unbalanced literal
- *  paren cannot throw off the depth count and leak into the next route. */
-function balancedDecoratorArgs(lines: string[], start: number): string {
-  let depth = 0;
-  let started = false;
-  let out = "";
-  let quote: string | null = null; // active string-literal quote char, or null
-  for (let j = start; j < lines.length; j++) {
-    const line = lines[j];
-    for (let k = 0; k < line.length; k++) {
-      const ch = line[k];
-      if (quote) {
-        // Inside a string literal: only a matching unescaped quote ends it;
-        // parens here are path/text, not structure.
-        if (ch === "\\") {
-          if (started) out += ch + (line[k + 1] ?? "");
-          k++; // skip the escaped char
-          continue;
-        }
-        if (ch === quote) quote = null;
-        if (started) out += ch;
-        continue;
-      }
-      if (ch === '"' || ch === "'") {
-        quote = ch;
-        if (started) out += ch;
-        continue;
-      }
-      if (ch === "(") {
-        depth++;
-        started = true;
-      } else if (ch === ")") {
-        depth--;
-      }
-      if (started) out += ch;
-      if (started && depth === 0) return out;
-    }
-    out += " ";
-    if (j - start > 6) return out; // defensive cap for a malformed decorator
-  }
-  return out;
-}
-
-function extractPythonRoutes(
-  file: DriftFile,
-  routes: RouteInfo[],
-  fileMw: Map<string, FileMiddleware>,
-  xfile: CrossFileIndex,
-) {
-  // AST only on a CLEAN parse: tree-sitter always returns a tree for broken
-  // Python (with ERROR nodes), and error recovery can erase the whole file's
-  // decorator structure or merge adjacent handlers' decorators into one
-  // decorated_definition (a cross-bless hazard). Any parse error routes the
-  // whole file to the regex, byte-identical to today's behavior INCLUDING the
-  // regex path's known over-blesses (see the pinned-legacy test, Task 6).
-  if (file.tree && !file.tree.rootNode.hasError) {
-    // No FileMiddleware argument: the AST path computes receiver-scoped
-    // inheritance from the tree itself (a file-level OR would false-bless
-    // mixed-receiver files, and the index entry may carry cross-language noise
-    // for non-python files).
-    routes.push(...extractPythonRoutesAst(file.tree, file.relativePath, xfile));
-    return;
-  }
-  extractPythonRoutesRegex(file, routes, fileMw.get(file.relativePath));
-}
-
-function extractPythonRoutesRegex(file: DriftFile, routes: RouteInfo[], fileMiddleware: FileMiddleware | undefined) {
-  const lines = file.content.split("\n");
-  const routePattern = /@\w+\.(?:route|get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/;
-
-  let inDocstring = false;
-  for (let i = 0; i < lines.length; i++) {
-    // Track triple-quoted docstring blocks: a route-shaped line inside a
-    // docstring is documentation, not a real registration. An odd count of
-    // triple-quotes on a line toggles the block state.
-    const tripleQuotes = (lines[i].match(/"""|'''/g) ?? []).length;
-    if (inDocstring) {
-      if (tripleQuotes % 2 === 1) inDocstring = false;
-      continue;
-    }
-    if (tripleQuotes % 2 === 1) { inDocstring = true; continue; }
-    // Skip comment lines — Python uses '#'. Prevents phantom routes from
-    // commented-out code.
-    if (isCommentLine(lines[i], PYTHON_COMMENT_MARKERS)) continue;
-    const match = lines[i].match(routePattern);
-    if (!match) continue;
-    const path = match[1];
-    // Flask's @app.route defaults to GET when no methods= kwarg is present, NOT an
-    // unknown "ANY". Decorator-verb style (@app.post) resolves directly; the
-    // methods=[...] kwarg (Flask/others) is parsed so a mutating verb classifies
-    // the route as mutating. The kwarg is read from the route's own decorator
-    // via balanced paren scanning, so it can never bleed into an adjacent
-    // route's decorator even when routes sit right next to each other.
-    const decoratorVerb = lines[i].match(/\.(get|post|put|patch|delete)\s*\(/)?.[1]?.toUpperCase();
-    let method = decoratorVerb ?? "GET";
-    const decoratorArgs = balancedDecoratorArgs(lines, i);
-    const methodsKw = decoratorArgs.match(/methods\s*=\s*\[([^\]]*)\]/i);
-    if (methodsKw) {
-      const verbs = (methodsKw[1].match(/["'](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["']/gi) ?? [])
-        .map((v) => v.replace(/["']/g, "").toUpperCase());
-      const mutating = verbs.find((v) => MUTATION_METHODS.includes(v));
-      method = mutating ?? verbs[0] ?? method;
-    }
-    const context = lines.slice(i, Math.min(lines.length, i + 30)).join("\n");
-
-    const perAuth = /login_required|jwt_required|@requires|permission|token/.test(context);
-    const perVal = /pydantic|validate|Schema|Serializer/.test(context);
-    const perRate = /rate_limit|throttle|limiter/.test(context);
-
-    routes.push({
-      method, path, file: file.relativePath, line: i + 1,
-      hasAuth: inheritedAuth(perAuth, fileMiddleware),
-      hasValidation: inheritedValidation(perVal, fileMiddleware),
-      hasRateLimit: inheritedRateLimit(perRate, fileMiddleware),
-      hasErrorHandler: /try|except|raise/.test(context),
-    });
-  }
-}
-
-function findHandlerContent(fullContent: string, routePath: string): string {
-  const idx = fullContent.indexOf(routePath);
-  if (idx === -1) return "";
-  return fullContent.slice(Math.max(0, idx - 500), Math.min(fullContent.length, idx + 2000));
-}
 
 // ─── Phase 3: dominance vote per security property, scoped per directory ──
 
@@ -600,6 +334,7 @@ function analyzeSecurityProperty(
   propertyName: string,
   getter: (r: RouteInfo) => boolean,
   excludePaths: RegExp,
+  langByFile: Map<string, string | null>,
 ): DriftFinding | null {
   const applicableRoutes = routes.filter((r) => !excludePaths.test(r.path));
   if (applicableRoutes.length < 2) return null;
@@ -635,7 +370,7 @@ function analyzeSecurityProperty(
     dominantFiles: [...new Set(withProperty.map((r) => r.file))].sort().slice(0, 3),
     recommendation:
       `${withProperty.length} of ${applicableRoutes.length} routes have ${propertyName}. Review ${withoutProperty.length} unprotected routes — apply per-route middleware or move them under a router that does.` +
-      (propertyName === SECURITY_SUBCATEGORIES.auth ? hedgeRecommendationSuffix(withoutProperty) : ""),
+      (propertyName === SECURITY_SUBCATEGORIES.auth ? hedgeRecommendationSuffix(withoutProperty, langByFile) : ""),
   };
 }
 
@@ -647,6 +382,9 @@ export const securityConsistency: DriftDetector = {
   detect(ctx: DriftContext): DriftFinding[] {
     const findings: DriftFinding[] = [];
     const fileMw = buildFileMiddlewareIndex(ctx.files);
+    // path → pipeline-computed file.language, so recommendation copy reuses
+    // file.language instead of re-deriving language from the path extension.
+    const langByFile = new Map<string, string | null>(ctx.files.map((f) => [f.relativePath, f.language]));
     // Repo-wide cross-file symbol index: lets the Python AST route extractor
     // resolve an imported before_request hook / FastAPI dependency to its in-repo
     // defining body, but ONLY when resolution is exact and unambiguous (every
@@ -690,7 +428,7 @@ export const securityConsistency: DriftDetector = {
       // reads in the denominator and made the "X of Y mutating routes" line false.
       // Same set as analyzeUniformAuthGap so the primary vote and its fallback agree.
       const groupAuthRoutes = group.filter((r) => MUTATION_METHODS.includes(r.method));
-      const authFinding = analyzeSecurityProperty(groupAuthRoutes, SECURITY_SUBCATEGORIES.auth, (r) => r.hasAuth, healthPaths);
+      const authFinding = analyzeSecurityProperty(groupAuthRoutes, SECURITY_SUBCATEGORIES.auth, (r) => r.hasAuth, healthPaths, langByFile);
       if (authFinding) {
         findings.push(authFinding);
         continue;
@@ -709,18 +447,18 @@ export const securityConsistency: DriftDetector = {
         hasMachinery: repoHasAuthMachinery(ctx.files),
         hint: authHint,
         healthPaths,
-      });
+      }, langByFile);
       if (gap) findings.push(gap);
     }
 
     for (const group of groups) {
       const groupMutationRoutes = group.filter((r) => BODY_METHODS.includes(r.method));
-      const valFinding = analyzeSecurityProperty(groupMutationRoutes, SECURITY_SUBCATEGORIES.validation, (r) => r.hasValidation, healthPaths);
+      const valFinding = analyzeSecurityProperty(groupMutationRoutes, SECURITY_SUBCATEGORIES.validation, (r) => r.hasValidation, healthPaths, langByFile);
       if (valFinding) findings.push(valFinding);
     }
 
     for (const group of groups) {
-      const rateLimitFinding = analyzeSecurityProperty(group, SECURITY_SUBCATEGORIES.rateLimit, (r) => r.hasRateLimit, healthPaths);
+      const rateLimitFinding = analyzeSecurityProperty(group, SECURITY_SUBCATEGORIES.rateLimit, (r) => r.hasRateLimit, healthPaths, langByFile);
       if (rateLimitFinding) findings.push(rateLimitFinding);
     }
 
