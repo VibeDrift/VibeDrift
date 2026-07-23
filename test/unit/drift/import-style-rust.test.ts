@@ -90,3 +90,31 @@ describe("Rust use grouping (rust_grouping)", () => {
   });
 });
 
+
+describe("Rust relative-glob idioms are excluded (precision)", () => {
+  it("rust_glob: idiomatic `use super::*;` (test re-import) is not counted as a glob", () => {
+    const f = treeless("src/a.rs", `use crate::foo::Bar;\nuse crate::baz::Qux;\nuse super::*;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("rust_glob: `use self::Enum::*;` (enum-variant scoping) is not counted as a glob", () => {
+    const f = treeless("src/a.rs", `use crate::foo::Bar;\nuse crate::baz::Qux;\nuse self::Color::*;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("explicit");
+  });
+
+  it("rust_glob: a non-relative glob (crate::/external ::*) still flags as glob", () => {
+    const f = treeless("src/a.rs", `use crate::prelude::*;\nuse std::fmt::Debug;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_glob")[0]?.pattern).toBe("glob");
+  });
+
+  it("rust_use_path: a `use super::*;` glob does not count as a relative use", () => {
+    // The glob is excluded, leaving <2 intra-crate uses → not decidable.
+    const f = treeless("src/a.rs", `use crate::foo::Bar;\nuse super::*;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")).toEqual([]);
+  });
+
+  it("rust_use_path: a non-glob `use super::foo;` still counts as relative", () => {
+    const f = treeless("src/a.rs", `use crate::foo::Bar;\nuse super::helper;\n`);
+    expect(axis(rustImportClassifier.classify(f), "rust_use_path")[0]?.pattern).toBe("crate");
+  });
+});
