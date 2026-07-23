@@ -16,6 +16,14 @@ paths = [
   '''test/unit/analyzers/security\.test\.ts''',
   '''test/unit/analyzers/security-floor\.test\.ts''',
   '''test/calibration/injectors\.ts''',
+  # Drift Sessions tests: synthetic credential fixtures for the secret masker /
+  # prompt normalizer / hook (verified: no real secrets — dummy api_key=, PEM,
+  # and provider-key shapes used only to prove the masker catches them).
+  '''test/unit/session/mask\.test\.ts''',
+  '''test/unit/session/normalize\.test\.ts''',
+  '''test/unit/session/decision\.test\.ts''',
+  '''test/unit/session/upload-schema\.test\.ts''',
+  '''test/integration/session-hook\.test\.ts''',
   '''\.env\.example$''',
   '''docs/handbook/.*\.md''',
 ]
