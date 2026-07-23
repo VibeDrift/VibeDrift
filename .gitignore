@@ -3,10 +3,10 @@ dist/
 *.tgz
 .DS_Store
 
-# Local env / secrets
+# Local env / secrets (all variants; keep the example template tracked)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Generated scan reports & local cache (both dir spellings)
 vibe-drift-report.html
