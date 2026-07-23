@@ -15,19 +15,10 @@ import type { FileMiddleware } from "./types.js";
 export const MUTATION_METHODS = [...SECURITY_AST.MUTATING].map((m) => m.toUpperCase());
 
 // ─── Regex-fallback comment skipping ─────────────────────────────────
-// The regex route extractors (used when tree-sitter has no clean parse) match
-// route-shaped text line by line. A commented-out registration must NOT become
-// a phantom route — it would steal a @vibedrift-public annotation from the real
-// route below it (see #64 item 4). JS/TS and Go share C-style comments, so their
-// markers live in one place; Python differs (# line comments, """/''' docstrings).
-export const C_STYLE_COMMENT_MARKERS = ["//", "/*"] as const; // JS, TS, Go
-export const PYTHON_COMMENT_MARKERS = ["#"] as const;
-
-/** True when a source line is a line comment for the given markers. */
-export function isCommentLine(line: string, markers: readonly string[]): boolean {
-  const trimmed = line.trimStart();
-  return markers.some((m) => trimmed.startsWith(m));
-}
+// Comment-line detection is shared with the import-style classifiers, so it
+// lives in comment-markers.ts (single source of truth) and is re-exported here
+// — the per-language route extractors keep importing it from ./shared.js.
+export { C_STYLE_COMMENT_MARKERS, PYTHON_COMMENT_MARKERS, isCommentLine } from "../comment-markers.js";
 
 // ─── Phase 2: inheritance resolution ─────────────────────────────────
 // A route's effective protection is its per-route middleware UNION the

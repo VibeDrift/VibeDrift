@@ -1,80 +1,44 @@
 /**
- * Import-style consistency detector (directory-scoped).
+ * Import-style consistency detector (directory-scoped, multi-language).
  *
- * Classifies each JS/TS file's dominant import path style:
- *   - "relative" — uses `./` / `../` paths predominantly
- *   - "alias"    — uses `@/` / `~/` path aliases predominantly
+ * Language-agnostic core: each file is handed to its language's
+ * `ImportStyleClassifier` (see `import-style/`), which emits zero or more
+ * per-axis classifications. The detector then runs one **dominance vote per
+ * axis** — a directory where 5 files use one convention and 1 deviates is drift
+ * within that directory, while different subsystems may legitimately differ.
+ * A file can be consistent on one axis (e.g. path style) and drift on another
+ * (e.g. grouping), so axes are voted independently and each is its own
+ * `subCategory`.
  *
- * Runs the dominance vote **per directory** (L1.5-S1). A directory where
- * 5 files use aliases and 1 uses relative paths is drift within that
- * directory. If `src/routes/` uses aliases while `src/utils/` uses relative
- * paths, neither is flagged because each is internally consistent —
- * different subsystems can legitimately pick different import strategies.
- *
- * Minimum 3 files per directory; dominance ≥ 70%.
+ * Per axis: minimum 3 files; dominance ≥ 70%; high project-wide entropy emits a
+ * single "no dominant convention" finding instead of per-directory ones.
  */
 
-import type { DriftDetector, DriftContext, DriftFinding, DriftFile, Evidence } from "./types.js";
-import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, isAnalyzableSource, noConventionFinding, pickIntentHint } from "./utils.js";
+import type { DriftDetector, DriftContext, DriftFinding, Evidence } from "./types.js";
+import type { SupportedLanguage } from "../core/types.js";
+import { buildDirectoryScopedVote, buildFileAgeMap, buildPatternDistribution, entropyGate, noConventionFinding, pickIntentHint } from "./utils.js";
+import type { ImportStyleClassifier } from "./import-style/types.js";
+import { AXES, type Axis, type AxisMeta } from "./import-style/labels.js";
+import { jsImportClassifier } from "./import-style/js.js";
+import { goImportClassifier } from "./import-style/go.js";
+import { pythonImportClassifier } from "./import-style/python.js";
+import { rustImportClassifier } from "./import-style/rust.js";
 
-type ImportPathStyle = "relative" | "alias";
-
-interface FileImportProfile {
-  file: string;
-  pathStyle: ImportPathStyle | null;
-  evidence: Evidence[];
-}
-
-function analyzeImports(file: DriftFile): FileImportProfile | null {
-  if (!file.language || !["javascript", "typescript"].includes(file.language)) return null;
-  if (!isAnalyzableSource(file.relativePath)) return null;
-
-  const lines = file.content.split("\n");
-  let relativeCount = 0;
-  let aliasCount = 0;
-  const evidence: Evidence[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-
-    const importMatch = line.match(/^import\s+(?!type\s)/);
-    if (!importMatch) continue;
-
-    const fromMatch = line.match(/from\s+["']([^"']+)["']/);
-    if (!fromMatch) continue;
-    const importPath = fromMatch[1];
-
-    // Skip node_modules / external packages
-    if (!importPath.startsWith(".") && !importPath.startsWith("@/") && !importPath.startsWith("~/")) continue;
-
-    if (importPath.startsWith("./") || importPath.startsWith("../")) {
-      relativeCount++;
-    } else if (importPath.startsWith("@/") || importPath.startsWith("~/")) {
-      aliasCount++;
-    }
-
-    if (evidence.length < 3) {
-      evidence.push({ line: i + 1, code: line });
-    }
-  }
-
-  const totalLocalImports = relativeCount + aliasCount;
-  if (totalLocalImports < 3) return null;
-
-  // Use the same classification as before: majority wins, with pure-alias
-  // classified as alias even if 0 relative.
-  const pathStyle: ImportPathStyle =
-    aliasCount === 0 ? "relative" :
-    relativeCount === 0 ? "alias" :
-    relativeCount >= aliasCount ? "relative" : "alias";
-
-  return { file: file.relativePath, pathStyle, evidence };
-}
-
-const PATH_STYLE_NAMES: Record<ImportPathStyle, string> = {
-  relative: "relative paths (./)",
-  alias: "path aliases (@/)",
+// Total Record — every SupportedLanguage has an import-style classifier, so
+// adding a language to the union without one is a compile error here (rather
+// than silently going un-analyzed). js and ts share one classifier.
+const CLASSIFIERS: Record<SupportedLanguage, ImportStyleClassifier> = {
+  javascript: jsImportClassifier,
+  typescript: jsImportClassifier,
+  go: goImportClassifier,
+  python: pythonImportClassifier,
+  rust: rustImportClassifier,
 };
+
+interface AxisProfile {
+  file: string;
+  patterns: { pattern: string; evidence: Evidence[] }[];
+}
 
 export const importConsistency: DriftDetector = {
   id: "import-consistency",
@@ -82,58 +46,76 @@ export const importConsistency: DriftDetector = {
   category: "import_style",
 
   detect(ctx: DriftContext): DriftFinding[] {
-    const fileProfiles: FileImportProfile[] = [];
+    // Classify every file across whatever axes its language decides, bucketed by axis.
+    const byAxis = new Map<Axis, AxisProfile[]>();
     for (const file of ctx.files) {
-      const p = analyzeImports(file);
-      if (p && p.pathStyle) fileProfiles.push(p);
+      if (!file.language || !(file.language in CLASSIFIERS)) continue;
+      const classifier = CLASSIFIERS[file.language as SupportedLanguage];
+      for (const c of classifier.classify(file)) {
+        const list = byAxis.get(c.axis) ?? [];
+        list.push({ file: file.relativePath, patterns: [{ pattern: c.pattern, evidence: c.evidence }] });
+        byAxis.set(c.axis, list);
+      }
     }
-    if (fileProfiles.length < 3) return [];
 
-    const profiles = fileProfiles.map((p) => ({
-      file: p.file,
-      patterns: [{ pattern: p.pathStyle!, evidence: p.evidence }],
-    }));
+    const findings: DriftFinding[] = [];
+    const fileAges = buildFileAgeMap(ctx);
+    // The import_style intent hint's vocabulary (e.g. "alias"/"relative") only
+    // describes the axis it names, so it is applied per-axis below — never as a
+    // blanket seed across unrelated axes (which would inject a phantom pattern
+    // and bypass the dominance threshold on, say, go_grouping).
+    const hintPattern = pickIntentHint(ctx, "import_style")?.pattern;
 
-    // Entropy gate (L1.5-A1). High entropy = no dominant import-path convention.
-    // For a self-consistency score that is the FLOOR of consistency, so emit one
-    // category-level "no convention" finding whose deviation IS the entropy
-    // (guarded by a minimum sample so a tiny split reads as insufficient data,
-    // not chaos).
-    const projectDist = buildPatternDistribution(profiles);
-    const gate = entropyGate(projectDist);
-    if (gate.decision === "no_convention") {
-      return noConventionFinding({
-        detector: "import_style",
-        subCategory: "path_style",
-        driftCategory: "import_style",
-        axisLabel: "import path style",
-        totalFiles: profiles.length,
-        gate,
-        recommendation: "Establish a single import-path convention (alias or relative) and align files to it.",
+    for (const [axis, profiles] of byAxis) {
+      if (profiles.length < 3) continue;
+      const meta: AxisMeta = AXES[axis]; // total by construction — axis is a key of AXES
+
+      // Seed only the axis this declaration actually applies to.
+      const seededPattern = hintPattern && hintPattern in meta.patternNames ? hintPattern : undefined;
+
+      // Entropy gate: high project-wide entropy means no dominant convention,
+      // so emit one category-level finding whose deviation IS the entropy
+      // (guarded by a minimum sample inside noConventionFinding).
+      const gate = entropyGate(buildPatternDistribution(profiles));
+      if (gate.decision === "no_convention") {
+        findings.push(...noConventionFinding({
+          detector: "import_style",
+          subCategory: meta.subCategory,
+          driftCategory: "import_style",
+          axisLabel: meta.axisLabel,
+          totalFiles: profiles.length,
+          gate,
+          recommendation: meta.noConventionRecommendation,
+        }));
+        continue;
+      }
+
+      const votes = buildDirectoryScopedVote(profiles, meta.patternNames, {
+        minGroupSize: 3,
+        dominanceThreshold: 0.7,
+        fileAges,
+        seededPattern,
       });
+
+      for (const v of votes) {
+        findings.push({
+          detector: "import_style",
+          subCategory: meta.subCategory,
+          driftCategory: "import_style",
+          severity: v.deviators.length >= 3 ? "warning" : "info",
+          confidence: gate.confidence,
+          finding: `${meta.headline} in ${v.directory}/: ${v.dominantCount} files use ${meta.patternNames[v.dominant]}, ${v.deviators.length} deviate`,
+          dominantPattern: meta.patternNames[v.dominant],
+          dominantCount: v.dominantCount,
+          totalRelevantFiles: v.totalFiles,
+          consistencyScore: v.consistencyScore,
+          deviatingFiles: v.deviators,
+          dominantFiles: v.dominantFiles,
+          recommendation: `Standardize ${v.directory}/ on ${meta.patternNames[v.dominant]} for consistency.`,
+        });
+      }
     }
 
-    const votes = buildDirectoryScopedVote(profiles, PATH_STYLE_NAMES, {
-      minGroupSize: 3,
-      dominanceThreshold: 0.7,
-      fileAges: buildFileAgeMap(ctx),
-      seededPattern: pickIntentHint(ctx, "import_style")?.pattern,
-    });
-
-    return votes.map((v) => ({
-      detector: "import_style",
-      subCategory: "path_style",
-      driftCategory: "import_style",
-      severity: v.deviators.length >= 3 ? "warning" : "info",
-      confidence: gate.confidence,
-      finding: `Import path style in ${v.directory}/: ${v.dominantCount} files use ${PATH_STYLE_NAMES[v.dominant]}, ${v.deviators.length} deviate`,
-      dominantPattern: PATH_STYLE_NAMES[v.dominant],
-      dominantCount: v.dominantCount,
-      totalRelevantFiles: v.totalFiles,
-      consistencyScore: v.consistencyScore,
-      deviatingFiles: v.deviators,
-      dominantFiles: v.dominantFiles,
-      recommendation: `Standardize ${v.directory}/ on ${PATH_STYLE_NAMES[v.dominant]} for consistency.`,
-    }));
+    return findings;
   },
 };

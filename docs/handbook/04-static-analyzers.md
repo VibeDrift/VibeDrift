@@ -222,4 +222,4 @@ Example flagged: `return "placeholder";` inside a production request handler.
 | `implementation-gap` | hygiene | Intent Clarity | 1 | all | markers at 0.95 confidence |
 
 > [!NOTE]
-> The `Languages` column is where each analyzer's checks actually fire, not just where its files parse. `error-handling` is JS/TS because its patterns (empty `catch`, un-awaited async) are JavaScript shapes; the equivalent error-handling checks for Go, Python, and Rust live in `language-specific`. Import analysis (`imports`, and the `import-consistency` drift detector) is JS/TS only; there is no import-style or convention check for Python, Go, or Rust yet.
+> The `Languages` column is where each analyzer's checks actually fire, not just where its files parse. `error-handling` is JS/TS because its patterns (empty `catch`, un-awaited async) are JavaScript shapes; the equivalent error-handling checks for Go, Python, and Rust live in `language-specific`. The `imports` analyzer is JS/TS only. The `import-consistency` drift detector, by contrast, now checks import style across JS/TS, Go, Python, and Rust (see the Import style section in the drift chapter).

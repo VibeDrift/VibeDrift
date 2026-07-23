@@ -14,11 +14,6 @@
   repos where the gate fires, self-heals on the next scan. If it warrants suppression,
   fold into the next SCORING_VERSION bump so diffScans refuses the pair.
 
-- **Import-style drift is JS/TS only ([#56](https://github.com/VibeDrift/VibeDrift/issues/56)).** No import
-  convention check for Python, Go, or Rust (`imports` analyzer and the `import-consistency` detector are both
-  JS/TS-gated). Other languages get import parsing only for dependency/dead-code, not a style signal. Candidate
-  analyzer, tracked in the issue.
-
 - **`test/calibration/README.md` drift.** Sample output shows a "≥5pt" monotonic drop (the gate in
   `run.ts` is 3.0) and a "drop a generator in `generators/`" section references a directory that
   does not exist (injectors live in `injectors.ts`).

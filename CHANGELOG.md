@@ -37,6 +37,17 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## 0.16.3 — 2026-07-22
 
+### Added
+
+- **Import-style drift now covers Go, Python, and Rust** (previously JS/TS only). The
+  `import-consistency` detector is now a language-agnostic, per-axis core with one classifier
+  per language: Go import grouping + gofmt ordering; Python absolute-vs-relative paths +
+  wildcard imports; Rust glob / intra-crate-path (`crate::` vs `super::`/`self::`) / use-grouping
+  conventions. Each axis is voted independently (directory-scoped dominance + entropy gate), so a
+  file can be consistent on one dimension and drift on another. JS/TS behavior is unchanged and
+  now also reads CommonJS `require()` alongside ES imports. Idiomatic Rust globs (`use super::*;`
+  in tests, external `::prelude::*`) are excluded to avoid false positives. Closes #56.
+
 ### Fixed
 
 - **Go multi-module repos no longer get false "imports not in go.mod" errors.** The

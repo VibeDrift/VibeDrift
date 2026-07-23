@@ -216,9 +216,16 @@ If `deleteUser` never appears in any route registration, VibeDrift reports a pha
 
 ### Import style
 
-**File:** `src/drift/import-consistency.ts`. **Drift:** a file whose local-import path style deviates from its directory peers: `relative` (`./`, `../`) versus `alias` (`@/`, `~/`). JS/TS only. `import type` lines are skipped (type-only imports vanish at build time and often follow tooling conventions), and external package imports are skipped because they have no path style choice to make.
+**File:** `src/drift/import-consistency.ts`, with per-language classifiers in `src/drift/import-style/`. **Drift:** a file whose import style deviates from its directory peers on any one of several independent **axes**. Axes are voted separately, so a file can be consistent on one dimension and drift on another:
 
-**Algorithm and thresholds:** a file needs at least 3 local imports to be classified, and its majority style wins. The detector needs at least 3 profiled files. A project-level entropy gate runs first: high entropy emits one "no dominant import path style" finding instead of per-directory flags. Otherwise a directory-scoped vote runs at 3 / 0.7 with temporal weighting and intent seeding. Severity `warning` at 3 or more deviators, else `info`; confidence comes from the entropy gate.
+- **JS/TS** — `path_style`: `relative` (`./`, `../`) versus `alias` (`@/`, `~/`), for both ES `import … from` and CommonJS `require()`. `import type` lines are skipped (they vanish at build time), as are external packages (no path-style choice to make).
+- **Go** — `go_grouping` (stdlib/external separated into blank-line groups vs one flat block) and `go_ordering` (gofmt byte-order within each group).
+- **Python** — `py_path_style` (absolute `from pkg.mod` vs relative `from .mod`) and `py_wildcard` (`from x import *` vs explicit names).
+- **Rust** — `rust_glob` (`use …::*` vs explicit; idiomatic relative globs and external `::prelude::*` are excluded), `rust_use_path` (`crate::` vs `super::`/`self::`), and `rust_grouping` (origin-grouped vs flat).
+
+Each classifier is AST-first with a regex fallback (`src/drift/import-style/{js,go,python,rust}.ts`), behind a shared `ImportStyleClassifier` interface dispatched by language.
+
+**Algorithm and thresholds:** everything below runs **per axis**. A file needs at least 3 local imports to be classified on the JS/TS path axis (other axes have their own minimums), and its majority style wins. Each axis needs at least 3 profiled files. A project-level entropy gate runs first: high entropy emits one "no dominant convention" finding for that axis instead of per-directory flags. Otherwise a directory-scoped vote runs at 3 / 0.7 with temporal weighting; intent seeding applies only to the axis a declared convention names (e.g. an `alias` declaration seeds `path_style`, never `go_grouping`). Severity `warning` at 3 or more deviators, else `info`; confidence comes from the entropy gate.
 
 **Before** (in `src/routes/`, where five peers import through the alias):
 
