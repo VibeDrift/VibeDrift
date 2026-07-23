@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,7 +19,7 @@ import { getBaseline, __clearBaselineCache, invalidateBaselineMem } from "../../
 describe("baseline provider", () => {
   let repo: string;
   beforeAll(async () => {
-    repo = mkdtempSync(join(tmpdir(), "vd-provider-"));
+    repo = realpathSync(mkdtempSync(join(tmpdir(), "vd-provider-")));
     writeFileSync(join(repo, "a.ts"), "export async function a(){ return await fetch('/x'); }\n");
     writeFileSync(join(repo, "b.ts"), "export async function b(){ return await fetch('/y'); }\n");
     writeFileSync(join(repo, "c.ts"), "export function c(){ return fetch('/z').then(r => r.json()); }\n");
@@ -36,7 +36,7 @@ describe("baseline provider", () => {
   });
 
   it("lazily BUILDS a baseline on first call for a repo with code but no prior scan", async () => {
-    const fresh = mkdtempSync(join(tmpdir(), "vd-lazy-"));
+    const fresh = realpathSync(mkdtempSync(join(tmpdir(), "vd-lazy-")));
     try {
       writeFileSync(join(fresh, "x.ts"), "export async function x(){ return await fetch('/a'); }\n");
       writeFileSync(join(fresh, "y.ts"), "export async function y(){ return await fetch('/b'); }\n");
@@ -52,7 +52,7 @@ describe("baseline provider", () => {
   });
 
   it("persists the lazily-built baseline so the next load comes from disk", async () => {
-    const fresh = mkdtempSync(join(tmpdir(), "vd-lazy2-"));
+    const fresh = realpathSync(mkdtempSync(join(tmpdir(), "vd-lazy2-")));
     try {
       writeFileSync(join(fresh, "x.ts"), "export function x(){ return fetch('/a').then(r => r.json()); }\n");
       __clearBaselineCache();
@@ -67,7 +67,7 @@ describe("baseline provider", () => {
   });
 
   it("returns 'no_baseline' (and null) for an empty dir with no code to analyze", async () => {
-    const empty = mkdtempSync(join(tmpdir(), "vd-empty-"));
+    const empty = realpathSync(mkdtempSync(join(tmpdir(), "vd-empty-")));
     try {
       const { baseline, status } = await getBaseline(empty);
       expect(status).toBe("no_baseline");
@@ -87,7 +87,7 @@ describe("baseline provider", () => {
   });
 
   it("rebuilds once when the on-disk baseline predates BASELINE_VERSION, then serves the rebuilt baseline without rebuilding again", async () => {
-    const fresh = mkdtempSync(join(tmpdir(), "vd-version-"));
+    const fresh = realpathSync(mkdtempSync(join(tmpdir(), "vd-version-")));
     try {
       writeFileSync(join(fresh, "x.ts"), "export async function x(){ return await fetch('/a'); }\n");
       writeFileSync(join(fresh, "y.ts"), "export async function y(){ return await fetch('/b'); }\n");
@@ -118,7 +118,7 @@ describe("baseline provider", () => {
   });
 
   it("a current-version baseline with content-only drift still returns 'stale' (cheap re-hash), not a rebuild", async () => {
-    const fresh = mkdtempSync(join(tmpdir(), "vd-version-content-"));
+    const fresh = realpathSync(mkdtempSync(join(tmpdir(), "vd-version-content-")));
     try {
       writeFileSync(join(fresh, "x.ts"), "export async function x(){ return await fetch('/a'); }\n");
       await writeBaseline(await buildBaseline(fresh));
@@ -142,7 +142,7 @@ describe("baseline provider", () => {
   });
 
   it("attempts a version-mismatch rebuild AT MOST ONCE when the rebuild persistently fails, then serves the old baseline until invalidateBaselineMem clears the failure memory", async () => {
-    const fresh = mkdtempSync(join(tmpdir(), "vd-version-failrebuild-"));
+    const fresh = realpathSync(mkdtempSync(join(tmpdir(), "vd-version-failrebuild-")));
     try {
       writeFileSync(join(fresh, "x.ts"), "export async function x(){ return await fetch('/a'); }\n");
       const built = await buildBaseline(fresh);

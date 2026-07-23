@@ -72,6 +72,25 @@ export interface VibeDriftConfig {
    * quiet for a day after firing. See src/mcp/nudge.ts.
    */
   lastNudgedAt?: string;
+
+  /**
+   * Drift Sessions hosted sync (Phase 5). Opt-in, OFF by default. When true and
+   * logged in, `watch-session` streams a DERIVED-ONLY projection of the session
+   * (findings, scores, outcomes, metadata) to the dashboard. Prompts and code
+   * never leave the machine — see src/session/upload-schema.ts. Toggle with
+   * `vibedrift watch-session --sync on|off`; `--local-only` forces it off per run.
+   */
+  sessionsSyncEnabled?: boolean;
+
+  /**
+   * Team opt-in to ALSO ship the two derived free-text fields — the agent's
+   * decision reasoning and the intent label (both secret-masked). OFF by default
+   * even when sync is on; this is the code-egress boundary for shared reasoning.
+   */
+  sessionsTeamIntentOptIn?: boolean;
+
+  /** Set true after the one-time hosted-sync consent notice has been shown. */
+  sessionsSyncNoticeShown?: boolean;
 }
 
 const DEFAULT_DIR = join(homedir(), ".vibedrift");

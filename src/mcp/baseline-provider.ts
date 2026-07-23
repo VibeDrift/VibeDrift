@@ -20,6 +20,7 @@ import {
   writeBaseline,
   computeBaselineKey,
   loadBaselineUnchecked,
+  canonicalizeRoot,
   BASELINE_VERSION,
   type RepoDriftBaseline,
 } from "../core/baseline.js";
@@ -104,8 +105,11 @@ async function liveKey(rootDir: string, baseline: RepoDriftBaseline): Promise<st
 }
 
 export async function getBaseline(
-  rootDir: string,
+  rawRootDir: string,
 ): Promise<{ baseline: RepoDriftBaseline | null; status: "ok" | "stale" | "no_baseline" }> {
+  // Canonicalize so the MCP tools key the same baseline the scan wrote and the
+  // hook loads (symlinked paths otherwise miss it).
+  const rootDir = canonicalizeRoot(rawRootDir);
   let baseline = memCache.get(rootDir) ?? null;
   if (!baseline) {
     baseline = await loadBaselineUnchecked(rootDir);

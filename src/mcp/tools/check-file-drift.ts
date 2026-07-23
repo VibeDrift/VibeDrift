@@ -8,6 +8,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { run, inputSchema } from "../../tools-core/tools/check-file-drift.js";
 import { finalizeMcpResult } from "../nudge.js";
+import { teeCheckFileDrift } from "../session-tee.js";
 
 export * from "../../tools-core/tools/check-file-drift.js";
 
@@ -23,7 +24,11 @@ export const registerCheckFileDrift = {
         inputSchema,
       },
       // Write-time tool: may carry the deep-scan nudge.
-      async (args) => finalizeMcpResult(await run(args), { nudge: true }),
+      async (args) => {
+        const out = await run(args);
+        void teeCheckFileDrift(args, out); // fire-and-forget; never slows the tool
+        return finalizeMcpResult(out, { nudge: true });
+      },
     );
   },
 };

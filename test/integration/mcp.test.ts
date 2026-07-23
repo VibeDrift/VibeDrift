@@ -18,6 +18,7 @@ const EXPECTED_TOOLS = [
   "get_dominant_pattern",
   "get_intent_hints",
   "init",
+  "respond_to_flag",
   "validate_change",
 ];
 
@@ -68,7 +69,7 @@ describe("MCP integration — Pro plan (tools serve)", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("advertises exactly the six tools", async () => {
+  it("advertises exactly the seven tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
   });
@@ -119,7 +120,7 @@ describe("MCP integration — signed-out user gets the local tools free", () => 
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("still advertises exactly the six tools", async () => {
+  it("still advertises exactly the seven tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
   });

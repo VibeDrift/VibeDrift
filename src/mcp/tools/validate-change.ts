@@ -8,6 +8,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { run, inputSchema } from "../../tools-core/tools/validate-change.js";
 import { finalizeMcpResult } from "../nudge.js";
+import { teeValidateChange } from "../session-tee.js";
 
 export * from "../../tools-core/tools/validate-change.js";
 
@@ -24,7 +25,13 @@ export const registerValidateChange = {
       },
       // Write-time tool: may carry the deep-scan nudge; a successful deep pass
       // resets the nudge clock.
-      async (args) => finalizeMcpResult(await run(args), { nudge: true }),
+      async (args) => {
+        const out = await run(args);
+        // Fire-and-forget: the tee is best-effort and self-contained fail-open,
+        // so it never blocks or slows the tool's own response.
+        void teeValidateChange(args, out);
+        return finalizeMcpResult(out, { nudge: true });
+      },
     );
   },
 };

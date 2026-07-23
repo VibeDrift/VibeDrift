@@ -1,4 +1,5 @@
 import { resolve } from "path";
+import { canonicalizeRoot } from "../../core/baseline.js";
 import { writeFile } from "fs/promises";
 import { stat } from "fs/promises";
 import chalk from "chalk";
@@ -1091,7 +1092,7 @@ export async function runScan(
   targetPath: string,
   options: ScanOptions,
 ): Promise<void> {
-  const rootDir = resolve(targetPath);
+  const rootDir = canonicalizeRoot(targetPath);
 
   try {
     const info = await stat(rootDir);

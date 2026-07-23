@@ -1,4 +1,5 @@
 import { resolveApiUrl } from "./resolver.js";
+import type { UploadEvent } from "../session/upload-schema.js";
 
 /**
  * Typed HTTP client for the VibeDrift Auth + Account API.
@@ -180,6 +181,66 @@ export async function fetchUsage(token: string, opts?: { apiUrl?: string }): Pro
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
   });
+}
+
+export interface SessionEntitlementResponse {
+  entitled: boolean;
+  plan: "free" | "pro" | "enterprise";
+  trial_used: number;
+  trial_limit: number;
+}
+
+/** Drift Sessions entitlement for the account (Pro or trial-remaining). */
+export async function fetchSessionEntitlement(
+  token: string,
+  opts?: { apiUrl?: string },
+): Promise<SessionEntitlementResponse> {
+  const base = await resolveApiUrl(opts?.apiUrl);
+  return jsonFetch<SessionEntitlementResponse>(`${base}/v1/sessions/entitlement`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** Count a watched session against the trial. The server dedups by session_id,
+ *  so reinstalls / rapid restarts of the same session never double-count. */
+export async function consumeSessionTrial(
+  token: string,
+  sessionId: string,
+  opts?: { apiUrl?: string },
+): Promise<SessionEntitlementResponse> {
+  const base = await resolveApiUrl(opts?.apiUrl);
+  return jsonFetch<SessionEntitlementResponse>(`${base}/v1/sessions/consume`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+}
+
+export interface SessionIngestResponse {
+  accepted: number;
+}
+
+/** Upload a batch of DERIVED-ONLY session events (Phase 5). Only invoked by the
+ *  uploader when the user opted into hosted sync and is logged in. The wire
+ *  carries `UploadEvent`s (findings/scores/outcomes/metadata) — never prompts or
+ *  code; the server re-validates derived-only as defense in depth. Shorter
+ *  timeout: a stalled upload must not wedge the resident watcher. */
+export async function postSessionIngest(
+  token: string,
+  events: UploadEvent[],
+  opts?: { apiUrl?: string; timeoutMs?: number },
+): Promise<SessionIngestResponse> {
+  const base = await resolveApiUrl(opts?.apiUrl);
+  return jsonFetch<SessionIngestResponse>(
+    `${base}/v1/sessions/ingest`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ events }),
+    },
+    opts?.timeoutMs ?? 15_000,
+  );
 }
 
 /**

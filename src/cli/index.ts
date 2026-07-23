@@ -22,6 +22,7 @@ import { runBilling } from "./commands/billing.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runFeedback } from "./commands/feedback.js";
 import { runWatch } from "./commands/watch.js";
+import { runWatchSession } from "./commands/watch-session.js";
 import { runHook } from "./commands/hook.js";
 import { getVersion } from "../core/version.js";
 
@@ -248,6 +249,31 @@ program
       verbose: options.verbose,
       include: options.include,
       exclude: options.exclude,
+    });
+  });
+
+// ──── Drift Sessions (preview) subcommand ────
+program
+  .command("watch-session")
+  .description(
+    "Drift Sessions (preview): record an agent session's prompts and edits to a local ledger via Claude Code hooks (local-only, consent-gated)",
+  )
+  .argument("[path]", "path to project directory", ".")
+  .option("--uninstall", "remove the hooks this command installed")
+  .option("--status", "report whether hooks are installed")
+  .option("--yes", "skip the consent prompt (you have read what it records)")
+  .option("--no-watch", "install only; do not follow the live event tape")
+  .option("--sync <state>", "hosted sync (Pro): 'on' opts into derived-only upload, 'off' disables it")
+  .option("--local-only", "force hosted sync off for this run")
+  .action(async (path: string, options) => {
+    const sync = options.sync === "on" ? "on" : options.sync === "off" ? "off" : undefined;
+    await runWatchSession(path, {
+      uninstall: options.uninstall,
+      status: options.status,
+      yes: options.yes,
+      sync,
+      localOnly: options.localOnly === true,
+      watch: options.watch !== false && !options.uninstall && !options.status && !sync,
     });
   });
 

@@ -6,6 +6,35 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Added
+
+- **Drift Sessions (preview): `vibedrift watch-session`.** Consent-gated Claude Code
+  hooks record the session to a local append-only ledger (`~/.vibedrift/sessions/`):
+  prompts (secrets masked), edit metadata, and drift flags, with one-line advisory
+  notes fed back into the agent when an edit diverges from the repo's own dominant
+  patterns. Local-only, fail-open. `--uninstall` restores your settings byte-for-byte
+  when they are unedited since install, otherwise removes only our entries.
+- **Drift Sessions: live event tape.** `vibedrift watch-session` now follows the
+  session in real time — prompts, edits, and drift flags stream in with a running
+  count and an end-of-session summary. When the VibeDrift MCP is enabled, the agent's
+  own tool calls join the same tape as ASKS/REPLIES rows. `--no-watch` installs
+  without following.
+- **Drift Sessions: intent tier + drift gauge.** The tape now captures the task
+  from your prompt (files and symbols named), locks it, and conservatively flags an
+  edit unrelated to any of them (experimental). A smoothed noisy-OR drift gauge with
+  hysteresis rides the footer, and the summary reports how many of the task's target
+  files were touched.
+- **Drift Sessions: real outcomes.** A finding resolves only when the same finding
+  re-runs over the re-edited file and passes (never because an unrelated file changed),
+  so resolved/open counts are honest. Repeat flags on an already-open finding are
+  deduped, byte-exact reverts are noted, and `watch-session` hints when a repo has no
+  baseline yet.
+- **Drift Sessions are Pro, with a 5-session free trial.** A free account gets the
+  first five sessions full-featured; after that the tape locks behind a summary of what
+  the trial caught, with an upgrade CTA. The trial count is server-side (survives
+  reinstalls). A locked account captures nothing; the capture hook stays offline and
+  reads a local entitlement cache. Recorded local ledgers always remain yours.
+
 ## 0.16.3 — 2026-07-22
 
 ### Fixed

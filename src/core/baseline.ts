@@ -14,7 +14,8 @@
  */
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 
 import { buildAnalysisContext } from "./discovery.js";
@@ -80,6 +81,23 @@ export interface RepoDriftBaseline {
 /** On-disk shape: signatures degrade to number[] (JSON has no typed arrays). */
 interface SerializedBaseline extends Omit<RepoDriftBaseline, "minhashIndex"> {
   minhashIndex: Array<Omit<MinhashEntry, "signature"> & { signature: number[] }>;
+}
+
+/**
+ * Canonicalize a repo root (resolve symlinks) so every entry point that keys a
+ * baseline or session ledger on it agrees. `vibedrift scan`, the MCP baseline
+ * provider, the agent hook, and the live tape must all derive the SAME
+ * projectHash from the SAME repo, or the hook loads no baseline and the tape
+ * follows the wrong ledger. macOS `/tmp -> /private/tmp` and symlinked
+ * project/home dirs are the common traps. Falls back to a plain resolve when
+ * the path does not exist yet.
+ */
+export function canonicalizeRoot(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
 }
 
 export function projectHash(rootDir: string): string {

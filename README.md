@@ -85,6 +85,7 @@ Detection tells you, in-loop prevention nudges you, language-level prevention ma
 ```
 vibedrift [path]            Scan a project (default command)
 vibedrift watch [path]      Re-scan on file changes (Pro)
+vibedrift watch-session     Drift Sessions (preview): record agent sessions to a local ledger
 vibedrift mcp               Run the MCP server (Claude Code / Cursor / any MCP client)
 vibedrift login / logout    Account auth
 vibedrift status            Account, plan, and token
@@ -107,6 +108,38 @@ Common scan options:
 ```
 
 Run `vibedrift --help` for the complete list.
+
+### Drift Sessions (preview)
+
+Drift Sessions are a **Pro** feature, with a one-time **5-session free trial** (a free
+account is all it takes to start). After the trial the live tape locks behind a summary
+of what it caught, and `vibedrift upgrade` unlocks unlimited sessions. Your locally
+recorded ledgers always remain yours.
+
+`vibedrift watch-session` registers Claude Code hooks for the current repo (with an
+explicit consent prompt) so your agent session is recorded to a local, append-only
+ledger under `~/.vibedrift/sessions/`: your prompts (secrets masked), edit metadata,
+and any drift flags VibeDrift raised, with one-line advisory notes delivered into the
+agent's own context when an edit diverges from the repo's dominant patterns. Your
+prompts and code never leave your machine: the capture hook is fully offline, never
+reads the agent's transcript file, and never stores full edit bodies. (The
+`watch-session` viewer itself checks your session entitlement with the server on
+start — that is the only network on this surface, and it is off the hook's path.)
+Hooks fail open — an error or timeout never interrupts your agent. `--status` reports
+the install state; `--uninstall` removes exactly what was added.
+
+Run `vibedrift watch-session` and it follows a **live event tape**: each prompt,
+edit, and drift flag streams in as it happens, with a running count, a smoothed
+drift gauge, and an end-of-session summary (including how many of the task's
+target files you actually touched). It captures the task from your prompt — the
+files and symbols you named — and, conservatively, flags an edit that looks
+unrelated to any of them (experimental, so verify before trusting it). When a
+later edit fixes a flagged file, the finding is marked **resolved** — the same
+finding re-run over the new code, never a guess — so the summary's resolved and
+open counts are real. If the VibeDrift MCP is also enabled, the agent's own
+questions (`validate_change`, `check_file_drift`, `find_similar_function`) join the
+same tape as ASKS/REPLIES rows, so the whole exchange reads as one dialogue. Use
+`--no-watch` to install without following.
 
 ## Deep scan
 
