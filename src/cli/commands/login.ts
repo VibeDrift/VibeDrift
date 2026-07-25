@@ -5,7 +5,7 @@ import {
   fetchCredits,
   VibeDriftApiError,
 } from "../../auth/api.js";
-import { patchConfig, readConfig } from "../../auth/config.js";
+import { patchConfig, readConfig, getConfigPath } from "../../auth/config.js";
 import { openInBrowser } from "../../auth/browser.js";
 import { previewToken } from "../../auth/resolver.js";
 
@@ -122,6 +122,7 @@ async function handleLoginSuccess(
     apiUrl: options.apiUrl,
   });
   console.log(chalk.green("  ✓ Logged in successfully."));
+  console.log(chalk.dim(`  Token stored at ${getConfigPath()}`));
   console.log("");
   console.log(`  Account: ${chalk.bold(result.email)}`);
   console.log(`  Plan:    ${chalk.bold(result.plan)}`);

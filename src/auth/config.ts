@@ -1,4 +1,4 @@
-import { homedir } from "os";
+import { vibedriftHome } from "../core/vibedrift-home.js";
 import { join } from "path";
 import { readFile, writeFile, mkdir, chmod, unlink, stat } from "fs/promises";
 
@@ -93,7 +93,7 @@ export interface VibeDriftConfig {
   sessionsSyncNoticeShown?: boolean;
 }
 
-const DEFAULT_DIR = join(homedir(), ".vibedrift");
+const DEFAULT_DIR = vibedriftHome();
 const DEFAULT_FILE = join(DEFAULT_DIR, "config.json");
 
 export function getConfigDir(): string {

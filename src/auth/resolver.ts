@@ -1,4 +1,4 @@
-import { readConfig } from "./config.js";
+import { readConfig, getConfigPath } from "./config.js";
 
 /**
  * Token resolution.
@@ -73,6 +73,6 @@ export function describeSource(source: "flag" | "env" | "config"): string {
   switch (source) {
     case "flag":   return "command-line flag";
     case "env":    return "VIBEDRIFT_TOKEN environment variable";
-    case "config": return "~/.vibedrift/config.json";
+    case "config": return getConfigPath();
   }
 }

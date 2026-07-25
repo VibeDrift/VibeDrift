@@ -1,5 +1,5 @@
 import { readdir, readFile, writeFile, mkdir, unlink } from "fs/promises";
-import { homedir } from "os";
+import { vibedriftHome } from "./vibedrift-home.js";
 import { createHash } from "crypto";
 import { join } from "path";
 import type { CategoryScores, Finding, DriftFindingReport } from "./types.js";
@@ -33,7 +33,7 @@ import { projectHash } from "./baseline.js";
  * is better than a misleading one.
  */
 
-const ROOT_DIR = join(homedir(), ".vibedrift", "scans");
+const ROOT_DIR = join(vibedriftHome(), "scans");
 const HISTORY_SCHEMA_VERSION = 3;
 const HISTORY_RETENTION = 10;
 

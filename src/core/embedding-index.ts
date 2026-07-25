@@ -13,14 +13,14 @@
  * with the baseline key so it can be invalidated when the repo changes.
  */
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { vibedriftHome } from "./vibedrift-home.js";
 import { join } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 // Resolved lazily (not a module const) so it honors the current HOME — tests
-// redirect HOME to a tmp dir, and homedir() reads $HOME first on POSIX.
+// set VIBEDRIFT_HOME (preferred) or redirect HOME to a tmp dir.
 function indexDir(): string {
-  return join(homedir(), ".vibedrift", "embedding-index");
+  return join(vibedriftHome(), "embedding-index");
 }
 // Bump when the entry shape or vector semantics change, to invalidate all
 // cached indexes at once (mirrors BASELINE_VERSION in core/baseline.ts).

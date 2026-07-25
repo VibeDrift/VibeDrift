@@ -17,12 +17,12 @@ import { promisify } from "util";
 import { createHash } from "crypto";
 import { readFile, writeFile, mkdir, stat } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
+import { vibedriftHome } from "./vibedrift-home.js";
 import type { FileGitMetadata } from "./types.js";
 
 const execFileP = promisify(execFile);
 
-const CACHE_DIR = join(homedir(), ".vibedrift", "git-metadata-cache");
+const CACHE_DIR = join(vibedriftHome(), "git-metadata-cache");
 const GIT_TIMEOUT_MS = 10_000;
 const MAX_BUFFER = 50 * 1024 * 1024; // 50MB — accommodates very large histories
 

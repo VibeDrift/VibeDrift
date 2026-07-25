@@ -13,7 +13,7 @@
  * so a stale baseline is detected and rebuilt rather than silently served.
  */
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { vibedriftHome } from "./vibedrift-home.js";
 import { join, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
@@ -29,7 +29,7 @@ import type { AnalysisContext } from "./types.js";
 import type { DriftFinding, DriftCategory } from "../drift/types.js";
 import type { IntentHint } from "../intent/types.js";
 
-const CACHE_DIR = join(homedir(), ".vibedrift", "baseline-cache");
+const CACHE_DIR = join(vibedriftHome(), "baseline-cache");
 /** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
 export const BASELINE_VERSION = 3;
 

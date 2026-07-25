@@ -17,13 +17,13 @@
  */
 
 import { readFile, writeFile, mkdir, readdir, stat, unlink } from "fs/promises";
-import { homedir } from "os";
+import { vibedriftHome } from "./vibedrift-home.js";
 import { createHash } from "crypto";
 import { join } from "path";
 import type { Finding, SourceFile, SupportedLanguage } from "./types.js";
 import { projectHash } from "./baseline.js";
 
-const ROOT_DIR = join(homedir(), ".vibedrift", "findings-cache");
+const ROOT_DIR = join(vibedriftHome(), "findings-cache");
 const TTL_MS = 30 * 24 * 3600 * 1000;
 const MAX_CACHE_BYTES = 500 * 1024 * 1024;
 

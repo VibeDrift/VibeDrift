@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { homedir, platform, arch } from "os";
+import { vibedriftHome, isSandboxHome } from "../../core/vibedrift-home.js";
 import { join } from "path";
 import { stat, access, constants } from "fs/promises";
 import { readConfig, getConfigPath, getConfigDir } from "../../auth/config.js";
@@ -104,6 +105,7 @@ export async function runDoctor(): Promise<void> {
   ok("Node",         process.version);
   ok("Platform",     `${platform()} ${arch()}`);
   ok("HOME",         homedir());
+  if (isSandboxHome()) ok("VIBEDRIFT_HOME", `${vibedriftHome()} (DEV MODE sandbox)`);
   console.log("");
 
   // ── Config dir ──
@@ -144,7 +146,7 @@ export async function runDoctor(): Promise<void> {
   }
 
   // History dir (separate from config — must be ~/.vibedrift/scans)
-  const historyDir = join(homedir(), ".vibedrift", "scans");
+  const historyDir = join(vibedriftHome(), "scans");
   try {
     const info = await stat(historyDir);
     if (info.isDirectory()) ok("Scan history", historyDir);

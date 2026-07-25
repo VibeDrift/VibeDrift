@@ -26,12 +26,12 @@
  */
 
 import { readFile, writeFile, mkdir } from "fs/promises";
-import { homedir } from "os";
+import { vibedriftHome } from "./vibedrift-home.js";
 import { join } from "path";
 
 const PACKAGE_NAME = "@vibedrift/cli";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
-const CACHE_PATH = join(homedir(), ".vibedrift", "version-check.json");
+const CACHE_PATH = join(vibedriftHome(), "version-check.json");
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const REQUEST_TIMEOUT_MS = 2000;
 
@@ -79,7 +79,7 @@ async function readCache(): Promise<CacheEntry | null> {
 
 async function writeCache(latest: string): Promise<void> {
   try {
-    await mkdir(join(homedir(), ".vibedrift"), { recursive: true, mode: 0o700 });
+    await mkdir(vibedriftHome(), { recursive: true, mode: 0o700 });
     const entry: CacheEntry = { latest, checkedAt: Date.now() };
     await writeFile(CACHE_PATH, JSON.stringify(entry));
   } catch {

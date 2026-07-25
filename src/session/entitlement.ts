@@ -8,7 +8,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { vibedriftHome } from "../core/vibedrift-home.js";
 import { isPaidPlan, type Plan } from "../auth/plan.js";
 
 export const SESSION_TRIAL_LIMIT = 5;
@@ -42,7 +42,7 @@ function cachePath(baseDir: string): string {
 
 /** Default cache dir is ~/.vibedrift; tests pass an explicit dir. */
 export function entitlementDir(): string {
-  return join(homedir(), ".vibedrift");
+  return vibedriftHome();
 }
 
 export function readEntitlementCache(baseDir: string = entitlementDir()): SessionEntitlement | null {

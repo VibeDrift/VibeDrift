@@ -25,8 +25,19 @@ import { runWatch } from "./commands/watch.js";
 import { runWatchSession } from "./commands/watch-session.js";
 import { runHook } from "./commands/hook.js";
 import { getVersion } from "../core/version.js";
+import { vibedriftHome, isSandboxHome } from "../core/vibedrift-home.js";
 
 const VERSION = getVersion();
+
+// Sandbox banner: VIBEDRIFT_HOME redirects ALL machine-global state (auth
+// config, caches, ledgers, entitlement) away from ~/.vibedrift, so a dev shell
+// can never pollute the real store or a real dashboard. stderr keeps MCP stdio
+// clean; the session hook has its own entrypoint and stays banner-free.
+if (isSandboxHome()) {
+  process.stderr.write(
+    `◆ DEV MODE · VIBEDRIFT_HOME=${vibedriftHome()} · state isolated from ~/.vibedrift\n`,
+  );
+}
 
 function parseScoreThreshold(value: string): number {
   const n = parseFloat(value);

@@ -6,7 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { vibedriftHome } from "../core/vibedrift-home.js";
 import { projectHash, canonicalizeRoot } from "../core/baseline.js";
 
 export function resolveRepoRoot(cwd: string): string {
@@ -20,7 +20,7 @@ export function resolveRepoRoot(cwd: string): string {
 }
 
 export function defaultSessionsDir(): string {
-  return join(homedir(), ".vibedrift", "sessions");
+  return join(vibedriftHome(), "sessions");
 }
 
 export function repoIdentity(cwd: string): { rootDir: string; projectHash: string } {
