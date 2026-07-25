@@ -4,6 +4,14 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed
+- `npx @vibedrift/cli` failed with "could not determine executable to run" since 0.17.0: the
+  package briefly declared a second executable, which stops `npx` from auto-selecting the CLI.
+  The package now declares a single `vibedrift` executable again; the session hook entrypoint is
+  unchanged (hooks invoke it by absolute path, and `bin/vibedrift-hook.mjs` remains available).
+
 ## 0.17.0 — 2026-07-23
 
 ### Added
