@@ -20,7 +20,8 @@
  * (no file is parsed), so the cold cost stays ~60-80ms.
  */
 
-import { relative, resolve, isAbsolute, basename } from "node:path";
+import { relative, resolve, isAbsolute, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 
 const SELF_TIMEOUT_MS = 2000;
@@ -41,6 +42,38 @@ async function readStdin(): Promise<string> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Spawn the detached session-flush child (Stop-hook path). Gated on hosted-sync
+ * opt-in + a token — a local-only or logged-out user spawns nothing. The child
+ * is fully detached and unref'd so it outlives this hook, which returns at once.
+ * Fail-open: any error just means no flush (watch-session / the next turn cover
+ * delivery). `VIBEDRIFT_SESSION_FLUSH_CMD` is a test seam.
+ */
+async function maybeSpawnFlush(projectHash: string, sessionsDir: string): Promise<void> {
+  try {
+    const [{ readConfig }, { shouldSync }] = await Promise.all([
+      import("../auth/config.js"),
+      import("./uploader.js"),
+    ]);
+    const cfg = await readConfig();
+    if (!shouldSync(cfg, false) || !cfg.token) return;
+
+    const { spawn } = await import("node:child_process");
+    // Test seam: an executable path invoked with (projectHash, sessionsDir).
+    const override = process.env.VIBEDRIFT_SESSION_FLUSH_CMD;
+    const [cmd, args] = override
+      ? [override, [projectHash, sessionsDir]]
+      : [
+          process.execPath,
+          [resolve(dirname(fileURLToPath(import.meta.url)), "session-flush.js"), projectHash, sessionsDir],
+        ];
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch {
+    // fail-open: no flush spawned
+  }
 }
 
 async function main(): Promise<number> {
@@ -141,6 +174,13 @@ async function main(): Promise<number> {
 
   const sessionsDir = defaultSessionsDir();
   await appendEvent(sessionsDir, projectHash, event.sid, event);
+
+  // End of a turn (Claude Code fires Stop per response): ship this turn's
+  // events so the dashboard streams live WITHOUT watch-session open. The hook
+  // stays offline — it only spawns a detached child (fail-open, opt-in gated).
+  if (event.type === "session_end") {
+    await maybeSpawnFlush(projectHash, sessionsDir);
+  }
 
   // Capture the task intent from prompts; lock it on the first one.
   if (event.type === "user_prompt" && event.detail.promptText) {

@@ -102,6 +102,64 @@ async function drain(
   return { pending, backOff: false };
 }
 
+export interface FlushOptions extends UploaderOptions {
+  /** Hard cap on total flush time (default 30s) so a slow network never wedges
+   *  a Stop-spawned child. */
+  budgetMs?: number;
+  /** Test seam for the clock; defaults to Date.now. */
+  now?: () => number;
+}
+
+/**
+ * One-shot flush: drain the WHOLE project backlog to durable offsets, then
+ * return. Shared by the Stop-hook session-flush (a short-lived detached child
+ * that ships the turn's events) — no interval loop, no resident process.
+ *
+ * Stops when the ledger is fully drained, when the server holds (402 /
+ * version-skew / transient — the next turn's flush retries), when it stops
+ * making progress, or when the time budget elapses. Never throws; a failure
+ * loses nothing (durable offsets + idempotent ingest).
+ */
+export async function runUploaderOnce(opts: FlushOptions): Promise<void> {
+  const batchSize = opts.batchSize && opts.batchSize > 0 ? opts.batchSize : DEFAULT_BATCH;
+  const maxBuffer = opts.maxBuffer && opts.maxBuffer > 0 ? opts.maxBuffer : DEFAULT_MAX_BUFFER;
+  const budgetMs = opts.budgetMs ?? 30_000;
+  const now = opts.now ?? (() => Date.now());
+  const start = now();
+
+  const store = new UploadStateStore(opts.sessionsDir, opts.projectHash);
+  await store.load();
+  const follower = new UploadFollower(opts.sessionsDir, opts.projectHash, store);
+
+  let pending: TaggedUpload[] = [];
+  while (!opts.signal?.aborted && now() - start < budgetMs) {
+    const budget = maxBuffer - pending.length;
+    let batch: Awaited<ReturnType<UploadFollower["poll"]>> = [];
+    if (budget > 0) {
+      try {
+        batch = await follower.poll(budget);
+      } catch {
+        batch = [];
+      }
+    }
+    for (const t of batch) {
+      const u = toUploadEvent(t.event, { teamIntentOptIn: opts.teamIntentOptIn });
+      if (u) pending.push({ event: u, file: t.file, endOffset: t.endOffset });
+    }
+    // Nothing queued and nothing new arrived -> the ledger is fully drained.
+    if (pending.length === 0) {
+      if (batch.length === 0) break;
+      continue; // events all filtered out (non-uploadable); poll for more
+    }
+    const before = pending.length;
+    const out = await drain(pending, batchSize, opts.post, store);
+    pending = out.pending;
+    // Hold, or no forward progress with nothing new to read -> give up this run.
+    if (out.backOff) break;
+    if (pending.length >= before && batch.length === 0) break;
+  }
+}
+
 export async function runUploader(opts: UploaderOptions): Promise<void> {
   const batchSize = opts.batchSize && opts.batchSize > 0 ? opts.batchSize : DEFAULT_BATCH;
   const interval = opts.intervalMs ?? DEFAULT_INTERVAL_MS;

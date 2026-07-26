@@ -1,8 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** Write an executable shell script that records its first two argv into `marker`. */
+function markerScript(marker: string): string {
+  const path = join(tmp("vd-flush-seam-"), "seam.sh");
+  writeFileSync(path, `#!/usr/bin/env bash\nprintf '%s %s' "$1" "$2" > ${marker}\n`, { mode: 0o755 });
+  chmodSync(path, 0o755);
+  return path;
+}
 
 const ENTRY = join(process.cwd(), "src", "session", "hook-entry.ts");
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
@@ -122,5 +130,63 @@ describe("SessionStart nudge (integration)", () => {
     const r = runStart(home, repo, "startup");
     expect(r.stdout.trim()).toBe("");
     expect(existsSync(join(home, ".vibedrift", "sessions"))).toBe(false);
+  });
+});
+
+describe("Stop-hook session-flush spawn (integration)", () => {
+  const flushHook = (
+    home: string,
+    repo: string,
+    extraEnv: Record<string, string> = {},
+  ) =>
+    spawnSync(TSX, [ENTRY], {
+      input: JSON.stringify({ session_id: "end-1", cwd: repo, hook_event_name: "Stop" }),
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "", ...extraEnv },
+      timeout: 30_000,
+    });
+
+  function config(home: string, cfg: Record<string, unknown>): void {
+    mkdirSync(join(home, ".vibedrift"), { recursive: true });
+    writeFileSync(join(home, ".vibedrift", "config.json"), JSON.stringify(cfg));
+  }
+
+  it("spawns the flush on Stop when hosted sync is opted in + logged in", () => {
+    const home = tmp("vd-flush-home-");
+    const repo = repoDir();
+    const marker = join(tmp("vd-flush-marker-"), "fired");
+    config(home, { token: "t", plan: "pro", sessionsSyncEnabled: true });
+    const r = flushHook(home, repo, { VIBEDRIFT_SESSION_FLUSH_CMD: markerScript(marker) });
+    expect(r.status).toBe(0);
+    // detached child is async; poll briefly for the marker
+    const deadline = Date.now() + 4000;
+    while (!existsSync(marker) && Date.now() < deadline) {
+      spawnSync("sleep", ["0.05"]);
+    }
+    expect(existsSync(marker)).toBe(true);
+    const [hash, dir] = readFileSync(marker, "utf8").split(" ");
+    expect(hash).toMatch(/^[0-9a-f]{16}$/); // projectHash
+    expect(dir).toContain(".vibedrift"); // sessionsDir
+  });
+
+  it("spawns nothing when hosted sync is off (local-only stays offline)", () => {
+    const home = tmp("vd-flush-home-");
+    const repo = repoDir();
+    const marker = join(tmp("vd-flush-marker-"), "fired");
+    config(home, { token: "t", plan: "pro", sessionsSyncEnabled: false });
+    flushHook(home, repo, { VIBEDRIFT_SESSION_FLUSH_CMD: markerScript(marker) });
+    // give any (erroneous) child time to run
+    spawnSync("sleep", ["0.4"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("spawns nothing when logged out", () => {
+    const home = tmp("vd-flush-home-");
+    const repo = repoDir();
+    const marker = join(tmp("vd-flush-marker-"), "fired");
+    config(home, { plan: "pro", sessionsSyncEnabled: true }); // no token
+    flushHook(home, repo, { VIBEDRIFT_SESSION_FLUSH_CMD: markerScript(marker) });
+    spawnSync("sleep", ["0.4"]);
+    expect(existsSync(marker)).toBe(false);
   });
 });

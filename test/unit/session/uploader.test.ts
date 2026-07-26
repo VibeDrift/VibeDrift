@@ -236,3 +236,64 @@ describe("runUploader", () => {
     expect(rePosted).toHaveLength(0); // the reject did not stall the watermark
   });
 });
+
+describe("runUploaderOnce (bounded flush)", () => {
+  it("drains the whole backlog in one shot, then a second run resends nothing", async () => {
+    const { runUploaderOnce } = await import("@/session/uploader");
+    const sessionsDir = tmp();
+    const hash = "h1";
+    // more events than a single batch so the drain loops
+    for (let i = 0; i < 120; i++) {
+      await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: `src/f${i}.ts`, diffstat: "+1" } }));
+    }
+    const posted: UploadEvent[] = [];
+    await runUploaderOnce({
+      sessionsDir,
+      projectHash: hash,
+      batchSize: 25,
+      post: async (e) => { posted.push(...e); return fullAck(e); },
+    });
+    expect(posted).toHaveLength(120);
+
+    const again: UploadEvent[] = [];
+    await runUploaderOnce({ sessionsDir, projectHash: hash, post: async (e) => { again.push(...e); return fullAck(e); } });
+    expect(again).toHaveLength(0); // durable offsets: nothing to resend
+  });
+
+  it("stops without spinning when the server holds, and commits nothing past the hold", async () => {
+    const { runUploaderOnce } = await import("@/session/uploader");
+    const sessionsDir = tmp();
+    const hash = "h1";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "a.ts", diffstat: "+1" } }));
+    let calls = 0;
+    await runUploaderOnce({
+      sessionsDir,
+      projectHash: hash,
+      post: async () => { calls++; const err = new Error("locked") as Error & { status?: number }; err.status = 402; throw err; },
+    });
+    expect(calls).toBeGreaterThan(0);
+    // no offsets committed -> a subsequent (accepting) run resends the event
+    const resent: UploadEvent[] = [];
+    await runUploaderOnce({ sessionsDir, projectHash: hash, post: async (e) => { resent.push(...e); return fullAck(e); } });
+    expect(resent).toHaveLength(1);
+  });
+
+  it("respects the time budget on a persistently failing network (no infinite loop)", async () => {
+    const { runUploaderOnce } = await import("@/session/uploader");
+    const sessionsDir = tmp();
+    const hash = "h1";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "a.ts", diffstat: "+1" } }));
+    let clock = 0;
+    // returns quickly since a network error (non-402) breaks on no-progress,
+    // but the budget guard is the ultimate backstop
+    await runUploaderOnce({
+      sessionsDir,
+      projectHash: hash,
+      budgetMs: 50,
+      now: () => (clock += 10),
+      post: async () => { throw new Error("network down"); },
+    });
+    // reaching here (not hanging) is the assertion
+    expect(true).toBe(true);
+  });
+});

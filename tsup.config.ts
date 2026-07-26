@@ -7,6 +7,7 @@ export default defineConfig({
     "src/mcp/server.ts",
     "src/tools-core/index.ts",
     "src/session/hook-entry.ts",
+    "src/session/session-flush.ts",
   ],
   format: ["esm"],
   target: "node18",
