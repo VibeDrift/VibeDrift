@@ -51,6 +51,13 @@ Now open Claude Code in that repo and work. Each **turn end** (Stop) flushes to
 the dashboard within a couple of seconds — no `watch-session` window needed.
 Watch the live tape too if you want: `… dist/cli/index.js watch-session`.
 
+**Seeing it in the dashboard.** The uploaded turns land in the local Supabase
+(`session_meta` / `session_events`) — confirmed by step-1's `GET /v1/sessions`.
+The dashboard reads those tables directly, so to view them run the
+`landing-native-sessions` worktree pointed at the **local** Supabase and sign in
+as the seeded pro user (dashboard env/auth setup is its own step, outside this
+CLI sandbox).
+
 To see the nudge flow instead of pre-enabling: **don't** run `enable`; start a
 Claude Code session and the SessionStart hook injects the ask (the model relays
 it, you answer yes → it calls the `enable` MCP tool → native Allow/Deny prompt).
