@@ -21,6 +21,7 @@ import { registerFindSimilarFunction } from "./tools/find-similar-function.js";
 import { registerValidateChange } from "./tools/validate-change.js";
 import { registerRespondToFlag } from "./tools/respond-to-flag.js";
 import { registerInit } from "./tools/init.js";
+import { registerEnable } from "./tools/enable.js";
 
 const SERVER_INSTRUCTIONS = `VibeDrift detects drift in AI-generated code — where new code diverges from the patterns the rest of the codebase already follows.
 
@@ -40,7 +41,7 @@ For a deeper, AI-validated pass on a CHANGE SET (before committing or opening a 
 The --deep workflows (semantic-duplicate confirmation, intent lie-detection, the coherence audit) are a paid Pro feature; the local tools above stay free.`;
 
 /**
- * Build the server with the seven local tools registered. The local tools are
+ * Build the server with the eight local tools registered. The local tools are
  * free for everyone; deep checks are metered server-side inside the tools.
  */
 export function createServer(): McpServer {
@@ -49,6 +50,7 @@ export function createServer(): McpServer {
     { instructions: SERVER_INSTRUCTIONS },
   );
   registerInit.register(server);
+  registerEnable.register(server);
   registerGetIntentHints.register(server);
   registerGetDominantPattern.register(server);
   registerCheckFileDrift.register(server);

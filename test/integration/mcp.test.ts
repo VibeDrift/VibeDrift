@@ -14,6 +14,7 @@ const THEN_BODY = ["export function feature(){", "  return a()", "    .then(r =>
 
 const EXPECTED_TOOLS = [
   "check_file_drift",
+  "enable",
   "find_similar_function",
   "get_dominant_pattern",
   "get_intent_hints",
@@ -69,9 +70,47 @@ describe("MCP integration — Pro plan (tools serve)", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("advertises exactly the seven tools", async () => {
+  it("advertises exactly the eight tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
+  });
+
+  it("enable carries the requiresUserInteraction consent meta", async () => {
+    const { tools } = await client.listTools();
+    const enable = tools.find((t) => t.name === "enable") as { _meta?: Record<string, unknown> } | undefined;
+    expect(enable?._meta?.["anthropic/requiresUserInteraction"]).toBe(true);
+  });
+
+  it("enable refuses to activate without a confirmation, then activates with one", async () => {
+    const enableRepo = mkdtempSync(join(tmpdir(), "vd-mcp-enable-"));
+    mkdirSync(join(enableRepo, ".git"));
+    // no confirm -> needs_confirmation, records nothing
+    const refused = (await client.callTool({
+      name: "enable",
+      arguments: { rootDir: enableRepo },
+    })) as { structuredContent?: { status?: string; action?: string } };
+    expect(refused.structuredContent?.action).toBe("needs_confirmation");
+    expect(refused.structuredContent?.status).toBe("partial");
+    // with the user's affirmative -> activates
+    const ok = (await client.callTool({
+      name: "enable",
+      arguments: { rootDir: enableRepo, confirm: "yes, enable it" },
+    })) as { structuredContent?: { status?: string; action?: string } };
+    expect(ok.structuredContent?.action).toBe("enabled");
+    expect(ok.structuredContent?.status).toBe("ok");
+    rmSync(enableRepo, { recursive: true, force: true });
+  });
+
+  it("enable with decline:true records a no without a confirmation", async () => {
+    const declineRepo = mkdtempSync(join(tmpdir(), "vd-mcp-decline-"));
+    mkdirSync(join(declineRepo, ".git"));
+    const res = (await client.callTool({
+      name: "enable",
+      arguments: { rootDir: declineRepo, decline: true },
+    })) as { structuredContent?: { status?: string; action?: string } };
+    expect(res.structuredContent?.action).toBe("declined");
+    expect(res.structuredContent?.status).toBe("ok");
+    rmSync(declineRepo, { recursive: true, force: true });
   });
 
   const calls: Array<[string, Record<string, unknown>]> = [
@@ -120,7 +159,7 @@ describe("MCP integration — signed-out user gets the local tools free", () => 
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("still advertises exactly the seven tools", async () => {
+  it("still advertises exactly the eight tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
   });
