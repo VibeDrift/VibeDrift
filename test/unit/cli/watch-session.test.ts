@@ -51,8 +51,9 @@ describe("runWatchSession", () => {
   it("installs hooks with --yes and reports the ledger location", async () => {
     const repo = repoWithAgent();
     const sessionsDir = tmp("vd-ws-sess-");
+    const activationHome = tmp("vd-ws-act-");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const status = await runWatchSession(repo, { yes: true, sessionsDir });
+    const status = await runWatchSession(repo, { yes: true, sessionsDir, activationHome });
     expect(status).toBe("installed");
     expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(true);
     const printed = log.mock.calls.flat().join("\n");
@@ -60,20 +61,37 @@ describe("runWatchSession", () => {
     expect(printed.toLowerCase()).toContain("fail-open");
   });
 
+  it("records the activation answer + consent receipt on a consented install", async () => {
+    const repo = repoWithAgent();
+    const sessionsDir = tmp("vd-ws-sess-");
+    const activationHome = tmp("vd-ws-act-");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await runWatchSession(repo, { yes: true, sessionsDir, activationHome });
+    const store = JSON.parse(readFileSync(join(activationHome, "activation.json"), "utf8"));
+    const hashes = Object.keys(store.projects);
+    expect(hashes).toHaveLength(1);
+    expect(store.projects[hashes[0]].state).toBe("active");
+    expect(store.projects[hashes[0]].surface).toBe("watch-session");
+    const receipt = readFileSync(join(sessionsDir, hashes[0], "consent.log"), "utf8");
+    expect(JSON.parse(receipt.trim()).action).toBe("enable");
+  });
+
   it("reports already on a second run", async () => {
     const repo = repoWithAgent();
     const sessionsDir = tmp("vd-ws-sess-");
+    const activationHome = tmp("vd-ws-act-");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    await runWatchSession(repo, { yes: true, sessionsDir });
-    expect(await runWatchSession(repo, { yes: true, sessionsDir })).toBe("already");
+    await runWatchSession(repo, { yes: true, sessionsDir, activationHome });
+    expect(await runWatchSession(repo, { yes: true, sessionsDir, activationHome })).toBe("already");
   });
 
   it("uninstalls cleanly", async () => {
     const repo = repoWithAgent();
     const sessionsDir = tmp("vd-ws-sess-");
+    const activationHome = tmp("vd-ws-act-");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    await runWatchSession(repo, { yes: true, sessionsDir });
-    const status = await runWatchSession(repo, { uninstall: true, sessionsDir });
+    await runWatchSession(repo, { yes: true, sessionsDir, activationHome });
+    const status = await runWatchSession(repo, { uninstall: true, sessionsDir, activationHome });
     expect(status).toBe("uninstalled");
     expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(false);
   });

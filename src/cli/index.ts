@@ -23,6 +23,7 @@ import { runDoctor } from "./commands/doctor.js";
 import { runFeedback } from "./commands/feedback.js";
 import { runWatch } from "./commands/watch.js";
 import { runWatchSession } from "./commands/watch-session.js";
+import { runEnable, runDecline } from "./commands/enable.js";
 import { runHook } from "./commands/hook.js";
 import { getVersion } from "../core/version.js";
 import { vibedriftHome, isSandboxHome } from "../core/vibedrift-home.js";
@@ -286,6 +287,29 @@ program
       localOnly: options.localOnly === true,
       watch: options.watch !== false && !options.uninstall && !options.status && !sync,
     });
+  });
+
+// ──── Drift Sessions activation answers ────
+program
+  .command("enable")
+  .description(
+    "Drift Sessions: activate this repo — typing this command is the consent; records prompts (secrets masked) + edit metadata to a local ledger",
+  )
+  .argument("[path]", "path to project directory", ".")
+  .option(
+    "--dir <path>",
+    "grant a directory scope: every repo under it activates (shown resolved, always asks for typed confirmation; $HOME and roots are refused)",
+  )
+  .action(async (path: string, options) => {
+    await runEnable(path, { dir: options.dir });
+  });
+
+program
+  .command("decline")
+  .description("Drift Sessions: decline for this repo — never asked again, capture stays off (reverse anytime with `vibedrift enable`)")
+  .argument("[path]", "path to project directory", ".")
+  .action(async (path: string) => {
+    await runDecline(path);
   });
 
 // ──── Telemetry subcommand ────

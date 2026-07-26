@@ -13,9 +13,31 @@
  */
 
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const HOOK_MARKER = "vibedrift-hook";
+
+/** Absolute `node <dist>/session/hook-entry.js` so hooks never depend on PATH.
+ *  Every bundle entry lives one level under dist/ (cli/, mcp/, session/), so
+ *  the sibling-tree math holds regardless of which bundle inlined this module.
+ *  Both paths are double-quoted so a node install or repo checkout under a
+ *  directory containing spaces still runs (the shell would otherwise split it);
+ *  the trailing ` #vibedrift-hook` marker stays a shell comment. */
+export function resolveHookCommand(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const entry = resolve(here, "..", "session", "hook-entry.js");
+  return `"${process.execPath}" "${entry}"`;
+}
+
+/** Claude Code is the first supported agent: a repo-local .claude/ or a
+ *  user-level ~/.claude/settings.json counts as "present". */
+export function detectClaudeCode(repoRoot: string, homeDir: string): boolean {
+  return (
+    existsSync(join(repoRoot, ".claude")) || existsSync(join(homeDir, ".claude", "settings.json"))
+  );
+}
 
 /** The events Phase 1 listens to. PostToolUse is scoped to edit tools. */
 const HOOK_EVENTS: Array<{ event: string; matcher?: string }> = [
