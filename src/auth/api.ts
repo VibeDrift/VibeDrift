@@ -219,6 +219,15 @@ export async function consumeSessionTrial(
 
 export interface SessionIngestResponse {
   accepted: number;
+  /** Per-event acknowledgments (frozen wire contract v1). Absent on legacy servers. */
+  results?: Array<{
+    activityId: string;
+    status: "accepted" | "duplicate" | "rejected" | "held";
+    code?: string;
+  }>;
+  /** Free-plan trial state, so trial burn is never invisible (L-N4). */
+  trial_used?: number;
+  trial_limit?: number;
 }
 
 /** Upload a batch of DERIVED-ONLY session events (Phase 5). Only invoked by the

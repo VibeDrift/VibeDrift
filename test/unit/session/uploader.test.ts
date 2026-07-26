@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runUploader, shouldSync } from "@/session/uploader";
+import { runUploader, shouldSync, type UploaderOptions } from "@/session/uploader";
+import { uploadStatePath } from "@/session/upload-state";
 import { appendEvent } from "@/session/ledger";
 import type { UploadEvent } from "@/session/upload-schema";
+import type { IngestAck } from "@/session/ingest-ack";
 import type { SessionEvent } from "@/session/types";
 
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "vd-up-")));
@@ -26,25 +28,24 @@ const ev = (type: SessionEvent["type"], over: Partial<SessionEvent> = {}): Sessi
 
 /** Run the uploader for exactly `ticks` poll cycles, then abort. */
 function runFor(
-  sessionsDir: string,
-  hash: string,
-  post: (e: UploadEvent[]) => Promise<void>,
+  opts: Omit<UploaderOptions, "signal" | "sleep">,
   ticks: number,
-  teamIntentOptIn = false,
 ): Promise<void> {
   const controller = new AbortController();
   let n = 0;
   return runUploader({
-    sessionsDir,
-    projectHash: hash,
-    teamIntentOptIn,
-    post,
+    ...opts,
     signal: controller.signal,
     sleep: async () => {
       if (++n >= ticks) controller.abort();
     },
   });
 }
+
+const fullAck = (events: UploadEvent[]): IngestAck => ({
+  accepted: events.length,
+  results: events.map((e) => ({ activityId: e.activityId, status: "accepted" as const })),
+});
 
 describe("shouldSync", () => {
   it("is off by default and in every partial state", () => {
@@ -69,7 +70,7 @@ describe("runUploader", () => {
     await appendEvent(sessionsDir, hash, "s1", ev("flag", { findingId: "DF-1", detail: { file: "src/a.ts", category: "async_patterns", dominant: "async/await", observed: ".then() chains" } }));
 
     const posted: UploadEvent[] = [];
-    await runFor(sessionsDir, hash, async (e) => void posted.push(...e), 1);
+    await runFor({ sessionsDir, projectHash: hash, post: async (e) => { posted.push(...e); return fullAck(e); } }, 2);
 
     const types = posted.map((p) => p.type);
     expect(types).toContain("session_start");
@@ -86,19 +87,19 @@ describe("runUploader", () => {
 
     const posted: UploadEvent[] = [];
     let calls = 0;
-    await runFor(
+    await runFor({
       sessionsDir,
-      hash,
-      async (e) => {
+      projectHash: hash,
+      post: async (e) => {
         calls++;
         if (calls === 1) throw new Error("network down");
         posted.push(...e);
+        return fullAck(e);
       },
-      2,
-    );
+    }, 3);
 
-    expect(calls).toBeGreaterThanOrEqual(2); // first failed, retried
-    expect(posted.length).toBe(1); // the event survived the failure and posted
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(posted.length).toBe(1);
   });
 
   it("ships the decision reason only under team opt-in", async () => {
@@ -110,7 +111,7 @@ describe("runUploader", () => {
     const offDir = tmp();
     await write(offDir, "hoff");
     const off: UploadEvent[] = [];
-    await runFor(offDir, "hoff", async (e) => void off.push(...e), 1, false);
+    await runFor({ sessionsDir: offDir, projectHash: "hoff", teamIntentOptIn: false, post: async (e) => { off.push(...e); return fullAck(e); } }, 2);
     const offDec = off.find((p) => p.type === "decision")!;
     expect(offDec.decision).toBe("decline");
     expect(offDec.reason).toBeUndefined();
@@ -118,9 +119,120 @@ describe("runUploader", () => {
     const onDir = tmp();
     await write(onDir, "hon");
     const on: UploadEvent[] = [];
-    await runFor(onDir, "hon", async (e) => void on.push(...e), 1, true);
+    await runFor({ sessionsDir: onDir, projectHash: "hon", teamIntentOptIn: true, post: async (e) => { on.push(...e); return fullAck(e); } }, 2);
     const onDec = on.find((p) => p.type === "decision")!;
     expect(onDec.decision).toBe("decline");
     expect(onDec.reason).toContain("different semantics");
+  });
+
+  it("R1 KILLER: a backfill far larger than the buffer uploads EVERY event exactly once across runs", async () => {
+    const sessionsDir = tmp();
+    const hash = "hr1";
+    // 3 session files x 8 events = 24 events, buffer capped at 5, batches of 2
+    for (const sid of ["sA", "sB", "sC"]) {
+      for (let i = 0; i < 8; i++) {
+        await appendEvent(sessionsDir, hash, sid, ev("edit", { sid, detail: { file: `src/${sid}-${i}.ts`, diffstat: "+1" } }));
+      }
+    }
+    const posted: UploadEvent[] = [];
+    await runFor({
+      sessionsDir, projectHash: hash, maxBuffer: 5, batchSize: 2,
+      post: async (e) => { posted.push(...e); return fullAck(e); },
+    }, 40);
+
+    const ids = posted.map((p) => p.activityId);
+    expect(new Set(ids).size).toBe(24); // every event arrived
+    expect(ids.length).toBe(24); // and none twice within the run
+
+    // a FRESH uploader (new process) resumes from durable offsets: nothing re-sent
+    const rePosted: UploadEvent[] = [];
+    await runFor({
+      sessionsDir, projectHash: hash, maxBuffer: 5, batchSize: 2,
+      post: async (e) => { rePosted.push(...e); return fullAck(e); },
+    }, 4);
+    expect(rePosted).toHaveLength(0);
+  });
+
+  it("R3: an entitlement-locked run advances NO offsets; a later entitled run backfills everything", async () => {
+    const sessionsDir = tmp();
+    const hash = "hr3";
+    for (let i = 0; i < 4; i++) {
+      await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: `src/f${i}.ts`, diffstat: "+1" } }));
+    }
+    let lockedCalls = 0;
+    await runFor({
+      sessionsDir, projectHash: hash, holdBackoffTicks: 0,
+      post: async () => { lockedCalls++; throw { status: 402, detail: "locked" }; },
+    }, 3);
+    expect(lockedCalls).toBeGreaterThanOrEqual(1);
+    const statePath = uploadStatePath(sessionsDir, hash);
+    if (existsSync(statePath)) {
+      const state = JSON.parse(readFileSync(statePath, "utf8"));
+      for (const v of Object.values(state.files as Record<string, { offset: number }>)) {
+        expect(v.offset).toBe(0);
+      }
+    }
+
+    const posted: UploadEvent[] = [];
+    await runFor({ sessionsDir, projectHash: hash, post: async (e) => { posted.push(...e); return fullAck(e); } }, 3);
+    expect(posted).toHaveLength(4); // the full backlog arrived after the lock lifted
+  });
+
+  it("a held event stops its file's commit and is re-sent after the backoff", async () => {
+    const sessionsDir = tmp();
+    const hash = "hheld";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "src/a.ts", diffstat: "+1" } }));
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "src/b.ts", diffstat: "+1" } }));
+
+    let call = 0;
+    const posted: string[][] = [];
+    await runFor({
+      sessionsDir, projectHash: hash, holdBackoffTicks: 0,
+      post: async (e) => {
+        call++;
+        posted.push(e.map((x) => x.activityId));
+        if (call === 1) {
+          return {
+            accepted: 1,
+            results: [
+              { activityId: e[0].activityId, status: "accepted" as const },
+              { activityId: e[1].activityId, status: "held" as const, code: "unknown_type" },
+            ],
+          };
+        }
+        return fullAck(e);
+      },
+    }, 4);
+
+    expect(posted.length).toBeGreaterThanOrEqual(2);
+    // second call re-sent ONLY the held event
+    expect(posted[1]).toEqual([posted[0][1]]);
+
+    // fresh run: everything already committed, nothing re-sent
+    const rePosted: UploadEvent[] = [];
+    await runFor({ sessionsDir, projectHash: hash, post: async (e) => { rePosted.push(...e); return fullAck(e); } }, 3);
+    expect(rePosted).toHaveLength(0);
+  });
+
+  it("permanently rejected events are committed past (never wedge the file)", async () => {
+    const sessionsDir = tmp();
+    const hash = "hrej";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "src/a.ts", diffstat: "+1" } }));
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "src/b.ts", diffstat: "+1" } }));
+
+    await runFor({
+      sessionsDir, projectHash: hash,
+      post: async (e) => ({
+        accepted: 1,
+        results: [
+          { activityId: e[0].activityId, status: "rejected" as const, code: "banned_field" },
+          { activityId: e[1].activityId, status: "accepted" as const },
+        ],
+      }),
+    }, 2);
+
+    const rePosted: UploadEvent[] = [];
+    await runFor({ sessionsDir, projectHash: hash, post: async (e) => { rePosted.push(...e); return fullAck(e); } }, 3);
+    expect(rePosted).toHaveLength(0); // the reject did not stall the watermark
   });
 });

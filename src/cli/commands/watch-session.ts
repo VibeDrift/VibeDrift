@@ -22,11 +22,14 @@ import { runUploader, shouldSync } from "../../session/uploader.js";
 import { parseJsonlLines } from "../../session/ledger.js";
 import { summarize } from "../../session/summary.js";
 import { readConfig, patchConfig } from "../../auth/config.js";
-import { postSessionIngest } from "../../auth/api.js";
+import { postSessionIngest, type SessionIngestResponse } from "../../auth/api.js";
 import type { UploadEvent } from "../../session/upload-schema.js";
 
 interface UploadPlan {
-  post: (events: UploadEvent[]) => Promise<void>;
+  /** Returns the server ack so the uploader can commit durable offsets
+   *  contiguously (frozen wire contract v1); throws VibeDriftApiError(402)
+   *  when the whole batch is entitlement-locked. */
+  post: (events: UploadEvent[]) => Promise<SessionIngestResponse>;
   teamIntentOptIn: boolean;
 }
 import {
@@ -351,9 +354,7 @@ async function resolveUploadPlan(options: WatchSessionOptions): Promise<UploadPl
     const apiUrl = cfg.apiUrl;
     return {
       teamIntentOptIn: cfg.sessionsTeamIntentOptIn === true,
-      post: async (events) => {
-        await postSessionIngest(token, events, { apiUrl });
-      },
+      post: (events) => postSessionIngest(token, events, { apiUrl }),
     };
   } catch {
     return undefined; // config unreadable → no sync, local unaffected
