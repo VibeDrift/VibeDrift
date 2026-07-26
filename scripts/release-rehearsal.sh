@@ -68,7 +68,7 @@ say "registry up (pid $VERDACCIO_PID)"
 #      an anonymous-publish registry)
 (
   cd "$ROOT"
-  npm publish --registry "$REG" --//localhost:${PORT}/:_authToken=rehearsal
+  VIBEDRIFT_PUBLISH_SANDBOX=1 npm publish --registry "$REG" --//localhost:${PORT}/:_authToken=rehearsal
 )
 say "published ${NAME}@${VERSION} to the rehearsal registry"
 

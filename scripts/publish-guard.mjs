@@ -10,7 +10,11 @@
  */
 const reg = process.env.npm_config_registry || "";
 const isLocal = /localhost|127\.0\.0\.1/.test(reg);
-if (!isLocal && process.env.VIBEDRIFT_RELEASE !== "1") {
+// The rehearsal sets this explicitly: npm does not reliably expose --registry
+// to lifecycle scripts across platforms/versions, and the guard must never
+// block the sandbox path.
+const isSandbox = process.env.VIBEDRIFT_PUBLISH_SANDBOX === "1";
+if (!isLocal && !isSandbox && process.env.VIBEDRIFT_RELEASE !== "1") {
   console.error(
     "\npublish blocked: prod releases go through scripts/release.sh\n" +
     "(it runs the gate, bumps, tags, publishes, and creates the GitHub release).\n" +
