@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -86,7 +86,7 @@ describe("SessionStart nudge (integration)", () => {
     expect(r.stdout.trim()).toBe("");
   });
 
-  it("asks at most 3 times, then records an implicit decline with the breadcrumb", () => {
+  it("asks at most 3 times, then goes quiet WITHOUT declining (capture continues)", () => {
     const home = tmp("vd-nudge-home-");
     const repo = repoDir();
     // three genuinely-new sessions
@@ -96,15 +96,34 @@ describe("SessionStart nudge (integration)", () => {
     expect(a.stdout).toContain("additionalContext");
     expect(b.stdout).toContain("additionalContext");
     expect(c.stdout).toContain("additionalContext");
-    // the third (final) ask carries the breadcrumb + records the implicit decline
+    // the third (final) ask carries the breadcrumb
     expect(JSON.parse(c.stdout.trim()).systemMessage).toContain("vibedrift enable");
-    const store = activation(home);
-    const rec = Object.values(store.projects)[0];
-    expect(rec.state).toBe("declined");
-    expect(rec.surface).toBe("budget-expiry");
-    // a fourth session is silent
-    const d = runStart(home, repo, "startup", "s4");
-    expect(d.stdout.trim()).toBe("");
+    // ...but expiry must NOT write `declined` — the repo stays unanswered so a
+    // grandfathered install keeps capturing.
+    const rec = Object.values(activation(home).projects)[0] as { state?: string; breadcrumbShown?: boolean };
+    expect(rec.state).toBeUndefined();
+    expect(rec.breadcrumbShown).toBe(true);
+    // a fourth session is silent (no re-nudge)
+    expect(runStart(home, repo, "startup", "s4").stdout.trim()).toBe("");
+    // and capture still works: an edit event after expiry lands in the ledger
+    spawnSync(TSX, [ENTRY], {
+      input: JSON.stringify({
+        session_id: "s4",
+        cwd: repo,
+        hook_event_name: "PostToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: join(repo, "x.ts"), content: "export const x = 1;\n" },
+      }),
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "" },
+      timeout: 30_000,
+    });
+    const sessions = join(home, ".vibedrift", "sessions");
+    const captured = readFileSync(
+      join(sessions, readdirSync(sessions)[0], "s4.jsonl"),
+      "utf8",
+    );
+    expect(captured).toContain('"type":"edit"');
   });
 
   it("shows the honest trial line when the account is on the free trial", () => {

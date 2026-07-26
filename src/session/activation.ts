@@ -10,10 +10,13 @@
  *   - "active"               -> capture on, never nudge
  *   - "declined"             -> capture OFF (the hook returns early), never nudge again
  *
- * The ask BUDGET (L-N8 as amended): at most one ask per genuinely new
- * interactive session, at most ASK_BUDGET total; expiry writes an IMPLICIT
- * decline deterministically (never via a permission-gated tool). `vibedrift
- * enable` reverses any decline at any time.
+ * The ask BUDGET (L-N8, reconciled with the grandfather rule 2026-07-26): at
+ * most one ask per genuinely new interactive session, at most ASK_BUDGET total.
+ * Expiry stops ASKING (marks `breadcrumbShown`, leaves a one-line breadcrumb)
+ * but deliberately does NOT write `declined` — so a legacy repo that was already
+ * capturing is never silently flipped off just because its nudges went ignored.
+ * Only an explicit `vibedrift enable`/`decline` sets `state`; the ask itself
+ * self-limits via `askCount`.
  *
  * Dir grants (O19): stored canonicalized; `$HOME` and filesystem roots are
  * REFUSED outright — a grant that broad is indistinguishable from the
@@ -136,8 +139,10 @@ export interface AskOutcome {
 
 /**
  * Consume one ask from the budget for an unanswered repo. Call ONLY for a
- * genuinely new interactive session (the hook gate decides that). When the
- * budget is exhausted, records the implicit decline deterministically.
+ * genuinely new interactive session (the hook gate decides that). The budget
+ * self-limits via `askCount` — the (ASK_BUDGET+1)th call returns ask:false —
+ * so expiry does NOT need to (and must not) write `declined`, which would flip
+ * a grandfathered capturing repo off (L-N8 reconciled with grandfather).
  */
 export function consumeAsk(projectHash: string, home: string = vibedriftHome()): AskOutcome {
   const store = loadActivation(home);
@@ -145,12 +150,14 @@ export function consumeAsk(projectHash: string, home: string = vibedriftHome()):
   if (rec.state) return { ask: false, askCount: rec.askCount ?? 0, budgetExpired: false };
   const count = (rec.askCount ?? 0) + 1;
   if (count > ASK_BUDGET) {
-    // Shouldn't happen (expiry records a decline), but stay safe.
+    // Budget already spent: no more asks (askCount self-limits; no state written).
     return { ask: false, askCount: rec.askCount ?? 0, budgetExpired: false };
   }
   const expiring = count === ASK_BUDGET;
+  // Expiry marks breadcrumbShown but leaves `state` alone — capture (for a
+  // grandfathered repo) continues; only an explicit enable/decline sets state.
   store.projects[projectHash] = expiring
-    ? { ...rec, askCount: count, state: "declined", at: new Date().toISOString(), surface: "budget-expiry", breadcrumbShown: true }
+    ? { ...rec, askCount: count, breadcrumbShown: true }
     : { ...rec, askCount: count };
   saveActivation(store, home);
   // The final ask still fires (it IS the third ask); expiry means no fourth.

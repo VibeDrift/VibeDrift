@@ -88,7 +88,7 @@ describe("activation store", () => {
 });
 
 describe("ask budget (L-N8)", () => {
-  it("allows ASK_BUDGET asks, expiring into an implicit decline on the last one", () => {
+  it("allows ASK_BUDGET asks, then goes quiet WITHOUT declining (grandfather safe)", () => {
     const home = tmp();
     for (let i = 1; i <= ASK_BUDGET; i++) {
       const out = consumeAsk("h1", home);
@@ -97,10 +97,15 @@ describe("ask budget (L-N8)", () => {
       expect(out.budgetExpired).toBe(i === ASK_BUDGET);
     }
     const store = loadActivation(home);
-    expect(store.projects.h1.state).toBe("declined");
-    expect(store.projects.h1.surface).toBe("budget-expiry");
-    // no fourth ask
-    expect(consumeAsk("h1", home).ask).toBe(false);
+    // expiry marks the breadcrumb but must NOT write `declined` — a
+    // grandfathered capturing repo stays capturing (projectStatus == unanswered).
+    expect(store.projects.h1.breadcrumbShown).toBe(true);
+    expect(store.projects.h1.state).toBeUndefined();
+    expect(projectStatus(store, "h1")).toBe("unanswered");
+    // no fourth ask, and askCount does not creep past the budget
+    const fourth = consumeAsk("h1", home);
+    expect(fourth.ask).toBe(false);
+    expect(loadActivation(home).projects.h1.askCount).toBe(ASK_BUDGET);
   });
 
   it("never asks once an explicit answer exists", () => {

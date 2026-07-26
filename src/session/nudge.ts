@@ -58,7 +58,8 @@ export interface NudgeContext {
   lastAsk?: boolean;
 }
 
-const BREADCRUMB = "Run `vibedrift enable` in this repo anytime to turn on VibeDrift drift monitoring.";
+const BREADCRUMB =
+  "VibeDrift won't ask again in this repo — run `vibedrift enable` or `vibedrift decline` to set it explicitly.";
 
 /** The model-facing relay instruction. Imperative (relays reliably in testing)
  *  and carries the soft-decline path (N1: the concierge skill formalizes it in
