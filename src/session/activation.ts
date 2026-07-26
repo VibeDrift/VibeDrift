@@ -5,9 +5,10 @@
  * One small JSON file under the VibeDrift home — the SessionStart hook reads
  * it on its fast path (single file read, well inside the 0.2s budget), the
  * enable/decline surfaces write it. States per projectHash:
- *   - no entry / no `state`  -> unanswered (the nudge may fire, budget-gated)
+ *   - no entry / no `state`  -> unanswered (the nudge may fire, budget-gated;
+ *                               capture continues for legacy grandfathered repos)
  *   - "active"               -> capture on, never nudge
- *   - "declined"             -> capture per legacy rules, never nudge again
+ *   - "declined"             -> capture OFF (the hook returns early), never nudge again
  *
  * The ask BUDGET (L-N8 as amended): at most one ask per genuinely new
  * interactive session, at most ASK_BUDGET total; expiry writes an IMPLICIT
@@ -164,11 +165,18 @@ export class DirGrantRefusedError extends Error {
 }
 
 /** Canonicalize and validate a dir-grant path (O19). Throws on $HOME, any
- *  filesystem root, or a nonexistent directory. Returns the resolved path. */
+ *  ANCESTOR of $HOME (e.g. `/Users`, `/home` — broader than $HOME itself), any
+ *  filesystem root, or a nonexistent directory. Returns the resolved path. A
+ *  subdirectory of home (e.g. `~/work`) is the intended grant and is allowed. */
 export function resolveGrantPath(input: string): string {
   const real = realpathSync(resolve(input));
   const home = realpathSync(homedir());
-  if (real === home) throw new DirGrantRefusedError(real, "granting your entire home directory is auto-capture-everything, which is explicitly rejected; grant a work directory instead (e.g. ~/work)");
+  if (home === real || home.startsWith(real + sep)) {
+    throw new DirGrantRefusedError(
+      real,
+      "granting your home directory (or a parent of it) is auto-capture-everything, which is explicitly rejected; grant a work directory instead (e.g. ~/work)",
+    );
+  }
   const { root } = parse(real);
   if (real === root) throw new DirGrantRefusedError(real, "granting a filesystem root would capture everything on the machine");
   return real;

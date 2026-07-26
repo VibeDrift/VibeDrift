@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import {
@@ -123,6 +123,21 @@ describe("ask budget (L-N8)", () => {
 describe("dir-grant refusals (O19)", () => {
   it("refuses $HOME outright", () => {
     expect(() => resolveGrantPath(homedir())).toThrow(DirGrantRefusedError);
+  });
+
+  it("refuses an ANCESTOR of $HOME (broader than $HOME — e.g. /Users)", () => {
+    // dirname(home) is a real, existing ancestor of home on every platform.
+    const parent = join(homedir(), "..");
+    expect(() => resolveGrantPath(parent)).toThrow(DirGrantRefusedError);
+  });
+
+  it("allows a SUBDIRECTORY of $HOME (the intended grant, e.g. ~/work)", () => {
+    const work = realpathSync(mkdtempSync(join(homedir(), ".vd-grant-ok-")));
+    try {
+      expect(resolveGrantPath(work)).toBe(work);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 
   it("refuses the filesystem root", () => {
