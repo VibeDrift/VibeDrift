@@ -27,6 +27,22 @@ jobs:
       - run: npm run build
       - run: npm test
 
+
+  # The install experience, tested for real: publish to a throwaway local
+  # registry, install FROM it into a clean prefix, smoke the installed CLI in
+  # a sandbox (incl. the npx single-bin invariant that broke 0.17.0). A red X
+  # here means the release would break for users - it cannot be merged.
+  release-rehearsal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22.x"
+          cache: npm
+      - run: npm ci
+      - run: bash scripts/release-rehearsal.sh
+
   # Dogfooding: VibeDrift scans itself. The fail threshold is DISABLED for now —
   # v4 decompressed scoring (SCORING_VERSION v4) lowered the self-score below the
   # old 75 floor, so the gate is commented out pending recalibration after the

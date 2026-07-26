@@ -18,7 +18,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${REHEARSAL_PORT:-4873}"
 REG="http://localhost:${PORT}"
-WORK="$(mktemp -d -t vd-rehearsal)"
+TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"
+WORK="$(mktemp -d "$TMPBASE/vd-rehearsal.XXXXXX")"
 VERDACCIO_PID=""
 
 cleanup() {

@@ -38,7 +38,7 @@ TAG="v$VERSION"
 
 # 3. Publish to npm (prepublishOnly gate re-runs the sanity checks).
 echo "==> npm publish $TAG"
-npm publish --access public
+VIBEDRIFT_RELEASE=1 npm publish --access public
 
 # 4. Push the version commit + tag.
 echo "==> git push --follow-tags"
