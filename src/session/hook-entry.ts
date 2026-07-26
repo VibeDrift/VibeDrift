@@ -82,8 +82,41 @@ async function main(): Promise<number> {
   // Entitlement gate (decision 8): a LOCKED account captures nothing. The check
   // reads a local cache written by `watch-session` — no network on this path.
   // Fail-open: a missing/unreadable cache permits capture.
-  const { isCapturePermitted } = await import("./entitlement.js");
-  if (!isCapturePermitted()) return 0;
+  const { isCapturePermitted, readEntitlementCache } = await import("./entitlement.js");
+  const capturePermitted = isCapturePermitted();
+
+  // Activation gate (L-N3): an explicit `decline` stops capture entirely; an
+  // un-activated (unanswered) repo emits the SessionStart nudge but otherwise
+  // captures per the legacy grandfather (a repo only carries these hooks via a
+  // deliberate repo-local install, which post-activation records `active`).
+  const { loadActivation, projectStatus, consumeAsk } = await import("./activation.js");
+  const status = projectStatus(loadActivation(), projectHash, rootDir);
+  if (status === "declined") return 0;
+
+  if (
+    normalized.type === "session_start" &&
+    status === "unanswered" &&
+    capturePermitted
+  ) {
+    const source =
+      typeof (payload as Record<string, unknown>).source === "string"
+        ? ((payload as Record<string, unknown>).source as string)
+        : undefined;
+    const { isNewInteractiveSource, isNonInteractive, buildNudgeOutput } = await import("./nudge.js");
+    if (isNewInteractiveSource(source) && !isNonInteractive()) {
+      const outcome = consumeAsk(projectHash);
+      if (outcome.ask) {
+        const out = buildNudgeOutput({
+          repoName: basename(rootDir),
+          entitlement: readEntitlementCache(),
+          lastAsk: outcome.budgetExpired,
+        });
+        process.stdout.write(JSON.stringify(out) + "\n");
+      }
+    }
+  }
+
+  if (!capturePermitted) return 0;
 
   // The in-memory body hand-off must never reach the ledger.
   const { body, ...event } = normalized;

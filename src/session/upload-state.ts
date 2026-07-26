@@ -24,6 +24,12 @@ import { safeSegment } from "./ledger.js";
 const STATE_VERSION = 1 as const;
 const STATE_FILE = "upload-state.json";
 
+/** Process-unique tmp suffix. `process.pid` alone collides when two stores in
+ *  the SAME process commit concurrently (unit tests, or two in-process
+ *  uploaders), which would tear the tmp file; a monotonic counter makes every
+ *  write target a distinct tmp path so the rename stays atomic. */
+let tmpCounter = 0;
+
 interface UploadStateShape {
   v: typeof STATE_VERSION;
   files: Record<string, { offset: number }>;
@@ -111,7 +117,7 @@ export class UploadStateStore {
       }
       await mkdir(this.dir, { recursive: true, mode: 0o700 });
       const body = JSON.stringify({ v: STATE_VERSION, files: this.files } satisfies UploadStateShape);
-      const tmp = `${this.path}.tmp.${process.pid}`;
+      const tmp = `${this.path}.tmp.${process.pid}.${tmpCounter++}`;
       await writeFile(tmp, body, { mode: 0o600 });
       await rename(tmp, this.path);
     } catch {
