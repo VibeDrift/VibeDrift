@@ -4,6 +4,7 @@ import {
   isNonInteractive,
   buildNudgeInstruction,
   buildNudgeOutput,
+  buildLockNotice,
 } from "@/session/nudge";
 import type { SessionEntitlement } from "@/session/entitlement";
 
@@ -72,5 +73,42 @@ describe("buildNudgeOutput", () => {
     const out = buildNudgeOutput({ repoName: "r", entitlement: trial(1), lastAsk: true });
     expect(out.systemMessage).toContain("vibedrift enable");
     expect(out.systemMessage).not.toContain("trial:");
+  });
+});
+
+describe("buildLockNotice (the native path's paywall signal)", () => {
+  const locked = {
+    entitled: false,
+    reason: "locked" as const,
+    plan: "free" as const,
+    trialUsed: 5,
+    trialLimit: 5,
+  };
+
+  it("tells the user, in one user-visible line, that capture is paused", () => {
+    const out = buildLockNotice({ entitlement: locked });
+    expect(out.systemMessage).toContain("5-session trial");
+    expect(out.systemMessage?.toLowerCase()).toContain("not being recorded");
+  });
+
+  it("names the upgrade path", () => {
+    const out = buildLockNotice({ entitlement: locked });
+    expect(out.systemMessage).toContain("vibedrift upgrade");
+  });
+
+  it("claims nothing about prevention or deletion (honesty constraint)", () => {
+    const msg = buildLockNotice({ entitlement: locked }).systemMessage ?? "";
+    for (const banned of ["prevented", "blocked", "deleted", "erased"]) {
+      expect(msg.toLowerCase()).not.toContain(banned);
+    }
+  });
+
+  it("carries no model-facing instruction — this is a user notice, not a nudge", () => {
+    expect(buildLockNotice({ entitlement: locked })).not.toHaveProperty("hookSpecificOutput");
+  });
+
+  it("uses the server's real trial limit rather than a hardcoded 5", () => {
+    const out = buildLockNotice({ entitlement: { ...locked, trialUsed: 12, trialLimit: 12 } });
+    expect(out.systemMessage).toContain("12-session trial");
   });
 });

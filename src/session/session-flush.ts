@@ -11,6 +11,11 @@
  * nothing. Fail-open in the strong sense: any error exits 0 and loses nothing
  * (durable offsets + idempotent ingest mean the next turn's flush resumes).
  *
+ * It also owns the entitlement cache the hook gate reads (see flush-run.ts):
+ * the native path has no `watch-session` to refresh it, so the paywall would
+ * otherwise never apply. The Stop hook spawns this even when capture is
+ * locked, so upgrading to Pro is picked up on the next turn.
+ *
  * Only Node built-ins are imported statically so startup stays cheap; the
  * workhorse modules load dynamically inside the guarded run.
  *
@@ -42,12 +47,15 @@ async function main(): Promise<void> {
 
   const token = cfg.token;
   const apiUrl = cfg.apiUrl;
-  const { postSessionIngest } = await import("../auth/api.js");
-  const { runUploaderOnce } = await import("./uploader.js");
-  await runUploaderOnce({
+  const { postSessionIngest, fetchSessionEntitlement } = await import("../auth/api.js");
+  const { vibedriftHome } = await import("../core/vibedrift-home.js");
+  const { runFlush } = await import("./flush-run.js");
+  await runFlush({
+    baseDir: vibedriftHome(),
     sessionsDir,
     projectHash,
     teamIntentOptIn: cfg.sessionsTeamIntentOptIn === true,
+    fetchEntitlement: () => fetchSessionEntitlement(token, { apiUrl }),
     post: (events) => postSessionIngest(token, events, { apiUrl }),
   });
 }

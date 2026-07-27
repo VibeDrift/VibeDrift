@@ -149,7 +149,29 @@ async function main(): Promise<number> {
     }
   }
 
-  if (!capturePermitted) return 0;
+  if (!capturePermitted) {
+    // Locked account: capture nothing, but do two things so the paywall is
+    // neither invisible nor a one-way door.
+    //  1. Say so once per new interactive session. `watch-session` has a full
+    //     lock screen; the native path's only user-visible channel is this.
+    //  2. Still spawn the Stop flush, which refreshes entitlement — otherwise
+    //     a locked machine could never learn it had been upgraded to Pro.
+    if (normalized.type === "session_start") {
+      const source =
+        typeof (payload as Record<string, unknown>).source === "string"
+          ? ((payload as Record<string, unknown>).source as string)
+          : undefined;
+      const { isNewInteractiveSource, isNonInteractive, buildLockNotice } = await import("./nudge.js");
+      const ent = readEntitlementCache();
+      if (ent && !ent.entitled && isNewInteractiveSource(source) && !isNonInteractive()) {
+        process.stdout.write(JSON.stringify(buildLockNotice({ entitlement: ent })) + "\n");
+      }
+    }
+    if (normalized.type === "session_end") {
+      await maybeSpawnFlush(projectHash, defaultSessionsDir());
+    }
+    return 0;
+  }
 
   // The in-memory body hand-off must never reach the ledger.
   const { body, ...event } = normalized;

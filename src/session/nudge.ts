@@ -80,6 +80,30 @@ export function buildNudgeInstruction(ctx: NudgeContext): string {
   ].join("\n");
 }
 
+/** A user-visible-only hook output: no model-facing instruction attached. */
+export interface NoticeOutput {
+  systemMessage: string;
+}
+
+/**
+ * The paywall signal for the native path. `watch-session` has a full lock
+ * screen; the native flow has no terminal we own, so the honest equivalent is
+ * one `systemMessage` line on SessionStart.
+ *
+ * Honesty constraints (§6): state only that recording is paused. Never claim
+ * anything was prevented, blocked, or deleted — the trial's local ledgers are
+ * untouched and still the user's.
+ */
+export function buildLockNotice(ctx: { entitlement: SessionEntitlement }): NoticeOutput {
+  const limit = ctx.entitlement.trialLimit;
+  return {
+    systemMessage:
+      `VibeDrift: your ${limit}-session trial is used up, so this session is not being recorded. ` +
+      `Run \`vibedrift upgrade\` to keep Drift Sessions watching. ` +
+      `Your existing local session history stays on this machine.`,
+  };
+}
+
 /** Build the stdout object the hook prints on a nudging SessionStart. */
 export function buildNudgeOutput(ctx: NudgeContext): NudgeOutput {
   const out: NudgeOutput = {

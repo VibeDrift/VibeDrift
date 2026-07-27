@@ -147,8 +147,12 @@ describe("SessionStart nudge (integration)", () => {
       JSON.stringify({ entitled: false, reason: "locked", plan: "free", trialUsed: 5, trialLimit: 5 }),
     );
     const r = runStart(home, repo, "startup");
-    expect(r.stdout.trim()).toBe("");
     expect(existsSync(join(home, ".vibedrift", "sessions"))).toBe(false);
+    // A locked account is never asked to ENABLE (no model-facing nudge) — it is
+    // told why recording stopped. The lock notice is a bare systemMessage.
+    const out = JSON.parse(r.stdout.trim());
+    expect(out).not.toHaveProperty("hookSpecificOutput");
+    expect(out.systemMessage).toContain("trial is used up");
   });
 });
 
@@ -207,5 +211,107 @@ describe("Stop-hook session-flush spawn (integration)", () => {
     flushHook(home, repo, { VIBEDRIFT_SESSION_FLUSH_CMD: markerScript(marker) });
     spawnSync("sleep", ["0.4"]);
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe("entitlement lock in the native path (integration)", () => {
+  function config(home: string, cfg: Record<string, unknown>): void {
+    mkdirSync(join(home, ".vibedrift"), { recursive: true });
+    writeFileSync(join(home, ".vibedrift", "config.json"), JSON.stringify(cfg));
+  }
+
+  function entitlement(home: string, e: Record<string, unknown>): void {
+    mkdirSync(join(home, ".vibedrift"), { recursive: true });
+    writeFileSync(join(home, ".vibedrift", "sessions-entitlement.json"), JSON.stringify(e));
+  }
+
+  const LOCKED = {
+    entitled: false,
+    reason: "locked",
+    plan: "free",
+    trialUsed: 5,
+    trialLimit: 5,
+    checkedAt: new Date().toISOString(),
+  };
+
+  function activate(home: string, repo: string): void {
+    // capture a projectHash by running one startup, then mark the repo active
+    runStart(home, repo, "startup");
+    const store = JSON.parse(readFileSync(join(home, ".vibedrift", "activation.json"), "utf8"));
+    const hash = Object.keys(store.projects)[0];
+    store.projects[hash] = { state: "active", surface: "cli-enable" };
+    writeFileSync(join(home, ".vibedrift", "activation.json"), JSON.stringify(store));
+  }
+
+  const stopHook = (home: string, repo: string, extraEnv: Record<string, string> = {}) =>
+    spawnSync(TSX, [ENTRY], {
+      input: JSON.stringify({ session_id: "end-1", cwd: repo, hook_event_name: "Stop" }),
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "", ...extraEnv },
+      timeout: 30_000,
+    });
+
+  it("tells the user why nothing is recorded when the trial is spent", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    entitlement(home, LOCKED);
+    const r = runStart(home, repo, "startup", "s2");
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.systemMessage).toContain("trial is used up");
+    expect(out.systemMessage).toContain("vibedrift upgrade");
+  });
+
+  it("captures nothing while locked", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    const before = readdirSync(join(home, ".vibedrift", "sessions"), { recursive: true }).length;
+    entitlement(home, LOCKED);
+    runStart(home, repo, "startup", "s3");
+    const after = readdirSync(join(home, ".vibedrift", "sessions"), { recursive: true }).length;
+    expect(after).toBe(before); // no new ledger written
+  });
+
+  it("STILL spawns the flush on Stop while locked, so upgrading can unlock", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    entitlement(home, LOCKED);
+    config(home, { token: "t", plan: "free", sessionsSyncEnabled: true });
+    const marker = join(tmp("vd-lock-marker-"), "fired");
+    const r = stopHook(home, repo, { VIBEDRIFT_SESSION_FLUSH_CMD: markerScript(marker) });
+    expect(r.status).toBe(0);
+    const deadline = Date.now() + 4000;
+    while (!existsSync(marker) && Date.now() < deadline) spawnSync("sleep", ["0.05"]);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it("stays silent while locked in a non-interactive context (no upsell in CI logs)", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    entitlement(home, LOCKED);
+    const r = runStart(home, repo, "startup", "s5", { VIBEDRIFT_HOOK_NONINTERACTIVE: "1" });
+    expect(r.stdout.trim()).toBe("");
+  });
+
+  it("stays silent while locked on resume/compact (not a new session)", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    entitlement(home, LOCKED);
+    expect(runStart(home, repo, "resume", "s6").stdout.trim()).toBe("");
+    expect(runStart(home, repo, "compact", "s7").stdout.trim()).toBe("");
+  });
+
+  it("emits no lock notice while the account is still entitled", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    entitlement(home, { ...LOCKED, entitled: true, reason: "trial", trialUsed: 1 });
+    const r = runStart(home, repo, "startup", "s4");
+    expect(r.stdout.trim() === "" || !r.stdout.includes("trial is used up")).toBe(true);
   });
 });

@@ -278,6 +278,61 @@ describe("runUploaderOnce (bounded flush)", () => {
     expect(resent).toHaveLength(1);
   });
 
+  it("reports locked when the server answers 402, so the caller can lock capture", async () => {
+    const { runUploaderOnce } = await import("@/session/uploader");
+    const sessionsDir = tmp();
+    const hash = "h1";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "a.ts", diffstat: "+1" } }));
+    const out = await runUploaderOnce({
+      sessionsDir,
+      projectHash: hash,
+      post: async () => { const err = new Error("locked") as Error & { status?: number }; err.status = 402; throw err; },
+    });
+    expect(out.locked).toBe(true);
+  });
+
+  it("does NOT report locked for a plain network failure", async () => {
+    const { runUploaderOnce } = await import("@/session/uploader");
+    const sessionsDir = tmp();
+    const hash = "h1";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "a.ts", diffstat: "+1" } }));
+    const out = await runUploaderOnce({
+      sessionsDir,
+      projectHash: hash,
+      post: async () => { throw new Error("network down"); },
+    });
+    expect(out.locked).toBe(false);
+  });
+
+  it("does NOT report locked when the server merely holds events (version skew)", async () => {
+    const { runUploaderOnce } = await import("@/session/uploader");
+    const sessionsDir = tmp();
+    const hash = "h1";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "a.ts", diffstat: "+1" } }));
+    const out = await runUploaderOnce({
+      sessionsDir,
+      projectHash: hash,
+      post: async (e) => ({
+        accepted: 0,
+        results: e.map((x) => ({ activityId: x.activityId, status: "held" as const, code: "unknown_type" })),
+      }),
+    });
+    expect(out.locked).toBe(false);
+  });
+
+  it("reports not-locked on a clean full drain", async () => {
+    const { runUploaderOnce } = await import("@/session/uploader");
+    const sessionsDir = tmp();
+    const hash = "h1";
+    await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "a.ts", diffstat: "+1" } }));
+    const out = await runUploaderOnce({
+      sessionsDir,
+      projectHash: hash,
+      post: async (e) => fullAck(e),
+    });
+    expect(out.locked).toBe(false);
+  });
+
   it("respects the time budget on a persistently failing network (no infinite loop)", async () => {
     const { runUploaderOnce } = await import("@/session/uploader");
     const sessionsDir = tmp();

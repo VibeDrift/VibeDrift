@@ -71,6 +71,10 @@ interface DrainOutcome {
   pending: TaggedUpload[];
   /** true when the server said hold (402 or held-class results). */
   backOff: boolean;
+  /** true ONLY for the 402 entitlement lock — never for held-class results or
+   *  a transient network failure. The caller uses this to lock capture at once
+   *  instead of waiting for the next scheduled entitlement refresh. */
+  locked: boolean;
 }
 
 /** Flush as many whole batches as the server accepts; stop at the first hold
@@ -88,8 +92,8 @@ async function drain(
     try {
       ack = await post(chunk.map((t) => t.event));
     } catch (err) {
-      if (isIngestLocked(err)) return { pending, backOff: true };
-      return { pending, backOff: false }; // network/transient: retry next tick
+      if (isIngestLocked(err)) return { pending, backOff: true, locked: true };
+      return { pending, backOff: false, locked: false }; // network/transient: retry next tick
     }
     const rec = reconcileAck(chunk, ack ?? undefined);
     if (rec.commitUpTo.size > 0) await store.commit(rec.commitUpTo);
@@ -97,9 +101,14 @@ async function drain(
       process.stderr.write(`vibedrift sync: event ${id} permanently rejected by server\n`);
     }
     pending = [...rec.held, ...pending.slice(chunk.length)];
-    if (rec.held.length > 0) return { pending, backOff: true };
+    if (rec.held.length > 0) return { pending, backOff: true, locked: false };
   }
-  return { pending, backOff: false };
+  return { pending, backOff: false, locked: false };
+}
+
+export interface FlushResult {
+  /** The server answered 402: the account is out of trial and not paid. */
+  locked: boolean;
 }
 
 export interface FlushOptions extends UploaderOptions {
@@ -119,8 +128,13 @@ export interface FlushOptions extends UploaderOptions {
  * version-skew / transient — the next turn's flush retries), when it stops
  * making progress, or when the time budget elapses. Never throws; a failure
  * loses nothing (durable offsets + idempotent ingest).
+ *
+ * Returns `{ locked }` — true only when the server answered 402 (the account
+ * is out of trial). The caller writes that through to the entitlement cache so
+ * the hook gate stops capturing on the next event, instead of the paywall
+ * staying invisible until the next scheduled refresh.
  */
-export async function runUploaderOnce(opts: FlushOptions): Promise<void> {
+export async function runUploaderOnce(opts: FlushOptions): Promise<FlushResult> {
   const batchSize = opts.batchSize && opts.batchSize > 0 ? opts.batchSize : DEFAULT_BATCH;
   const maxBuffer = opts.maxBuffer && opts.maxBuffer > 0 ? opts.maxBuffer : DEFAULT_MAX_BUFFER;
   const budgetMs = opts.budgetMs ?? 30_000;
@@ -132,6 +146,7 @@ export async function runUploaderOnce(opts: FlushOptions): Promise<void> {
   const follower = new UploadFollower(opts.sessionsDir, opts.projectHash, store);
 
   let pending: TaggedUpload[] = [];
+  let locked = false;
   while (!opts.signal?.aborted && now() - start < budgetMs) {
     const budget = maxBuffer - pending.length;
     let batch: Awaited<ReturnType<UploadFollower["poll"]>> = [];
@@ -154,10 +169,12 @@ export async function runUploaderOnce(opts: FlushOptions): Promise<void> {
     const before = pending.length;
     const out = await drain(pending, batchSize, opts.post, store);
     pending = out.pending;
+    if (out.locked) locked = true;
     // Hold, or no forward progress with nothing new to read -> give up this run.
     if (out.backOff) break;
     if (pending.length >= before && batch.length === 0) break;
   }
+  return { locked };
 }
 
 export async function runUploader(opts: UploaderOptions): Promise<void> {
