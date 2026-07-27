@@ -36,7 +36,7 @@ describe("activation store", () => {
   it("recordAnswer round-trips and wins over everything", () => {
     const home = tmp();
     recordAnswer("h1", "active", "cli-enable", home);
-    let store = loadActivation(home);
+    const store = loadActivation(home);
     expect(projectStatus(store, "h1")).toBe("active");
     expect(store.projects.h1.surface).toBe("cli-enable");
     expect(store.projects.h1.at).toBeTruthy();
