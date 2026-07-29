@@ -1,4 +1,4 @@
-# Native Drift Sessions — founder self-test
+# Native Drift Sessions self-test
 
 Everything runs against the **local dev stack** in a throwaway sandbox
 (`VIBEDRIFT_HOME` + `VIBEDRIFT_API_URL` are redirected), so nothing touches
@@ -6,7 +6,7 @@ production, your real `~/.vibedrift`, or the real dashboard.
 
 ## 0. Prereqs
 
-- Local API up on `:8000` (branch `feat/native-sessions-api`) + its Supabase +
+- Local API up on `:8000` (a dev API with the sessions endpoints) + its Supabase +
   seeded dev tokens. (`GET http://localhost:8000/health` → `{"status":"ok"}`.)
 - `npm run build` in this repo (the scripts use `dist/`).
 
@@ -48,11 +48,11 @@ node /path/to/vibedrift-public/dist/cli/index.js enable .   # typed consent
 ```
 
 Now open Claude Code in that repo and work. Each **turn end** (Stop) flushes to
-the dashboard within a couple of seconds — no `watch-session` window needed.
+the dashboard within a couple of seconds, no `watch-session` window needed.
 Watch the live tape too if you want: `… dist/cli/index.js watch-session`.
 
 **Seeing it in the dashboard.** The uploaded turns land in the local Supabase
-(`session_meta` / `session_events`) — confirmed by step-1's `GET /v1/sessions`.
+(`session_meta` / `session_events`), confirmed by step-1's `GET /v1/sessions`.
 The dashboard reads those tables directly, so to view them run the
 `landing-native-sessions` worktree pointed at the **local** Supabase and sign in
 as the seeded pro user (dashboard env/auth setup is its own step, outside this
