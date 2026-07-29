@@ -130,9 +130,14 @@ async function main(): Promise<number> {
         body,
       });
 
-      // Finding-scoped resolution: re-run the detection over the file's CURRENT
-      // full content (read from disk — the post-edit state), not the edit hunk,
-      // so a finding resolves only when its own signal is genuinely gone.
+      // Finding-scoped resolution: measure each open finding against its own
+      // anchored construct in the file's whole current content rather than the
+      // edit hunk, so a finding resolves only when the construct it was raised
+      // against is gone or has stopped carrying the flagged pattern. Normally
+      // that content is read from disk (the post-edit state); when the read
+      // fails we fall back to the edit body, which is the whole file for a
+      // Write but only the hunk for an Edit, so on that fallback the re-check
+      // is best-effort and sees less than the file.
       if (res.baseline) {
         let currentContent = body;
         try {
@@ -164,7 +169,13 @@ async function main(): Promise<number> {
         }
         await appendEvent(sessionsDir, projectHash, event.sid, flag);
         if (flag.findingId && flag.detail.file && flag.detail.category) {
-          outcomes.open.push({ findingId: flag.findingId, file: flag.detail.file, category: flag.detail.category });
+          // The anchor rides in the local sidecar only, never in the event.
+          outcomes.open.push({
+            findingId: flag.findingId,
+            file: flag.detail.file,
+            category: flag.detail.category,
+            anchor: res.anchors[flag.findingId],
+          });
         }
       }
       if (!fyi && !suppressFyi) fyi = res.fyi;
