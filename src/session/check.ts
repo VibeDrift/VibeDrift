@@ -14,6 +14,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { loadBaselineUnchecked, type RepoDriftBaseline } from "../core/baseline.js";
 import { detectDrift } from "./detect.js";
+import type { FindingAnchor } from "./finding-anchor.js";
 import { newActivityId, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
@@ -43,6 +44,9 @@ export interface EditCheckOutcome {
   /** the baseline that was loaded (if any), so callers can reuse it for the
    *  finding-scoped outcome re-check without loading it twice */
   baseline: RepoDriftBaseline | null;
+  /** findingId to the construct the finding was raised against. Local only:
+   *  this feeds the session's outcome sidecar and is never part of an event. */
+  anchors: Record<string, FindingAnchor>;
 }
 
 function statePath(opts: EditCheckOptions): string {
@@ -86,26 +90,26 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   try {
     baseline = await load(opts.rootDir);
   } catch {
-    return { flags: [], fyi: null, baseline: null };
+    return { flags: [], fyi: null, baseline: null, anchors: {} };
   }
   if (!baseline || baseline.minhashIndex.length > INLINE_CHECK_MAX_ENTRIES) {
-    return { flags: [], fyi: null, baseline: null };
+    return { flags: [], fyi: null, baseline: null, anchors: {} };
   }
 
   const relPath = relative(opts.rootDir, opts.file) || opts.file;
 
-  let conflictsByDim: Map<string, { dominantPattern: string; yourPattern: string; fixHint: string }>;
-  let dupsByLoc: Map<string, { relativePath: string; name: string; line: number; similarity: number }>;
+  let detected: ReturnType<typeof detectDrift>;
   try {
-    const detected = detectDrift(baseline, relPath, opts.body);
-    conflictsByDim = detected.conflicts;
-    dupsByLoc = detected.dups;
+    detected = detectDrift(baseline, relPath, opts.body);
   } catch {
-    return { flags: [], fyi: null, baseline };
+    return { flags: [], fyi: null, baseline, anchors: {} };
   }
+  const conflictsByDim = detected.conflicts;
+  const dupsByLoc = detected.dups;
 
   const state = await readState(opts);
   const flags: SessionEvent[] = [];
+  const anchors: Record<string, FindingAnchor> = {};
   const candidates: Array<{ key: string; message: string; event: SessionEvent }> = [];
 
   const mkFlag = (detail: SessionEvent["detail"]): SessionEvent => ({
@@ -131,6 +135,8 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
       observed: c.yourPattern,
     });
     flags.push(event);
+    const site = detected.conflictSites.get(dimension);
+    if (site && event.findingId) anchors[event.findingId] = { ...site, observed: c.yourPattern };
     candidates.push({
       key: `${relPath}|${dimension}`,
       message: `[vibedrift] flagged ${relPath} (${event.findingId}): ${c.fixHint}`,
@@ -148,6 +154,8 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
       similarity: topDup.similarity,
     });
     flags.push(event);
+    const site = detected.dupSites.get(where);
+    if (site && event.findingId) anchors[event.findingId] = { ...site, observed: where };
     candidates.push({
       key: `${relPath}|redundancy`,
       message: `[vibedrift] flagged ${relPath} (${event.findingId}): new function duplicates ${topDup.name} at ${where} (${topDup.similarity.toFixed(2)} similar); prefer importing it.`,
@@ -167,5 +175,5 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   }
 
   if (flags.length > 0) await writeState(opts, state);
-  return { flags, fyi, baseline };
+  return { flags, fyi, baseline, anchors };
 }
