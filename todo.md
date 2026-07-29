@@ -35,8 +35,6 @@
   a missed pattern reads as "the flagged code is gone". Thread the real `detectLanguage(path)`
   result through both, and add a non-TS case to the drift tests so the symmetry is pinned.
 
-<<<<<<< HEAD
-=======
 - **In-session drift covers only three dimensions.** `DIM_CHECKS`
   (`src/tools-core/tools/validate-change.ts:108-133`) has async_patterns, return_shape_consistency and
   architectural_consistency; plus `redundancy` (`src/session/check.ts`) and experimental `scope`
@@ -46,16 +44,6 @@
   "here are the few things we noticed". Security and auth are notably unreachable in-session today, so
   any compliance-flavoured session metric is not just unbuilt, it has no signal to build on.
 
-- **Native-sessions nudge: auto-detect headless (currently env-override only).** The SessionStart
-  nudge suppresses asks/budget-burn in non-interactive contexts via an explicit
-  `VIBEDRIFT_HOOK_NONINTERACTIVE=1` override (`src/session/nudge.ts`), which the N2 plugin/CI sets.
-  Auto-detecting headless `claude -p` from the hook payload/env (e.g. `CLAUDE_CODE_ENTRYPOINT`) was
-  deferred — the exact value needs one confirming payload capture (small metered `claude -p` run).
-  Until then a raw `claude -p` outside the plugin can burn the 3-ask budget to an implicit decline;
-  low harm (a headless-only repo has no human to nudge). Confirm the entrypoint value, then key
-  `isNonInteractive()` off it too.
-
->>>>>>> 0b31e24 (todo: note the three-dimension in-loop ceiling)
 - **DOCX sections are still tag/kind-mixed for analyzer findings.** The per-file
   Drift/Static tally is now kind-based (matching terminal/HTML and the composite), but
   DOCX's "STATIC ANALYSIS FINDINGS" section lists drift-kind analyzer findings (naming,
