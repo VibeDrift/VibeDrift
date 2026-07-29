@@ -6,6 +6,14 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+**Drift Sessions goes native.** Your AI agent drifts while it works: a `.then()` chain in an
+async/await repo, a helper that already exists, a convention quietly broken. Drift Sessions
+catches that in the agent's own decision loop, as the edit happens, not in review three days
+later. The advisory lands in the agent's context, the agent fixes, parks, or pushes back with a
+reason, and a finding only counts as resolved when the same check re-runs over the new code and
+passes. As of this release none of it needs a terminal running: `vibedrift enable` once per repo,
+and every session is watched from then on.
+
 ### Added
 
 - **`vibedrift enable`: turning Drift Sessions on is one typed command.** Typing
