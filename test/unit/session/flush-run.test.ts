@@ -155,4 +155,21 @@ describe("runFlush (the native path's per-turn flush)", () => {
       }),
     ).resolves.toBeTruthy();
   });
+
+  it("a missing ledger directory flushes cleanly: nothing posted, not locked", async () => {
+    const base = tmp();
+    // never created: no sessions dir, no project dir, no ledger, no offsets
+    const sessionsDir = join(base, "sessions");
+    const posted: UploadEvent[] = [];
+    const out = await runFlush({
+      baseDir: base,
+      sessionsDir,
+      projectHash: "h-missing",
+      now: () => NOW,
+      fetchEntitlement: async () => ({ plan: "pro" }),
+      post: async (e) => { posted.push(...e); return fullAck(e); },
+    });
+    expect(posted).toHaveLength(0);
+    expect(out).toMatchObject({ uploaded: true, locked: false });
+  });
 });

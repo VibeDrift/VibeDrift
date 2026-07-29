@@ -105,6 +105,19 @@ describe("hook entry (integration)", () => {
     ).toBe(0);
   });
 
+  it("exits 0 and writes nothing on a payload missing session_id", () => {
+    const home = tmp("vd-home-");
+    const repo = tmp("vd-repo-");
+    mkdirSync(join(repo, ".git"));
+    const r = runHook(home, {
+      cwd: repo,
+      hook_event_name: "UserPromptSubmit",
+      prompt: "hello",
+    });
+    expect(r.status).toBe(0);
+    expect(existsSync(join(home, ".vibedrift", "sessions"))).toBe(false);
+  });
+
   it("delivers an advisory via exit 2 + stderr when an edit diverges from the baseline", () => {
     const home = tmp("vd-home-");
     const repo = tmp("vd-repo-");

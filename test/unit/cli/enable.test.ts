@@ -56,6 +56,39 @@ describe("runEnable — single repo", () => {
     expect(projectStatus(loadActivation(activationHome), projectHash)).toBe("active");
   });
 
+  it("enables in a plain directory that is not a git repo (scoped to the dir itself)", async () => {
+    const dir = tmp("vd-en-nogit-");
+    mkdirSync(join(dir, ".claude"));
+    const sessionsDir = tmp("vd-en-sess-");
+    const activationHome = tmp("vd-en-act-");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const status = await runEnable(dir, { sessionsDir, activationHome });
+    expect(status).toBe("enabled");
+    // identity falls back to the directory itself when no .git ancestor exists
+    const { rootDir, projectHash } = repoIdentity(dir);
+    expect(rootDir).toBe(dir);
+    expect(projectStatus(loadActivation(activationHome), projectHash)).toBe("active");
+    const receipt = JSON.parse(readFileSync(join(sessionsDir, projectHash, "consent.log"), "utf8").trim());
+    expect(receipt.rootDir).toBe(dir);
+  });
+
+  it("a second enable with hooks already installed is idempotent", async () => {
+    const repo = repoWithAgent();
+    const sessionsDir = tmp("vd-en-sess-");
+    const activationHome = tmp("vd-en-act-");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(await runEnable(repo, { sessionsDir, activationHome })).toBe("enabled");
+    const settings = join(repo, ".claude", "settings.local.json");
+    const before = readFileSync(settings, "utf8");
+    expect(await runEnable(repo, { sessionsDir, activationHome })).toBe("enabled");
+    expect(readFileSync(settings, "utf8")).toBe(before);
+    const { projectHash } = repoIdentity(repo);
+    expect(projectStatus(loadActivation(activationHome), projectHash)).toBe("active");
+    // both runs left a receipt line (append-only log)
+    const receipts = readFileSync(join(sessionsDir, projectHash, "consent.log"), "utf8").trim().split("\n");
+    expect(receipts).toHaveLength(2);
+  });
+
   it("reverses a prior decline", async () => {
     const repo = repoWithAgent();
     const sessionsDir = tmp("vd-en-sess-");
