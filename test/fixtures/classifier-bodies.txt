@@ -1,0 +1,393 @@
+# Characterization corpus for the three shared single-body classifiers
+# (async style, data access, return shape). Each block is delimited by a
+# "=== <name> <origin> ===" line. A block tagged with a source path was taken
+# from that file; a block tagged `synthetic` is hand-written, either for
+# vocabulary the sources above do not exercise (ORM, raw SQL, repository, tuple
+# returns) or to sit on a threshold or priority tie-break the real code never
+# comes near.
+#
+# The source-path tag records where a body came from, not a standing guarantee
+# that it still matches: nine of the ten still appear verbatim in their file,
+# and the classifyShape slice predates the stripComments extraction, so it no
+# longer does. Nothing re-reads these paths at test time; a body is a frozen
+# input either way.
+#
+# The classifiers feed the composite score, so their output over this corpus is
+# frozen in classifier-golden.test.ts and must stay byte-identical.
+=== maskSecrets src/session/mask.ts ===
+export function maskSecrets(text: string): string {
+  let out = text;
+  for (const re of BLOCK_RULES) {
+    out = out.replace(re, "[masked]");
+  }
+  // Mask only the password in a connection-string userinfo, preserving scheme+user.
+  out = out.replace(URL_CRED_RULE, (_m, prefix: string) => `${prefix}[masked]@`);
+  out = out.replace(KEYED_RULE, (_m, key: string, sep: string) => `${key}${sep}[masked]`);
+  return out;
+}
+=== deepAnalyze src/mcp/deep-client.ts ===
+export async function deepAnalyze(
+  functions: MlFunctionPayload[],
+  language: string,
+  queryId?: string,
+): Promise<DeepResult> {
+  const empty = { intentMismatches: [], duplicates: [] };
+
+  const tok = await resolveToken();
+  if (!tok?.token) return { degraded: true, reason: "no_token", ...empty };
+
+  const apiUrl = await resolveApiUrl();
+  const request: MlAnalyzeRequest = {
+    language,
+    file_count: new Set(functions.map((f) => f.file)).size,
+    functions,
+    deviations: [],
+    llm_validations: [],
+    defer_persist: false, // MCP deep checks persist + count for billing
+    source: "mcp", // 1/50-unit billing + Haiku validation server-side
+  };
+
+  try {
+    const resp = await callMlApi(request, tok.token, apiUrl);
+    // When candidates are fed alongside the query (queryId set), the server
+    // returns query-vs-candidate AND candidate-vs-candidate pairs intermixed.
+    // Keep only the ones that involve the query — the function the agent is
+    // actually judging — and drop the candidate-vs-candidate noise.
+    const dupes = (resp.duplicates ?? []).filter(
+      (d) => !queryId || d.function_a === queryId || d.function_b === queryId,
+    );
+    const intents = (resp.intent_mismatches ?? []).filter(
+      (m) => !queryId || m.function_id === queryId,
+    );
+    return {
+      degraded: false,
+      intentMismatches: intents.map((m) => ({
+        kind: "intent" as const,
+        detail: m.name,
+        confidence: m.confidence,
+        verdict: m.llm_verdict,
+      })),
+      duplicates: dupes.map((d) => {
+        const other = d.function_a === queryId ? d.function_b : d.function_a;
+        return {
+          kind: "duplicate" as const,
+          detail: queryId ? `${queryId} ≈ ${other}` : `${d.function_a} ≈ ${d.function_b}`,
+          confidence: d.confidence,
+          verdict: d.llm_verdict ?? d.verdict,
+        };
+      }),
+    };
+  } catch (e) {
+    return { degraded: true, reason: classifyDegradeReason(e), ...empty };
+  }
+}
+=== runUploaderOnce src/session/uploader.ts ===
+export async function runUploaderOnce(opts: FlushOptions): Promise<FlushResult> {
+  const batchSize = opts.batchSize && opts.batchSize > 0 ? opts.batchSize : DEFAULT_BATCH;
+  const maxBuffer = opts.maxBuffer && opts.maxBuffer > 0 ? opts.maxBuffer : DEFAULT_MAX_BUFFER;
+  const budgetMs = opts.budgetMs ?? 30_000;
+  const now = opts.now ?? (() => Date.now());
+  const start = now();
+
+  const store = new UploadStateStore(opts.sessionsDir, opts.projectHash);
+  await store.load();
+  const follower = new UploadFollower(opts.sessionsDir, opts.projectHash, store);
+
+  let pending: TaggedUpload[] = [];
+  let locked = false;
+  while (!opts.signal?.aborted && now() - start < budgetMs) {
+    const budget = maxBuffer - pending.length;
+    let batch: Awaited<ReturnType<UploadFollower["poll"]>> = [];
+    if (budget > 0) {
+      try {
+        batch = await follower.poll(budget);
+      } catch {
+        batch = [];
+      }
+    }
+    for (const t of batch) {
+      const u = toUploadEvent(t.event, { teamIntentOptIn: opts.teamIntentOptIn });
+      if (u) pending.push({ event: u, file: t.file, endOffset: t.endOffset });
+    }
+    // Nothing queued and nothing new arrived -> the ledger is fully drained.
+    if (pending.length === 0) {
+      if (batch.length === 0) break;
+      continue; // events all filtered out (non-uploadable); poll for more
+    }
+    const before = pending.length;
+    const out = await drain(pending, batchSize, opts.post, store);
+    pending = out.pending;
+    if (out.locked) locked = true;
+    // Hold, or no forward progress with nothing new to read -> give up this run.
+    if (out.backOff) break;
+    if (pending.length >= before && batch.length === 0) break;
+  }
+  return { locked };
+}
+=== detectRevert src/session/outcomes.ts ===
+export function detectRevert(
+  relFile: string,
+  body: string,
+  hashes: Record<string, string[]>,
+): { reverted: boolean } {
+  const h = createHash("sha256").update(body).digest("hex").slice(0, 16);
+  const seen = hashes[relFile] ?? [];
+  const reverted = seen.includes(h);
+  const next = [...seen, h].slice(-MAX_HASHES_PER_FILE);
+  hashes[relFile] = next;
+  return { reverted };
+}
+=== readOutcomeState src/session/outcomes.ts ===
+export async function readOutcomeState(
+  sessionsDir: string,
+  projectHash: string,
+  sessionId: string,
+): Promise<OutcomeState> {
+  try {
+    const raw = await readFile(statePath(sessionsDir, projectHash, sessionId), "utf8");
+    const parsed = JSON.parse(raw) as Partial<OutcomeState>;
+    return {
+      open: Array.isArray(parsed.open) ? parsed.open : [],
+      hashes: parsed.hashes && typeof parsed.hashes === "object" ? parsed.hashes : {},
+    };
+  } catch {
+    return emptyOutcomeState();
+  }
+}
+=== validateChange src/tools-core/tools/validate-change.ts ===
+export function validateChange(
+  baseline: RepoDriftBaseline,
+  relTarget: string,
+  body: string,
+): ValidateChangeResult {
+  const conflicts: Conflict[] = [];
+
+  // For each dimension we can classify a single body in: find the dominant
+  // (detector vote, else declared rule), classify the proposed body with the
+  // SAME classifier the detector uses, and flag a conflict when they differ.
+  // The classifier returns the dimension's DISPLAY label, matching what the
+  // vote stores, so the comparison is apples-to-apples.
+  for (const check of DIM_CHECKS) {
+    const dom = effectiveDominant(baseline, check);
+    if (!dom) continue;
+    const mine = check.classify(body, relTarget);
+    if (!mine || mine === dom.display) continue;
+    const where =
+      dom.source === "declared" ? ` (declared in ${dom.cite})` : dom.refFiles[0] ? ` See ${dom.refFiles[0]}.` : "";
+    conflicts.push({
+      dimension: check.dimension,
+      dominantPattern: dom.display,
+      yourPattern: mine,
+      fixHint: `Repo uses ${dom.display}; this change uses ${mine}.${where}`,
+    });
+  }
+
+  const index = baseline.minhashIndex.filter((e) => e.relativePath !== relTarget);
+  const duplicateOf = findSimilarToBody(body, index, { threshold: DUPLICATE_THRESHOLD, cap: MAX_MATCHES });
+
+  const referenceFiles = conflicts.length
+    ? (baseline.perCategoryVote[conflicts[0].dimension]?.dominantFiles ?? []).slice(0, 3)
+    : [];
+
+  // Low confidence when the dimension we judged is itself only weakly dominant
+  // (near the 70% bar) — a frozen-baseline vote can't see the proposed change
+  // tipping the balance. A declared-rule fallback (no vote) is binding, so it
+  // stays high. Honest hedge per the deferred delta-vote.
+  const judgedVote = conflicts.length
+    ? baseline.perCategoryVote[conflicts[0].dimension]
+    : baseline.perCategoryVote.async_patterns;
+  const confidence: "high" | "low" = judgedVote && judgedVote.consistencyScore < THIN_MARGIN ? "low" : "high";
+
+  return {
+    ok: conflicts.length === 0 && duplicateOf.length === 0,
+    conflicts,
+    duplicateOf,
+    referenceFiles,
+    confidence,
+  };
+}
+=== classifyShape src/drift/return-shape-consistency.ts ===
+function classifyShape(body: string): ReturnShape | null {
+  // Strip line comments so "// throw new Error" doesn't trigger.
+  const stripped = body
+    .replace(/\/\/.*$/gm, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*#.*$/gm, "");
+
+  const counts: Record<ReturnShape, number> = {
+    throws: 0,
+    result_type: countMatches(SHAPE_COUNT_PATTERNS.result_type, stripped),
+    tuple: countMatches(SHAPE_COUNT_PATTERNS.tuple, stripped),
+    result_object: countMatches(SHAPE_COUNT_PATTERNS.result_object, stripped),
+    null_sentinel: countMatches(SHAPE_COUNT_PATTERNS.null_sentinel, stripped),
+  };
+
+  const strongThrows = countMatches(STRONG_THROW, stripped);
+  const bareThrows = countMatches(ANY_THROW, stripped) - countMatches(THROW_NEW, stripped);
+  const hasOtherShape =
+    counts.result_type + counts.tuple + counts.result_object + counts.null_sentinel > 0;
+  counts.throws = strongThrows + (hasOtherShape ? 0 : bareThrows);
+
+  let best: ReturnShape | null = null;
+  let bestCount = 0;
+  for (const shape of SHAPE_PRIORITY) {
+    if (counts[shape] > bestCount) {
+      best = shape;
+      bestCount = counts[shape];
+=== classifyAsyncStyle src/drift/async-style.ts ===
+export function classifyAsyncStyle(content: string): AsyncStyle | null {
+  const { awaitCount, thenCount } = asyncCounts(content);
+  const total = awaitCount + thenCount;
+  if (total < 2) return null;
+  const awaitRatio = awaitCount / total;
+  if (awaitRatio > 0.7) return "async_await";
+  if (awaitRatio < 0.3) return "then_chains";
+  return "mixed";
+}
+=== extractFunctionBodies src/drift/return-shape-consistency.ts ===
+ * throw / return null / etc.". Same trick as analyzers/complexity.ts.
+ */
+function extractFunctionBodies(file: DriftFile): FunctionExtraction[] {
+  const content = file.content;
+
+  // One pattern per language — we don't need to know which matched, just
+  // where functions start and what they're called.
+  const functionPattern =
+    /(?:(?:async\s+)?function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>|def\s+(\w+)|func\s+(?:\([^)]*\)\s+)?(\w+)|(?:pub\s+)?(?:async\s+)?fn\s+(\w+))/g;
+
+  const starts: { name: string; index: number; line: number }[] = [];
+  let match;
+  while ((match = functionPattern.exec(content)) !== null) {
+    const name = match[1] || match[2] || match[3] || match[4] || match[5];
+    if (!name) continue;
+    const line = getLineNumber(content, match.index);
+    starts.push({ name, index: match.index, line });
+  }
+
+  const out: FunctionExtraction[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i];
+    const end = i + 1 < starts.length ? starts[i + 1].index : content.length;
+    out.push({
+      file: file.relativePath,
+      name: start.name,
+      line: start.line,
+      bodySlice: content.slice(start.index, end),
+    });
+  }
+  return out;
+}
+=== classifyDataAccessLabel src/drift/architectural-contradiction.ts ===
+export function classifyDataAccessLabel(content: string, path: string): string | null {
+  const hits = detectDataAccess({ content, relativePath: path, language: "typescript" } as DriftFile);
+  if (hits.length === 0) return null;
+  const primary = hits
+    .slice()
+    .sort((a, b) => b.evidence.length - a.evidence.length || DATA_ACCESS_PRIORITY.indexOf(a.pattern) - DATA_ACCESS_PRIORITY.indexOf(b.pattern))[0];
+  return DATA_ACCESS_NAMES[primary.pattern];
+}
+=== loadUserRowsRawSql synthetic ===
+export async function loadUserRows(id: string) {
+  const rows = await db.query("SELECT * FROM users WHERE id = $1", [id]);
+  const count = await db.query("SELECT count(*) FROM sessions WHERE user_id = $1", [id]);
+  return { rows, count };
+}
+=== listActiveUsersOrm synthetic ===
+export async function listActiveUsers(team: string) {
+  const users = await prisma.user.findMany({ where: { team, active: true } });
+  const seats = await prisma.seat.findAll({ where: { team } });
+  return users.map((u) => ({ ...u, seats: seats.length }));
+}
+=== saveOrderViaRepository synthetic ===
+export async function saveOrder(order: Order) {
+  const existing = await orderRepo.findById(order.id);
+  if (existing) {
+    return store.update(order);
+  }
+  return repository.insert(order);
+}
+=== fetchInvoiceThenChain synthetic ===
+export function fetchInvoice(id: string) {
+  return fetch("/api/invoice/" + id)
+    .then((res) => res.json())
+    .then((data) => data.invoice);
+}
+=== readSettingsNullSentinel synthetic ===
+export function readSettings(raw: string) {
+  if (!raw) return null;
+  const parsed = JSON.parse(raw);
+  if (!parsed.theme) return undefined;
+  return parsed;
+}
+=== parseAmountTuple synthetic ===
+func parseAmount(raw string) (int64, error) {
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+=== createSessionResultObject synthetic ===
+export function createSession(user: string) {
+  if (!user) {
+    return { error: "missing user", session: null };
+  }
+  const session = { user, id: newId() };
+  return { error: null, session };
+}
+=== assertPositiveThrows synthetic ===
+export function assertPositive(n: number): number {
+  if (Number.isNaN(n)) {
+    throw new TypeError("not a number");
+  }
+  if (n <= 0) throw new RangeError("must be positive");
+  return n;
+}
+=== retryMostlyAwait synthetic ===
+export async function retryWithBackoff(fn: () => Promise<Row[]>) {
+  const first = await fn();
+  const second = await fn();
+  const third = await fn();
+  const fourth = await fn();
+  return fn().then((rows) => [...first, ...second, ...third, ...fourth, ...rows]);
+}
+=== syncQueueMostlyThen synthetic ===
+export function syncQueue(client: QueueClient) {
+  return client
+    .drain()
+    .then((jobs) => jobs.filter(Boolean))
+    .then((jobs) => jobs.map(normalize))
+    .then((jobs) => jobs.slice(0, 50))
+    .then(async (jobs) => await persist(jobs));
+}
+=== hydrateEvenSplit synthetic ===
+export async function hydrateRows(id: string) {
+  const rows = await readRows(id);
+  return enrich(rows).then((out) => out.slice(0, 10));
+}
+=== decodeTokenShapeTie synthetic ===
+export function decodeToken(raw: string) {
+  const [value, err] = parse(raw);
+  if (err) {
+    return { error: err, value: null };
+  }
+  return [value, err];
+}
+=== readCursorShapeTie synthetic ===
+export function readCursor(raw: string) {
+  if (!raw) return null;
+  const parsed = decode(raw);
+  if (!parsed.ok) {
+    return { error: "bad cursor", cursor: null };
+  }
+  return parsed.cursor;
+}
+=== loadProfileAccessTie synthetic ===
+export async function loadProfile(userId: string) {
+  const cached = await repo.get(userId);
+  if (cached) return cached;
+  const res = await fetch("/api/profiles/" + userId);
+  const extra = await fetch("/api/profiles/" + userId + "/extra");
+  await repo.put(userId, res);
+  return { ...res, extra };
+}

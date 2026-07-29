@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBaseline, type RepoDriftBaseline } from "@/core/baseline";
+import { runEditChecks } from "@/session/check";
 import { recheckFile, detectRevert, type OpenFinding } from "@/session/outcomes";
 
 const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -14,9 +15,13 @@ const HELPER = `export function exponentialBackoff(attempt) {
   return Math.min(cap, base * 2 ** attempt) + jitter;
 }`;
 
+let repo: string;
+let sessionsDir: string;
 let baseline: RepoDriftBaseline;
+
 beforeAll(async () => {
-  const repo = tmp("vd-out-repo-");
+  repo = tmp("vd-out-repo-");
+  sessionsDir = tmp("vd-out-sessions-");
   mkdirSync(join(repo, "src", "lib"), { recursive: true });
   writeFileSync(join(repo, "CLAUDE.md"), "- Async: use async/await throughout. No .then() chains.\n");
   for (const n of ["a", "b", "c"]) {
@@ -25,6 +30,32 @@ beforeAll(async () => {
   writeFileSync(join(repo, "src", "lib", "backoff.ts"), `${HELPER}\n`);
   baseline = await buildBaseline(repo);
 }, 60_000);
+
+afterAll(() => {
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(sessionsDir, { recursive: true, force: true });
+});
+
+/** Raise a finding the way the hook does, so the open finding carries the same
+ *  anchor the real flag path produces. */
+async function raise(sessionId: string, relFile: string, body: string): Promise<OpenFinding[]> {
+  const out = await runEditChecks({
+    rootDir: repo,
+    projectHash: "feedfacefeedface",
+    sessionId,
+    sessionsDir,
+    file: join(repo, relFile),
+    body,
+    loadBaselineFor: async () => baseline,
+  });
+  expect(out.flags.length).toBeGreaterThanOrEqual(1);
+  return out.flags.map((f) => ({
+    findingId: f.findingId!,
+    file: f.detail.file!,
+    category: f.detail.category!,
+    anchor: out.anchors[f.findingId!],
+  }));
+}
 
 const THEN = `export function loadReport(id) {
   return fetch("/x/" + id)
@@ -38,11 +69,14 @@ const CLEAN = `export async function loadReport(id) {
 }`;
 
 describe("recheckFile", () => {
-  const open: OpenFinding[] = [{ findingId: "DF-1", file: "src/report.ts", category: "async_patterns" }];
+  let open: OpenFinding[];
+  beforeAll(async () => {
+    open = await raise("s-then", "src/report.ts", THEN);
+  });
 
   it("resolves a convention finding once the file is fixed", () => {
     const { resolved } = recheckFile(baseline, "src/report.ts", CLEAN, open);
-    expect(resolved.map((f) => f.findingId)).toEqual(["DF-1"]);
+    expect(resolved.map((f) => f.findingId)).toEqual(open.map((f) => f.findingId));
   });
 
   it("does NOT resolve while the finding still stands", () => {
@@ -60,21 +94,26 @@ describe("recheckFile", () => {
     expect(recheckFile(baseline, "src/report.ts", CLEAN, scopeOpen).resolved).toEqual([]);
   });
 
-  it("does NOT falsely resolve a redundancy when the dup is still present in a multi-function file", () => {
-    // the whole-file query dilutes below threshold, but the per-function query
-    // (via detectDrift) still catches the untouched clone — so no false resolve
-    const dupOpen: OpenFinding[] = [{ findingId: "DF-dup", file: "src/util.ts", category: "redundancy" }];
+  it("never resolves a finding that carries no anchor", () => {
+    const legacy: OpenFinding[] = [{ findingId: "DF-legacy", file: "src/report.ts", category: "async_patterns" }];
+    expect(recheckFile(baseline, "src/report.ts", CLEAN, legacy).resolved).toEqual([]);
+  });
+
+  it("does NOT falsely resolve a redundancy when the dup is still present in a multi-function file", async () => {
+    const dupOpen = await raise("s-dup", "src/util.ts", HELPER);
     const multiFn = `export function unrelatedOne(a) { return a + 1; }
 ${HELPER}
 export function unrelatedTwo(b) { return b - 1; }`;
     expect(recheckFile(baseline, "src/util.ts", multiFn, dupOpen).resolved).toEqual([]);
   });
 
-  it("DOES resolve a redundancy once the duplicated function is gone", () => {
-    const dupOpen: OpenFinding[] = [{ findingId: "DF-dup", file: "src/util.ts", category: "redundancy" }];
+  it("DOES resolve a redundancy once the duplicated function is gone", async () => {
+    const dupOpen = await raise("s-dup2", "src/util.ts", HELPER);
     const noDup = `export function unrelatedOne(a) { return a + 1; }
 export function unrelatedTwo(b) { return b - 1; }`;
-    expect(recheckFile(baseline, "src/util.ts", noDup, dupOpen).resolved.map((f) => f.findingId)).toEqual(["DF-dup"]);
+    expect(recheckFile(baseline, "src/util.ts", noDup, dupOpen).resolved.map((f) => f.findingId)).toEqual(
+      dupOpen.map((f) => f.findingId),
+    );
   });
 });
 

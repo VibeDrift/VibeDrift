@@ -1,5 +1,61 @@
 # CLI backlog
 
+- **Session re-check: three residual resolve defects, all reproduced by an adversarial pass.** The
+  anchoring work closed the four original false-resolve classes, but these survive and are known:
+  (a) **redundancy, wrap plus one token.** The anchor holds the flagged construct's exact token
+  sequence, so a clone moved verbatim into a class stays open, but changing a single identifier
+  while wrapping breaks containment and falls through to a whole-file duplicate query, which is
+  structurally blind to class and object-literal methods, so a near-verbatim clone resolves. The
+  honest scope of the current guarantee is "survives a byte-for-byte wrap", not "no false resolve".
+  Proper fix is the extractor bullet below, or a similarity test (minhash the anchor tokens against
+  sliding windows) rather than exact containment.
+  (b) **hunk-fallback resolves on less evidence.** When `readFile` throws, `hook-entry.ts` re-checks
+  against the edit body, which for an Edit is only the hunk, so an unrelated small hunk contains
+  neither the symbol nor the tokens nor the pattern and the finding clears. Every other failure path
+  in the module fails open. Fix: skip the re-check entirely on read failure.
+
+- **Root fix: `extractAllFunctions` does not index class or object-literal methods.** The JS/TS
+  patterns in `src/codedna/function-extractor.ts` match only `function name(` and
+  `const name = (`, so a method inside `class Foo { bar() {} }` or `const foo = { bar() {} }` is
+  invisible to every consumer of the extractor. The session re-check works around this with a
+  token-sequence containment test on the finding anchor (`src/session/finding-anchor.ts`), which
+  keeps a wrapped construct's finding open, but the underlying blindness is still there: a
+  class-heavy file contributes far fewer indexed functions than it has. Widening the extractor is
+  the proper fix and it is NOT a local change: the same function feeds Code DNA fingerprinting,
+  op-sequence analysis, the duplicate index, and therefore the composite score for every user, so
+  new methods would appear as new index entries and shift duplicate counts and scores across the
+  board. Needs a corpus before/after on score movement, and probably a `SCORING_VERSION` bump,
+  before it can ship.
+
+- **`hasDataAccessPattern` / `classifyDataAccessLabel` hard-code language "typescript".** Both
+  entry points in `src/drift/architectural-contradiction.ts` build a synthetic `DriftFile` with
+  `language: "typescript"` for every path, including .py/.go/.rs. Inert today (the data-access
+  detector reads only content and relative path, and the two lie identically so they stay
+  symmetric), but `hasDataAccessPattern` now sits on the session re-check's resolution path, where
+  a missed pattern reads as "the flagged code is gone". Thread the real `detectLanguage(path)`
+  result through both, and add a non-TS case to the drift tests so the symmetry is pinned.
+
+<<<<<<< HEAD
+=======
+- **In-session drift covers only three dimensions.** `DIM_CHECKS`
+  (`src/tools-core/tools/validate-change.ts:108-133`) has async_patterns, return_shape_consistency and
+  architectural_consistency; plus `redundancy` (`src/session/check.ts`) and experimental `scope`
+  (`src/session/scope.ts`). The scan has 13 `DriftCategory` values. Widening the in-loop set is higher
+  leverage than any dashboard metric work, because it raises the ceiling on what a session can
+  possibly report at all: with three dimensions live, the honest ceiling of the sessions dashboard is
+  "here are the few things we noticed". Security and auth are notably unreachable in-session today, so
+  any compliance-flavoured session metric is not just unbuilt, it has no signal to build on.
+
+- **Native-sessions nudge: auto-detect headless (currently env-override only).** The SessionStart
+  nudge suppresses asks/budget-burn in non-interactive contexts via an explicit
+  `VIBEDRIFT_HOOK_NONINTERACTIVE=1` override (`src/session/nudge.ts`), which the N2 plugin/CI sets.
+  Auto-detecting headless `claude -p` from the hook payload/env (e.g. `CLAUDE_CODE_ENTRYPOINT`) was
+  deferred — the exact value needs one confirming payload capture (small metered `claude -p` run).
+  Until then a raw `claude -p` outside the plugin can burn the 3-ask budget to an implicit decline;
+  low harm (a headless-only repo has no human to nudge). Confirm the entrypoint value, then key
+  `isNonInteractive()` off it too.
+
+>>>>>>> 0b31e24 (todo: note the three-dimension in-loop ceiling)
 - **DOCX sections are still tag/kind-mixed for analyzer findings.** The per-file
   Drift/Static tally is now kind-based (matching terminal/HTML and the composite), but
   DOCX's "STATIC ANALYSIS FINDINGS" section lists drift-kind analyzer findings (naming,
