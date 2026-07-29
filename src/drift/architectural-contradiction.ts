@@ -233,6 +233,35 @@ export function classifyDataAccessLabel(content: string, path: string): string |
   return DATA_ACCESS_NAMES[primary.pattern];
 }
 
+/**
+ * PRESENCE, not majority: does this body still show the given data-access
+ * label at all? classifyDataAccessLabel picks the body's primary pattern by
+ * evidence count, so a single raw-SQL call is outvoted by the ORM calls
+ * around it — correct for a vote, wrong for "is the flagged call still there".
+ * Returns null when the label is outside this axis's vocabulary.
+ *
+ * Known limit: this hard-codes language "typescript" for EVERY path, including
+ * .py/.go/.rs, exactly as classifyDataAccessLabel does. It is inert today for
+ * two reasons, both of which could stop holding: detectDataAccess reads only
+ * `content` and `relativePath` and never branches on `language` (unlike
+ * detectErrorHandling in this same file, which does), and the two entry points
+ * lie identically, so a label produced by one is recognized by the other. The
+ * hazard is that the `as DriftFile` cast makes the field look meaningful, so a
+ * future language-conditional branch inside detectDataAccess would silently
+ * read every file as TypeScript here — and this function now sits on the
+ * session re-check's resolution path, where a miss reads as "the flagged
+ * pattern is gone". Tracked in todo.md; the fix is to thread the real detected
+ * language through both entry points.
+ */
+export function hasDataAccessPattern(content: string, path: string, label: string): boolean | null {
+  const wanted = (Object.keys(DATA_ACCESS_NAMES) as DataAccessPattern[]).find(
+    (p) => DATA_ACCESS_NAMES[p] === label,
+  );
+  if (!wanted) return null;
+  const hits = detectDataAccess({ content, relativePath: path, language: "typescript" } as DriftFile);
+  return hits.some((h) => h.pattern === wanted && h.evidence.length > 0);
+}
+
 const ERROR_HANDLING_NAMES: Record<ErrorHandlingPattern, string> = {
   wrap_with_context: "error wrapping with context",
   raw_propagation: "raw error propagation",

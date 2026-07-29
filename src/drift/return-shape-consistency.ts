@@ -154,12 +154,16 @@ function countMatches(re: RegExp, s: string): number {
  * toward "throws" when the function exposes no other error-return shape. Ties
  * break by SHAPE_PRIORITY (most distinctive wins).
  */
-function classifyShape(body: string): ReturnShape | null {
-  // Strip line comments so "// throw new Error" doesn't trigger.
-  const stripped = body
+// Strip line comments so "// throw new Error" doesn't trigger.
+function stripComments(body: string): string {
+  return body
     .replace(/\/\/.*$/gm, "")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*#.*$/gm, "");
+}
+
+function classifyShape(body: string): ReturnShape | null {
+  const stripped = stripComments(body);
 
   const counts: Record<ReturnShape, number> = {
     throws: 0,
@@ -195,6 +199,18 @@ function classifyShape(body: string): ReturnShape | null {
 export function classifyReturnShapeLabel(body: string): string | null {
   const shape = classifyShape(body);
   return shape ? SHAPE_NAMES[shape] : null;
+}
+
+/**
+ * PRESENCE, not dominance: does this body still use the given shape anywhere?
+ * classifyShape returns the shape a body uses MOST, so a body that added a new
+ * error path reads as something else while the flagged one is still in it.
+ * Returns null when the label is outside this axis's vocabulary.
+ */
+export function hasReturnShape(body: string, label: string): boolean | null {
+  const wanted = (Object.keys(SHAPE_NAMES) as ReturnShape[]).find((s) => SHAPE_NAMES[s] === label);
+  if (!wanted) return null;
+  return SHAPE_PATTERNS[wanted].test(stripComments(body));
 }
 
 /**

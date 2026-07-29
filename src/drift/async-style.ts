@@ -53,3 +53,26 @@ export function classifyAsyncStyle(content: string): AsyncStyle | null {
   if (awaitRatio < 0.3) return "then_chains";
   return "mixed";
 }
+
+/** A display name back to its style key, or null when the string isn't one of
+ *  this axis's names. */
+export function asyncStyleFromName(label: string): AsyncStyle | null {
+  for (const key of Object.keys(ASYNC_STYLE_NAMES) as AsyncStyle[]) {
+    if (ASYNC_STYLE_NAMES[key] === label) return key;
+  }
+  return null;
+}
+
+/**
+ * PRESENCE, not dominance: does this chunk still contain the style at all?
+ * classifyAsyncStyle answers "what is this body mostly", which is the right
+ * question for a vote and the wrong one for "did the flagged code go away" — a
+ * half-converted body reads as mixed, and a converted neighbour can outvote an
+ * untouched `.then()` chain. Presence never goes quiet like that.
+ */
+export function hasAsyncStyle(content: string, style: AsyncStyle): boolean {
+  const { awaitCount, thenCount } = asyncCounts(content);
+  if (style === "async_await") return awaitCount > 0;
+  if (style === "then_chains") return thenCount > 0;
+  return awaitCount > 0 && thenCount > 0;
+}
