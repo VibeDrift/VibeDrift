@@ -68,6 +68,27 @@ describe("hook entry (integration)", () => {
     expect(ev.detail.file).toBe(join("src", "a.ts"));
     expect(lines[0]).not.toContain("UNIQUE_BODY_SENTINEL_9f2");
     expect(ev.body).toBeUndefined();
+    // no baseline in this repo, so the inline check was skipped
+    expect(ev.detail.checked).toBe(false);
+  });
+
+  it("records checked=false (and only the basename) for an out-of-repo edit", () => {
+    const home = tmp("vd-home-");
+    const repo = tmp("vd-repo-");
+    const elsewhere = tmp("vd-outside-");
+    mkdirSync(join(repo, ".git"));
+    const r = runHook(home, {
+      session_id: "it-out",
+      cwd: repo,
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: join(elsewhere, "notes.ts"), content: "export const x = 1;\n" },
+    });
+    expect(r.status).toBe(0);
+    const ev = JSON.parse(ledgerLines(home, "it-out")[0]);
+    expect(ev.type).toBe("edit");
+    expect(ev.detail.file).toBe("notes.ts");
+    expect(ev.detail.checked).toBe(false);
   });
 
   it("captures NOTHING when the entitlement cache says locked", () => {
@@ -155,9 +176,12 @@ describe("hook entry (integration)", () => {
     expect(r.stderr).toContain("[vibedrift]");
 
     // the edit event and at least one flag event are in the ledger
-    const types = ledgerLines(home, "it-fyi").map((l) => JSON.parse(l).type);
+    const events = ledgerLines(home, "it-fyi").map((l) => JSON.parse(l));
+    const types = events.map((e) => e.type);
     expect(types).toContain("edit");
     expect(types).toContain("flag");
+    // the check ran on this edit, so the ledger records it as checked
+    expect(events.find((e) => e.type === "edit").detail.checked).toBe(true);
   });
 
   it("resolves a finding when the same file is re-edited to fix it", () => {
@@ -201,9 +225,14 @@ describe("hook entry (integration)", () => {
       'export async function r(){ const x = await fetch("/r"); const j = await x.json(); return j.data; }',
     ));
 
-    const types = ledgerLines(home, "res-1").map((l) => JSON.parse(l).type);
+    const events = ledgerLines(home, "res-1").map((l) => JSON.parse(l));
+    const types = events.map((e) => e.type);
     expect(types).toContain("flag");
     expect(types).toContain("resolve");
+    // checked=true on BOTH edits: the flagged one and the clean fixing one
+    const edits = events.filter((e) => e.type === "edit");
+    expect(edits).toHaveLength(2);
+    for (const e of edits) expect(e.detail.checked).toBe(true);
   });
 
   it("does not re-message (or re-append) an already-open finding on a repeat edit", () => {

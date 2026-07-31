@@ -111,6 +111,7 @@ export function summarize(events: SessionEvent[]): SessionSummary {
 export function formatSummary(s: SessionSummary): string {
   // "edits" not "edits checked": an edit outside the repo or above the inline
   // size gate is recorded but not drift-checked, so "checked" would overstate.
+  // (Each edit event records which case it was in detail.checked — P1.7.)
   const parts = [`${s.edits} edits`, `${s.flagged} flagged`];
   if (s.resolved) parts.push(`${s.resolved} resolved`);
   if (s.held) parts.push(`${s.held} held`);
