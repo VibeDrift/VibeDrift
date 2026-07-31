@@ -132,13 +132,38 @@ describe("buildLockNotice (the native path's paywall signal)", () => {
 
   it("names the upgrade path", () => {
     const out = buildLockNotice({ entitlement: locked });
-    expect(out.systemMessage).toContain("vibedrift upgrade");
+    expect(out.systemMessage).toContain("Pro");
+    expect(out.systemMessage).toContain("$15/mo");
+    expect(out.systemMessage).toContain("vibedrift.ai/dashboard/billing");
+  });
+
+  it("recaps real totals when the trial caught drift", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: { flagged: 14, resolved: 9 } });
+    expect(out.systemMessage).toContain(
+      "Across your 5 free sessions, VibeDrift flagged 14 drifts; your agent fixed 9 on the spot, re-verified. Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing",
+    );
+  });
+
+  it("falls back to the clean line when the trial flagged nothing", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: { flagged: 0, resolved: 0 } });
+    expect(out.systemMessage).toContain(
+      "You ran your 5 free sessions clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing",
+    );
+    expect(out.systemMessage).not.toContain("Across your");
+  });
+
+  it("falls back when no ledgers were readable (never invented numbers)", () => {
+    const out = buildLockNotice({ entitlement: locked, totals: null });
+    expect(out.systemMessage).toContain("free sessions clean");
+    expect(out.systemMessage).not.toContain("flagged");
   });
 
   it("claims nothing about prevention or deletion (honesty constraint)", () => {
-    const msg = buildLockNotice({ entitlement: locked }).systemMessage ?? "";
-    for (const banned of ["prevented", "blocked", "deleted", "erased"]) {
-      expect(msg.toLowerCase()).not.toContain(banned);
+    for (const totals of [null, { flagged: 3, resolved: 2 }]) {
+      const msg = buildLockNotice({ entitlement: locked, totals }).systemMessage ?? "";
+      for (const banned of ["prevented", "blocked", "deleted", "erased"]) {
+        expect(msg.toLowerCase()).not.toContain(banned);
+      }
     }
   });
 

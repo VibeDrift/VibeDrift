@@ -333,7 +333,46 @@ describe("entitlement lock in the native path (integration)", () => {
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout.trim());
     expect(out.systemMessage).toContain("trial is used up");
-    expect(out.systemMessage).toContain("vibedrift upgrade");
+    // clean trial (the only local ledger holds no flags): the no-numbers fallback
+    expect(out.systemMessage).toContain(
+      "You ran your 5 free sessions clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing",
+    );
+  });
+
+  it("recaps the trial's real numbers on the locked attempt", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    const hash = activateRepo(home, repo);
+    const ev = (over: Record<string, unknown>): string =>
+      JSON.stringify({
+        v: 1, sid: "t1", aid: "a1", ts: "2026-07-30T00:00:00.000Z", agent: "claude-code",
+        projectHash: hash, channel: "hook", mode: "passive", detail: { file: "x.ts", category: "naming" }, ...over,
+      });
+    writeFileSync(
+      join(home, ".vibedrift", "sessions", hash, "t1.jsonl"),
+      [
+        ev({ type: "flag", findingId: "DF-1" }),
+        ev({ type: "flag", findingId: "DF-2" }),
+        ev({ type: "resolve", findingId: "DF-1" }),
+      ].join("\n") + "\n",
+    );
+    entitlement(home, LOCKED);
+    const out = JSON.parse(runStart(home, repo, "startup", "s2").stdout.trim());
+    expect(out.systemMessage).toContain(
+      "Across your 5 free sessions, VibeDrift flagged 2 drifts; your agent fixed 1 on the spot, re-verified. Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing",
+    );
+    // a user notice only, out of the agent's way
+    expect(out).not.toHaveProperty("hookSpecificOutput");
+  });
+
+  it("emits the recap only at SessionStart, never on Stop", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    activate(home, repo);
+    entitlement(home, LOCKED);
+    const r = stopHook(home, repo);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe("");
   });
 
   it("captures nothing while locked", () => {

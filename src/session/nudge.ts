@@ -24,6 +24,7 @@
  */
 
 import type { SessionEntitlement } from "./entitlement.js";
+import type { TrialRecapTotals } from "./trial-recap.js";
 
 /** The four documented Claude Code SessionStart `source` values. */
 export type StartSource = "startup" | "resume" | "clear" | "compact";
@@ -107,17 +108,27 @@ export interface NoticeOutput {
  * screen; the native flow has no terminal we own, so the honest equivalent is
  * one `systemMessage` line on SessionStart.
  *
- * Honesty constraints (§6): state only that recording is paused. Never claim
- * anything was prevented, blocked, or deleted — the trial's local ledgers are
- * untouched and still the user's.
+ * Honesty constraints (§6): state that recording is paused, then recap only
+ * what the trial's REAL local ledgers show (`totals`, summed by trial-recap).
+ * With no readable ledgers, or a clean trial, the copy carries no numbers at
+ * all. Never claim anything was prevented, blocked, or deleted: the trial's
+ * local ledgers are untouched and still the user's.
  */
-export function buildLockNotice(ctx: { entitlement: SessionEntitlement }): NoticeOutput {
+export function buildLockNotice(ctx: {
+  entitlement: SessionEntitlement;
+  totals?: TrialRecapTotals | null;
+}): NoticeOutput {
   const limit = ctx.entitlement.trialLimit;
+  const t = ctx.totals;
+  const recap =
+    t && t.flagged > 0
+      ? `Across your ${limit} free sessions, VibeDrift flagged ${t.flagged} drifts; ` +
+        `your agent fixed ${t.resolved} on the spot, re-verified. ` +
+        `Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing`
+      : `You ran your ${limit} free sessions clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing`;
   return {
     systemMessage:
-      `VibeDrift: your ${limit}-session trial is used up, so this session is not being recorded. ` +
-      `Run \`vibedrift upgrade\` to keep Drift Sessions watching. ` +
-      `Your existing local session history stays on this machine.`,
+      `VibeDrift: your ${limit}-session trial is used up, so this session is not being recorded. ` + recap,
   };
 }
 

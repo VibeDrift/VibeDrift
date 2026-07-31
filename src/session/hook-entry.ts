@@ -23,6 +23,7 @@
 import { relative, resolve, isAbsolute, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
+import type { TrialRecapTotals } from "./trial-recap.js";
 
 const SELF_TIMEOUT_MS = 2000;
 
@@ -186,7 +187,17 @@ async function main(): Promise<number> {
       const { isNewInteractiveSource, isNonInteractive, buildLockNotice } = await import("./nudge.js");
       const ent = readEntitlementCache();
       if (ent && !ent.entitled && isNewInteractiveSource(source) && !isNonInteractive()) {
-        process.stdout.write(JSON.stringify(buildLockNotice({ entitlement: ent })) + "\n");
+        // Recap what the trial really caught (P0.3). Real ledger sums only;
+        // null falls back to number-free copy inside buildLockNotice. Guarded
+        // so a summing failure still delivers the paused notice.
+        let totals: TrialRecapTotals | null = null;
+        try {
+          const { sumLocalLedgerTotals } = await import("./trial-recap.js");
+          totals = sumLocalLedgerTotals(defaultSessionsDir());
+        } catch {
+          // fail-open: recap without numbers
+        }
+        process.stdout.write(JSON.stringify(buildLockNotice({ entitlement: ent, totals })) + "\n");
       }
     }
     if (normalized.type === "session_end") {
