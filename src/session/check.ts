@@ -47,6 +47,10 @@ export interface EditCheckOutcome {
   /** findingId to the construct the finding was raised against. Local only:
    *  this feeds the session's outcome sidecar and is never part of an event. */
   anchors: Record<string, FindingAnchor>;
+  /** true only when the drift detection actually RAN on this edit (flagged or
+   *  clean); false when it was skipped (missing/oversized baseline, load or
+   *  detect error). The honest denominator for drift density (P1.7). */
+  checked: boolean;
 }
 
 function statePath(opts: EditCheckOptions): string {
@@ -90,10 +94,10 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   try {
     baseline = await load(opts.rootDir);
   } catch {
-    return { flags: [], fyi: null, baseline: null, anchors: {} };
+    return { flags: [], fyi: null, baseline: null, anchors: {}, checked: false };
   }
   if (!baseline || baseline.minhashIndex.length > INLINE_CHECK_MAX_ENTRIES) {
-    return { flags: [], fyi: null, baseline: null, anchors: {} };
+    return { flags: [], fyi: null, baseline: null, anchors: {}, checked: false };
   }
 
   const relPath = relative(opts.rootDir, opts.file) || opts.file;
@@ -102,7 +106,8 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   try {
     detected = detectDrift(baseline, relPath, opts.body);
   } catch {
-    return { flags: [], fyi: null, baseline, anchors: {} };
+    // the check errored, so it did NOT run — never report an errored edit as checked
+    return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
   }
   const conflictsByDim = detected.conflicts;
   const dupsByLoc = detected.dups;
@@ -175,5 +180,5 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   }
 
   if (flags.length > 0) await writeState(opts, state);
-  return { flags, fyi, baseline, anchors };
+  return { flags, fyi, baseline, anchors, checked: true };
 }

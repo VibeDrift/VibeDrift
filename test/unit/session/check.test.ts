@@ -118,4 +118,54 @@ describe("runEditChecks", () => {
     const ids = [...a.flags, ...b.flags].map((f) => Number(f.findingId!.slice(3)));
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  // ---- `checked` (P1.7 wire gate): true only when detectDrift actually ran ----
+
+  it("reports checked=true on a checked edit that flags", async () => {
+    const out = await runEditChecks(opts({ sessionId: "s-chk-flag" }));
+    expect(out.flags.length).toBeGreaterThanOrEqual(1);
+    expect(out.checked).toBe(true);
+  });
+
+  it("reports checked=true on a checked edit that stays clean", async () => {
+    const clean = 'export async function ok(){ const r = await fetch("/ok"); return await r.json(); }';
+    const out = await runEditChecks(opts({ sessionId: "s-chk-clean", body: clean }));
+    expect(out.flags).toEqual([]);
+    expect(out.checked).toBe(true);
+  });
+
+  it("reports checked=false when the baseline exceeds the size gate", async () => {
+    const padded: RepoDriftBaseline = {
+      ...baseline,
+      minhashIndex: Array.from({ length: INLINE_CHECK_MAX_ENTRIES + 1 }, () => baseline.minhashIndex[0]),
+    };
+    const out = await runEditChecks(opts({ sessionId: "s-chk-big", loadBaselineFor: async () => padded }));
+    expect(out.checked).toBe(false);
+  });
+
+  it("reports checked=false when no baseline exists", async () => {
+    const out = await runEditChecks(opts({ sessionId: "s-chk-none", loadBaselineFor: async () => null }));
+    expect(out.checked).toBe(false);
+  });
+
+  it("reports checked=false when the baseline loader throws", async () => {
+    const out = await runEditChecks(
+      opts({
+        sessionId: "s-chk-loaderr",
+        loadBaselineFor: async () => {
+          throw new Error("corrupt cache");
+        },
+      }),
+    );
+    expect(out.checked).toBe(false);
+  });
+
+  it("reports checked=false when the detector itself errors", async () => {
+    // a structurally broken baseline makes detectDrift throw; the fail-open
+    // catch must report the check as NOT run, never as a clean pass
+    const broken = { ...baseline, perCategoryVote: undefined } as unknown as RepoDriftBaseline;
+    const out = await runEditChecks(opts({ sessionId: "s-chk-err", loadBaselineFor: async () => broken }));
+    expect(out.flags).toEqual([]);
+    expect(out.checked).toBe(false);
+  });
 });
