@@ -365,6 +365,36 @@ describe("entitlement lock in the native path (integration)", () => {
     expect(out).not.toHaveProperty("hookSpecificOutput");
   });
 
+  it("keeps capturing a session granted before the cache flipped to locked", () => {
+    const home = tmp("vd-lock-home-");
+    const repo = repoDir();
+    const hash = activateRepo(home, repo);
+    // session 5 starts entitled and gets captured
+    entitlement(home, { entitled: true, reason: "trial", plan: "free", trialUsed: 4, trialLimit: 5 });
+    runStart(home, repo, "startup", "s5");
+    // mid-session the refresh burns the fuse and the cache flips to locked
+    entitlement(home, LOCKED);
+    // ...but the promised session keeps recording to its end
+    spawnSync(TSX, [ENTRY], {
+      input: JSON.stringify({
+        session_id: "s5",
+        cwd: repo,
+        hook_event_name: "PostToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: join(repo, "x.ts"), content: "export const x = 1;\n" },
+      }),
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "" },
+      timeout: 30_000,
+    });
+    const captured = readFileSync(join(home, ".vibedrift", "sessions", hash, "s5.jsonl"), "utf8");
+    expect(captured).toContain('"type":"edit"');
+    // the NEXT session locks normally
+    const r = runStart(home, repo, "startup", "s6");
+    expect(r.stdout).toContain("trial is used up");
+    expect(existsSync(join(home, ".vibedrift", "sessions", hash, "s6.jsonl"))).toBe(false);
+  });
+
   it("emits the recap only at SessionStart, never on Stop", () => {
     const home = tmp("vd-lock-home-");
     const repo = repoDir();
