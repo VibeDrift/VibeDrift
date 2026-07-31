@@ -75,6 +75,9 @@ const BREADCRUMB =
  */
 export function buildTrialLine(e: SessionEntitlement | null | undefined): string | null {
   if (!e || !e.entitled || e.reason !== "trial") return null;
+  // A spent (or corrupt, "6 of 5") count never renders: the lock notice owns
+  // the spent state, and a grandfathered in-flight cache must not show a meter.
+  if (e.trialUsed >= e.trialLimit) return null;
   const line = `VibeDrift trial: ${e.trialUsed} of ${e.trialLimit} sessions used.`;
   return e.trialUsed === e.trialLimit - 1 ? `${line} This is your last free session.` : line;
 }

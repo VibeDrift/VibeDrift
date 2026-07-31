@@ -77,6 +77,14 @@ describe("buildTrialLine", () => {
     ).toBeNull();
   });
 
+  it("returns null once the count reaches the limit (the lock notice owns spent)", () => {
+    expect(buildTrialLine(trial(5))).toBeNull();
+  });
+
+  it("returns null on an absurd over-limit count from a corrupt cache", () => {
+    expect(buildTrialLine(trial(6))).toBeNull();
+  });
+
   it("flags the last free session at 4 of 5", () => {
     expect(buildTrialLine(trial(4))).toBe(
       "VibeDrift trial: 4 of 5 sessions used. This is your last free session.",
