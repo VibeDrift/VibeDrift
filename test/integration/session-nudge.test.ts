@@ -333,9 +333,9 @@ describe("entitlement lock in the native path (integration)", () => {
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout.trim());
     expect(out.systemMessage).toContain("trial is used up");
-    // clean trial (the only local ledger holds no flags): the no-numbers fallback
+    // clean read (the only local ledger holds no flags): the machine-scoped clean copy
     expect(out.systemMessage).toContain(
-      "You ran your 5 free sessions clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing",
+      "Your watched sessions on this machine ran clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing",
     );
   });
 
@@ -359,7 +359,7 @@ describe("entitlement lock in the native path (integration)", () => {
     entitlement(home, LOCKED);
     const out = JSON.parse(runStart(home, repo, "startup", "s2").stdout.trim());
     expect(out.systemMessage).toContain(
-      "Across your 5 free sessions, VibeDrift flagged 2 drifts; your agent fixed 1 on the spot, re-verified. Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing",
+      "On this machine, VibeDrift flagged 2 drifts; your agent fixed 1 on the spot, re-verified. Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing",
     );
     // a user notice only, out of the agent's way
     expect(out).not.toHaveProperty("hookSpecificOutput");

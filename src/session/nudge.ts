@@ -109,10 +109,13 @@ export interface NoticeOutput {
  * one `systemMessage` line on SessionStart.
  *
  * Honesty constraints (§6): state that recording is paused, then recap only
- * what the trial's REAL local ledgers show (`totals`, summed by trial-recap).
- * With no readable ledgers, or a clean trial, the copy carries no numbers at
- * all. Never claim anything was prevented, blocked, or deleted: the trial's
- * local ledgers are untouched and still the user's.
+ * what the REAL local ledgers show (`totals`, summed by trial-recap). The copy
+ * is machine-scoped, never trial-scoped: local ledgers can hold more or fewer
+ * sessions than the trial consumed (fail-open captures, other machines).
+ * Three tiers: real numbers when drift was caught; "ran clean" only when every
+ * ledger was read in full; otherwise no claim at all (a partial or absent read
+ * can support neither story). Never claim anything was prevented, blocked, or
+ * deleted: the local ledgers are untouched and still the user's.
  */
 export function buildLockNotice(ctx: {
   entitlement: SessionEntitlement;
@@ -120,12 +123,19 @@ export function buildLockNotice(ctx: {
 }): NoticeOutput {
   const limit = ctx.entitlement.trialLimit;
   const t = ctx.totals;
-  const recap =
-    t && t.flagged > 0
-      ? `Across your ${limit} free sessions, VibeDrift flagged ${t.flagged} drifts; ` +
-        `your agent fixed ${t.resolved} on the spot, re-verified. ` +
-        `Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing`
-      : `You ran your ${limit} free sessions clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing`;
+  let recap: string;
+  if (t && t.flagged > 0) {
+    const drifts = t.flagged === 1 ? "1 drift" : `${t.flagged} drifts`;
+    const fixed =
+      t.resolved === 0
+        ? "none were fixed in-session."
+        : `your agent fixed ${t.resolved} on the spot, re-verified.`;
+    recap = `On this machine, VibeDrift flagged ${drifts}; ${fixed} Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing`;
+  } else if (t && t.complete) {
+    recap = `Your watched sessions on this machine ran clean. Pro keeps the watch on: $15/mo. vibedrift.ai/dashboard/billing`;
+  } else {
+    recap = `Keep it in the loop: Pro, $15/mo. vibedrift.ai/dashboard/billing`;
+  }
   return {
     systemMessage:
       `VibeDrift: your ${limit}-session trial is used up, so this session is not being recorded. ` + recap,
