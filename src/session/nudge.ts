@@ -61,6 +61,17 @@ export interface NudgeContext {
 const BREADCRUMB =
   "VibeDrift won't ask again in this repo — run `vibedrift enable` or `vibedrift decline` to set it explicitly.";
 
+/**
+ * The one-line trial meter, shared by the nudge path (un-activated repos) and
+ * the activated-repo SessionStart notice. Null unless the CACHED entitlement
+ * explicitly says trial: an unknown or unreadable cache emits nothing (a
+ * fabricated count is worse than silence), and Pro never sees a meter.
+ */
+export function buildTrialLine(e: SessionEntitlement | null | undefined): string | null {
+  if (!e || !e.entitled || e.reason !== "trial") return null;
+  return `VibeDrift trial: ${e.trialUsed} of ${e.trialLimit} sessions used.`;
+}
+
 /** The model-facing relay instruction. Imperative (relays reliably in testing)
  *  and carries the soft-decline path (N1: the concierge skill formalizes it in
  *  N2; until then it rides here). */
@@ -112,9 +123,8 @@ export function buildNudgeOutput(ctx: NudgeContext): NudgeOutput {
       additionalContext: buildNudgeInstruction(ctx),
     },
   };
+  const trialLine = buildTrialLine(ctx.entitlement);
   if (ctx.lastAsk) out.systemMessage = BREADCRUMB;
-  else if (ctx.entitlement && ctx.entitlement.reason === "trial") {
-    out.systemMessage = `VibeDrift trial: ${ctx.entitlement.trialUsed} of ${ctx.entitlement.trialLimit} sessions used.`;
-  }
+  else if (trialLine) out.systemMessage = trialLine;
   return out;
 }

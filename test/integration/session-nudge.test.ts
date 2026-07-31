@@ -214,15 +214,77 @@ describe("Stop-hook session-flush spawn (integration)", () => {
   });
 });
 
+function entitlement(home: string, e: Record<string, unknown>): void {
+  mkdirSync(join(home, ".vibedrift"), { recursive: true });
+  writeFileSync(join(home, ".vibedrift", "sessions-entitlement.json"), JSON.stringify(e));
+}
+
+/** Capture a projectHash by running one startup, then mark the repo active. */
+function activateRepo(home: string, repo: string): string {
+  runStart(home, repo, "startup");
+  const path = join(home, ".vibedrift", "activation.json");
+  const store = JSON.parse(readFileSync(path, "utf8"));
+  const hash = Object.keys(store.projects)[0];
+  store.projects[hash] = { state: "active", surface: "cli-enable" };
+  writeFileSync(path, JSON.stringify(store));
+  return hash;
+}
+
+describe("trial meter on activated repos (integration)", () => {
+  const TRIAL = { entitled: true, reason: "trial", plan: "free", trialUsed: 2, trialLimit: 5 };
+
+  it("shows the trial count at SessionStart on an activated trial repo", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    const r = runStart(home, repo, "startup", "s2");
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    // a user notice only: no model-facing instruction on an activated repo
+    expect(out).not.toHaveProperty("hookSpecificOutput");
+    expect(out.systemMessage).toBe("VibeDrift trial: 2 of 5 sessions used.");
+  });
+
+  it("stays silent for a pro account", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, { entitled: true, reason: "pro", plan: "pro", trialUsed: 0, trialLimit: 5 });
+    expect(runStart(home, repo, "startup", "s2").stdout.trim()).toBe("");
+  });
+
+  it("stays silent when the entitlement cache is missing", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    expect(runStart(home, repo, "startup", "s2").stdout.trim()).toBe("");
+  });
+
+  it("stays silent on resume/compact (continuation, not a new session)", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    expect(runStart(home, repo, "resume", "s2").stdout.trim()).toBe("");
+    expect(runStart(home, repo, "compact", "s3").stdout.trim()).toBe("");
+  });
+
+  it("still records the session (the meter is a notice, not a gate)", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    const hash = activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    runStart(home, repo, "startup", "s2");
+    const captured = readFileSync(join(home, ".vibedrift", "sessions", hash, "s2.jsonl"), "utf8");
+    expect(captured).toContain('"type":"session_start"');
+  });
+});
+
 describe("entitlement lock in the native path (integration)", () => {
   function config(home: string, cfg: Record<string, unknown>): void {
     mkdirSync(join(home, ".vibedrift"), { recursive: true });
     writeFileSync(join(home, ".vibedrift", "config.json"), JSON.stringify(cfg));
-  }
-
-  function entitlement(home: string, e: Record<string, unknown>): void {
-    mkdirSync(join(home, ".vibedrift"), { recursive: true });
-    writeFileSync(join(home, ".vibedrift", "sessions-entitlement.json"), JSON.stringify(e));
   }
 
   const LOCKED = {

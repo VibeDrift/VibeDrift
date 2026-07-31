@@ -149,6 +149,28 @@ async function main(): Promise<number> {
     }
   }
 
+  // Trial meter (P0.3): the activated-repo counterpart of the nudge path's
+  // trial line, same systemMessage channel, same new-interactive-only budget.
+  // Cached entitlement only; an unknown cache emits nothing (never a fabricated
+  // count) and Pro never sees a meter (buildTrialLine owns both rules). Guarded
+  // so a failure here changes nothing about how the rest of the event is
+  // processed (hooks fail open).
+  if (normalized.type === "session_start" && status === "active" && capturePermitted) {
+    try {
+      const source =
+        typeof (payload as Record<string, unknown>).source === "string"
+          ? ((payload as Record<string, unknown>).source as string)
+          : undefined;
+      const { isNewInteractiveSource, isNonInteractive, buildTrialLine } = await import("./nudge.js");
+      if (isNewInteractiveSource(source) && !isNonInteractive()) {
+        const line = buildTrialLine(readEntitlementCache());
+        if (line) process.stdout.write(JSON.stringify({ systemMessage: line }) + "\n");
+      }
+    } catch {
+      // fail-open: no meter, capture proceeds untouched
+    }
+  }
+
   if (!capturePermitted) {
     // Locked account: capture nothing, but do two things so the paywall is
     // neither invisible nor a one-way door.

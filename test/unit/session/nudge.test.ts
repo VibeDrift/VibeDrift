@@ -5,6 +5,7 @@ import {
   buildNudgeInstruction,
   buildNudgeOutput,
   buildLockNotice,
+  buildTrialLine,
 } from "@/session/nudge";
 import type { SessionEntitlement } from "@/session/entitlement";
 
@@ -53,6 +54,27 @@ describe("buildNudgeInstruction", () => {
   it("adds the honest trial usage line only on a trial entitlement", () => {
     expect(buildNudgeInstruction({ repoName: "r", entitlement: trial(2) })).toContain("2 of 5 sessions used");
     expect(buildNudgeInstruction({ repoName: "r", entitlement: pro })).not.toContain("trial");
+  });
+});
+
+describe("buildTrialLine", () => {
+  it("renders the trial count for a trial entitlement", () => {
+    expect(buildTrialLine(trial(2))).toBe("VibeDrift trial: 2 of 5 sessions used.");
+  });
+
+  it("returns null for a pro account (the meter is trial-only)", () => {
+    expect(buildTrialLine(pro)).toBeNull();
+  });
+
+  it("returns null when the entitlement is unknown (never a fabricated count)", () => {
+    expect(buildTrialLine(null)).toBeNull();
+    expect(buildTrialLine(undefined)).toBeNull();
+  });
+
+  it("returns null when locked (the lock notice owns that path)", () => {
+    expect(
+      buildTrialLine({ entitled: false, reason: "locked", plan: "free", trialUsed: 5, trialLimit: 5 }),
+    ).toBeNull();
   });
 });
 
