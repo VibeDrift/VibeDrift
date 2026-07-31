@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { vibedriftHome } from "./vibedrift-home.js";
 import { join, resolve } from "node:path";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile, rm } from "node:fs/promises";
 
 import { buildAnalysisContext } from "./discovery.js";
 import { runDriftDetection } from "../drift/index.js";
@@ -263,11 +263,21 @@ function hydrate(parsed: SerializedBaseline): RepoDriftBaseline {
   };
 }
 
-/** Read the persisted baseline regardless of freshness (caller checks staleness). */
-export async function loadBaselineUnchecked(rootDir: string): Promise<RepoDriftBaseline | null> {
+/** Read the persisted baseline regardless of freshness (caller checks staleness).
+ *
+ *  `maxBytes` stat-gates the read BEFORE parsing: the hook path runs this
+ *  synchronously ahead of its ledger append, and its 2s fail-open watchdog
+ *  cannot preempt a multi-MB JSON.parse, so an oversized cache reads as
+ *  "no baseline" (a checked=false skip) rather than a session stall. */
+export async function loadBaselineUnchecked(rootDir: string, maxBytes?: number): Promise<RepoDriftBaseline | null> {
+  const path = join(CACHE_DIR, `${projectHash(rootDir)}.json`);
   let raw: string;
   try {
-    raw = await readFile(join(CACHE_DIR, `${projectHash(rootDir)}.json`), "utf8");
+    if (maxBytes !== undefined) {
+      const { size } = await stat(path);
+      if (size > maxBytes) return null;
+    }
+    raw = await readFile(path, "utf8");
   } catch {
     return null;
   }

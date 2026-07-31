@@ -252,9 +252,13 @@ async function main(): Promise<number> {
   // carries the check's real outcome rather than an inference (P1.7: the
   // drift-density denominator counts only edits the inline check RAN on).
   // Preconditions here (in-repo file, non-empty body) are one skip class;
-  // runEditChecks reports its own (missing/oversized baseline, load or
-  // detect error) via `res.checked`. Same invocation, same gating as before —
-  // only the ordering relative to the append moved.
+  // runEditChecks reports its own (non-code file, missing or oversized
+  // baseline, load or detect error) via `res.checked`. Stated cost of the
+  // reordering: the check now runs BEFORE the append, so a self-timeout
+  // firing inside it loses the edit event too (previously only flags were
+  // at risk). The window is bounded small on purpose: the baseline read is
+  // stat-capped (HOOK_BASELINE_MAX_BYTES) and the entry gate keeps the
+  // warm-path check in low milliseconds.
   let editCheck: EditCheckOutcome | null = null;
   if (event.type === "edit") {
     if (body && checkAbsFile) {

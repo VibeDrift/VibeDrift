@@ -169,3 +169,21 @@ describe("runEditChecks", () => {
     expect(out.checked).toBe(false);
   });
 });
+
+describe("non-code edits are a skip class (P1 contract)", () => {
+  it("reports checked=false with no flags for prose", async () => {
+    const out = await runEditChecks(
+      opts({ sessionId: "s-md", file: join(repo, "README.md"), body: "# Payments demo\n\nHow refunds work.\n" }),
+    );
+    expect(out.checked).toBe(false);
+    expect(out.flags).toEqual([]);
+  });
+
+  it("never flags a code snippet inside a non-code file", async () => {
+    const out = await runEditChecks(
+      opts({ sessionId: "s-md2", file: join(repo, "docs.md"), body: `Example:\n\n${"```"}js\n${THEN_BODY}\n${"```"}\n` }),
+    );
+    expect(out.checked).toBe(false);
+    expect(out.flags).toEqual([]);
+  });
+});

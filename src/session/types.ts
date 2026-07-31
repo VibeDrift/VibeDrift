@@ -28,8 +28,9 @@ export interface SessionEventDetail {
   diffstat?: string;
   /** edit events only: true when the inline drift check actually RAN on this
    *  edit (flagged or clean); false when it was skipped for any reason
-   *  (out-of-repo file, empty body, missing or oversized baseline, check
-   *  error). Absent on ledger lines written before this field existed. */
+   *  (out-of-repo file, empty body, non-code file, missing or oversized
+   *  baseline, check error). Absent on ledger lines written before this
+   *  field existed. */
   checked?: boolean;
   category?: string;
   dominant?: string;
