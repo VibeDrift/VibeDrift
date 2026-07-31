@@ -76,6 +76,18 @@ describe("buildTrialLine", () => {
       buildTrialLine({ entitled: false, reason: "locked", plan: "free", trialUsed: 5, trialLimit: 5 }),
     ).toBeNull();
   });
+
+  it("flags the last free session at 4 of 5", () => {
+    expect(buildTrialLine(trial(4))).toBe(
+      "VibeDrift trial: 4 of 5 sessions used. This is your last free session.",
+    );
+  });
+
+  it("keys the boundary on the real limit, not a hardcoded 4", () => {
+    expect(buildTrialLine({ ...trial(4), trialLimit: 10 })).toBe(
+      "VibeDrift trial: 4 of 10 sessions used.",
+    );
+  });
 });
 
 describe("buildNudgeOutput", () => {
@@ -89,6 +101,11 @@ describe("buildNudgeOutput", () => {
   it("shows a trial systemMessage on a trial account", () => {
     const out = buildNudgeOutput({ repoName: "r", entitlement: trial(1) });
     expect(out.systemMessage).toBe("VibeDrift trial: 1 of 5 sessions used.");
+  });
+
+  it("carries the last-free-session notice at the boundary", () => {
+    const out = buildNudgeOutput({ repoName: "r", entitlement: trial(4) });
+    expect(out.systemMessage).toContain("This is your last free session.");
   });
 
   it("the final ask folds in the breadcrumb, overriding the trial line", () => {

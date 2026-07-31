@@ -66,10 +66,16 @@ const BREADCRUMB =
  * the activated-repo SessionStart notice. Null unless the CACHED entitlement
  * explicitly says trial: an unknown or unreadable cache emits nothing (a
  * fabricated count is worse than silence), and Pro never sees a meter.
+ *
+ * Boundary notice: the metrics-surface plan asked for an end-of-session-4
+ * banner, but Claude Code has no reliable session-end signal (B6: Stop fires
+ * per response, and SessionEnd is unobserved on /resume), so the START of the
+ * final session (trialUsed at limit - 1) is the honest boundary.
  */
 export function buildTrialLine(e: SessionEntitlement | null | undefined): string | null {
   if (!e || !e.entitled || e.reason !== "trial") return null;
-  return `VibeDrift trial: ${e.trialUsed} of ${e.trialLimit} sessions used.`;
+  const line = `VibeDrift trial: ${e.trialUsed} of ${e.trialLimit} sessions used.`;
+  return e.trialUsed === e.trialLimit - 1 ? `${line} This is your last free session.` : line;
 }
 
 /** The model-facing relay instruction. Imperative (relays reliably in testing)
