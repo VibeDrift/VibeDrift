@@ -68,6 +68,10 @@ export interface UploadEvent {
   experimental?: boolean;
   /** the +N line count only, never the diff. */
   diffLines?: number;
+  /** edit events only: whether the inline drift check actually ran on this
+   *  edit — the honest denominator for drift density. Absent on events from
+   *  ledgers written before the field existed (unknown, never assumed). */
+  checked?: boolean;
   decision?: "accept" | "park" | "decline";
   /** count of task target files, never the paths. */
   taskFileCount?: number;
@@ -141,6 +145,8 @@ export function toUploadEvent(ev: SessionEvent, opts: UploadMapOptions = {}): Up
       if (d.file) u.fileHash = hashPath(ev.projectHash, d.file);
       const n = parseDiffLines(d.diffstat);
       if (n !== undefined) u.diffLines = n;
+      // verbatim boolean; absent stays absent (pre-field ledgers are unknown)
+      if (typeof d.checked === "boolean") u.checked = d.checked;
       break;
     }
     case "flag": {

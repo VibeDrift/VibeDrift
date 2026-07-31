@@ -151,6 +151,34 @@ describe("toUploadEvent — derived-only invariant", () => {
     expect(mk("repoA").fileHash).not.toBe(mk("repoB").fileHash); // salted → no global rainbow
   });
 
+  it("passes checked through on edit events, verbatim", () => {
+    const yes = toUploadEvent(ev("edit", { detail: { file: PATH, diffstat: "+3", checked: true } }))!;
+    expect(yes.checked).toBe(true);
+    const no = toUploadEvent(ev("edit", { detail: { file: PATH, diffstat: "+3", checked: false } }))!;
+    expect(no.checked).toBe(false);
+  });
+
+  it("omits checked on a pre-field edit event (older ledger lines still map)", () => {
+    // a ledger line written before the field existed: parse + map must both work
+    const line = JSON.stringify(ev("edit", { detail: { file: PATH, diffstat: "+2" } }));
+    const parsed = JSON.parse(line) as SessionEvent;
+    const m = toUploadEvent(parsed)!;
+    expect(m.type).toBe("edit");
+    expect("checked" in m).toBe(false);
+  });
+
+  it("never carries checked on non-edit events, even when planted", () => {
+    const kinds: SessionEventType[] = [
+      "session_start", "flag", "resolve", "hold", "mcp_ask", "mcp_verdict",
+      "intent_lock", "decision", "session_end",
+    ];
+    for (const kind of kinds) {
+      const m = toUploadEvent(ev(kind, { findingId: "DF-1", detail: { checked: true, decision: "accept" } }));
+      expect(m, `${kind} should upload`).not.toBeNull();
+      expect(m!.checked, `${kind} must not carry checked`).toBeUndefined();
+    }
+  });
+
   it("intent_lock ships a file COUNT always, and a token-derived label only under opt-in", () => {
     const src = ev("intent_lock", { detail: { promptText: "add `retryWebhook` to billing.ts and orders.ts", anchorFiles: ["billing.ts", "orders.ts"] } });
 
