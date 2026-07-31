@@ -270,6 +270,24 @@ describe("trial meter on activated repos (integration)", () => {
     expect(runStart(home, repo, "compact", "s3").stdout.trim()).toBe("");
   });
 
+  it("stays silent in a non-interactive/headless context", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    const r = runStart(home, repo, "startup", "s2", { VIBEDRIFT_HOOK_NONINTERACTIVE: "1" });
+    expect(r.stdout.trim()).toBe("");
+  });
+
+  it("shows the meter on /clear (a genuinely new interactive session)", () => {
+    const home = tmp("vd-meter-home-");
+    const repo = repoDir();
+    activateRepo(home, repo);
+    entitlement(home, TRIAL);
+    const out = JSON.parse(runStart(home, repo, "clear", "s2").stdout.trim());
+    expect(out.systemMessage).toBe("VibeDrift trial: 2 of 5 sessions used.");
+  });
+
   it("warns at the start of the last free session", () => {
     const home = tmp("vd-meter-home-");
     const repo = repoDir();
