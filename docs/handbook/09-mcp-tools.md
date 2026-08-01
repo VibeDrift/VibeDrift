@@ -83,7 +83,7 @@ Three dimensions are checked, defined in the `DIM_CHECKS` table: `async_patterns
 
 The dominant pattern to compare against is resolved by `effectiveDominant`: the detector vote when its stored label is in this dimension's vocabulary, otherwise the team's highest-confidence declared intent hint. The declared fallback is what catches the first deviation in a fully consistent dimension: a repo with zero async findings has no vote, but a declared "use async/await" rule is still binding. (For `architectural_consistency`, which is a composite category, the vote is honored only when it is actually a data-access label; a dependency-injection vote stored under the same category does not silence a declared ORM rule.)
 
-A conflict is emitted when the body classifies to a different label than the dominant, with a `fixHint` of the form `Repo uses <dominant>; this change uses <yours>.` plus either an exemplar file or the declaring line (for example `(declared in CLAUDE.md:14)`).
+A conflict is emitted when the body classifies to a different label than the dominant. For a vote-sourced dominant the `fixHint` reads `Dominant pattern in this repo's sampled files: <dominant>; this change uses <yours>.` plus an exemplar file — the hedge is deliberate, because the vote is computed over the sampled/indexed population, not every file in the repo. For a declared rule it reads `Repo uses <dominant>; this change uses <yours>.` plus the declaring line (for example `(declared in CLAUDE.md:14)`), since the authority there is the cited declaration, not a sample.
 
 ### Duplicate check
 
@@ -127,7 +127,7 @@ The agent calls `validate_change` with `rootDir`, `targetPath: "src/services/ord
     "dimension": "async_patterns",
     "dominantPattern": "async/await",
     "yourPattern": ".then() chains",
-    "fixHint": "Repo uses async/await; this change uses .then() chains. See src/services/user-service.ts."
+    "fixHint": "Dominant pattern in this repo's sampled files: async/await; this change uses .then() chains. See src/services/user-service.ts."
   }],
   "duplicateOf": [],
   "referenceFiles": ["src/services/user-service.ts", "src/services/cart-service.ts"],
