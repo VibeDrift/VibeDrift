@@ -23,7 +23,7 @@ import { registerRespondToFlag } from "./tools/respond-to-flag.js";
 import { registerInit } from "./tools/init.js";
 import { registerEnable } from "./tools/enable.js";
 
-const SERVER_INSTRUCTIONS = `VibeDrift detects drift in AI-generated code — where new code diverges from the patterns the rest of the codebase already follows.
+export const SERVER_INSTRUCTIONS = `VibeDrift detects drift in AI-generated code — where new code diverges from the patterns the rest of the codebase already follows.
 
 These in-loop tools are LOCAL and FREE — call them while writing code:
 - init: one-time setup — write .vibedrift/config.json + .vibedriftignore so scans skip fixtures/generated code (call once on a fresh repo).
@@ -32,7 +32,7 @@ These in-loop tools are LOCAL and FREE — call them while writing code:
 - check_file_drift: whether a file diverges from the dominant patterns.
 - find_similar_function: existing near-duplicates of a function you're about to write (avoid re-implementing).
 - validate_change: pre-commit drift check on an edit.
-- respond_to_flag: when a VibeDrift hook advisory flags your change (it carries a DF-<n> id), record your call on it — accept (you'll fix it), park (defer to a human reviewer), or decline (you judge the flag wrong/unneeded) — with a one-line reason.
+- respond_to_flag: when a VibeDrift hook advisory flags your change (it carries a DF-<n> id), record your call on it — accept (you'll fix it), park (defer to a human reviewer), or decline (you judge the flag wrong/unneeded) — with a one-line reason. If the tool is unavailable or the call is denied, state your decision and reason in your reply instead.
 
 For a deeper, AI-validated pass on a CHANGE SET (before committing or opening a PR), have the user run the CLI:
 - \`vibedrift --deep --diff\`        deep-scan ONLY the files changed vs HEAD (fast, scoped).
