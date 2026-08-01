@@ -23,6 +23,33 @@ import type { SessionEvent } from "./types.js";
 export const INLINE_CHECK_MAX_ENTRIES = 2000;
 export const COOLDOWN_MS = 5 * 60_000;
 
+/** A duplicate at or above this similarity is a near-clone: the single most
+ *  actionable finding an edit can raise, so it outranks dimension conflicts
+ *  for the one advisory that gets messaged. Below it, conflicts keep the lead
+ *  (at lower similarity the convention conflict is usually the better call). */
+export const STRONG_DUP_SIMILARITY = 0.9;
+
+/** One advisory candidate for the single-message pick: the cooldown key, the
+ *  agent-facing line, and the recorded flag event it belongs to. */
+export interface AdvisoryCandidate {
+  key: string;
+  message: string;
+  event: SessionEvent;
+}
+
+/** Order candidates by strength before the cooldown pick: a near-clone
+ *  duplicate (similarity >= STRONG_DUP_SIMILARITY) moves ahead of dimension
+ *  conflicts; otherwise the incoming order (conflicts first) is preserved.
+ *  Pure and stable. This only chooses which finding is MESSAGED — every flag
+ *  is still recorded in the ledger regardless. */
+export function rankAdvisoryCandidates(candidates: AdvisoryCandidate[]): AdvisoryCandidate[] {
+  const strong = (c: AdvisoryCandidate): boolean =>
+    c.event.detail.category === "redundancy" &&
+    typeof c.event.detail.similarity === "number" &&
+    c.event.detail.similarity >= STRONG_DUP_SIMILARITY;
+  return [...candidates.filter(strong), ...candidates.filter((c) => !strong(c))];
+}
+
 interface CooldownState {
   nextFindingSeq: number;
   lastFyi: Record<string, number>;
@@ -131,7 +158,7 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   const state = await readState(opts);
   const flags: SessionEvent[] = [];
   const anchors: Record<string, FindingAnchor> = {};
-  const candidates: Array<{ key: string; message: string; event: SessionEvent }> = [];
+  const candidates: AdvisoryCandidate[] = [];
 
   const mkFlag = (detail: SessionEvent["detail"]): SessionEvent => ({
     v: SESSIONS_SCHEMA_VERSION,
@@ -186,7 +213,7 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
 
   let fyi: string | null = null;
   const t = now();
-  for (const cand of candidates) {
+  for (const cand of rankAdvisoryCandidates(candidates)) {
     const last = state.lastFyi[cand.key];
     if (last !== undefined && t - last < COOLDOWN_MS) continue;
     state.lastFyi[cand.key] = t;

@@ -3,7 +3,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBaseline, type RepoDriftBaseline } from "@/core/baseline";
-import { runEditChecks, INLINE_CHECK_MAX_ENTRIES, COOLDOWN_MS } from "@/session/check";
+import {
+  runEditChecks,
+  rankAdvisoryCandidates,
+  INLINE_CHECK_MAX_ENTRIES,
+  COOLDOWN_MS,
+  STRONG_DUP_SIMILARITY,
+} from "@/session/check";
+import type { SessionEvent } from "@/session/types";
 
 const HELPER_BODY = `export function exponentialBackoff(attempt: number): number {
   const base = 250;
@@ -167,6 +174,80 @@ describe("runEditChecks", () => {
     const out = await runEditChecks(opts({ sessionId: "s-chk-err", loadBaselineFor: async () => broken }));
     expect(out.flags).toEqual([]);
     expect(out.checked).toBe(false);
+  });
+});
+
+describe("rankAdvisoryCandidates (pure)", () => {
+  const mk = (key: string, detail: SessionEvent["detail"]) => ({
+    key,
+    message: `msg:${key}`,
+    event: {
+      v: 1,
+      sid: "s",
+      aid: key,
+      ts: new Date().toISOString(),
+      agent: "claude-code",
+      projectHash: "x",
+      channel: "hook",
+      type: "flag",
+      mode: "passive",
+      findingId: "DF-1",
+      detail,
+      outcome: null,
+    } as SessionEvent,
+  });
+  const conflict = (dim: string) => mk(`f.ts|${dim}`, { file: "f.ts", category: dim, dominant: "a", observed: "b" });
+  const dup = (similarity: number) => mk("f.ts|redundancy", { file: "f.ts", category: "redundancy", similarTo: "g.ts:1", similarity });
+
+  it("moves a high-similarity duplicate ahead of conflicts", () => {
+    const ranked = rankAdvisoryCandidates([conflict("async_patterns"), conflict("return_shape_consistency"), dup(0.98)]);
+    expect(ranked.map((c) => c.key)).toEqual([
+      "f.ts|redundancy",
+      "f.ts|async_patterns",
+      "f.ts|return_shape_consistency",
+    ]);
+  });
+
+  it("treats the threshold itself as strong", () => {
+    const ranked = rankAdvisoryCandidates([conflict("async_patterns"), dup(STRONG_DUP_SIMILARITY)]);
+    expect(ranked[0].key).toBe("f.ts|redundancy");
+  });
+
+  it("keeps conflicts first when the duplicate is below the threshold", () => {
+    const ranked = rankAdvisoryCandidates([conflict("async_patterns"), dup(0.82)]);
+    expect(ranked.map((c) => c.key)).toEqual(["f.ts|async_patterns", "f.ts|redundancy"]);
+  });
+
+  it("returns a single candidate unchanged", () => {
+    const only = [conflict("async_patterns")];
+    expect(rankAdvisoryCandidates(only)).toEqual(only);
+    const onlyDup = [dup(0.95)];
+    expect(rankAdvisoryCandidates(onlyDup)).toEqual(onlyDup);
+  });
+});
+
+describe("advisory pick: strongest finding is the one messaged", () => {
+  // One edit that both near-clones an indexed helper AND conflicts with the
+  // declared async dominant: the near-clone is the more actionable advisory.
+  const BOTH_BODY = `${THEN_BODY}\n\n${HELPER_BODY}`;
+
+  it("messages the near-clone duplicate over the conflict, still records both", async () => {
+    const out = await runEditChecks(opts({ sessionId: "s-rank", body: BOTH_BODY }));
+    const cats = out.flags.map((f) => f.detail.category);
+    expect(cats).toContain("redundancy");
+    expect(cats.some((c) => c !== "redundancy")).toBe(true); // conflict still RECORDED
+    const dupFlag = out.flags.find((f) => f.detail.category === "redundancy")!;
+    expect(dupFlag.detail.similarity).toBeGreaterThanOrEqual(STRONG_DUP_SIMILARITY);
+    expect(out.fyi).toContain("duplicates"); // ...but the dup is what gets MESSAGED
+    expect(dupFlag.msgToAgent).toBe(out.fyi);
+  });
+
+  it("cooldown still respected: falls back to the conflict once the dup is cooled", async () => {
+    const first = await runEditChecks(opts({ sessionId: "s-rank-cool", body: BOTH_BODY }));
+    expect(first.fyi).toContain("duplicates");
+    const second = await runEditChecks(opts({ sessionId: "s-rank-cool", body: BOTH_BODY }));
+    expect(second.fyi).toBeTruthy();
+    expect(second.fyi).not.toContain("duplicates");
   });
 });
 
