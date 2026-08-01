@@ -60,6 +60,16 @@ describe("validateChange (pure)", () => {
     expect(r.referenceFiles).toContain("ref.ts");
   });
 
+  it("hedges a vote-sourced fixHint to the sampled population (honest quantifier)", () => {
+    // The dominance vote is computed over the sampled/indexed files, not the
+    // whole repo, so the hint must not claim "Repo uses".
+    const r = validateChange(baseline("async/await", []), "new.ts", THEN_BODY);
+    expect(r.conflicts[0].fixHint).toBe(
+      "Dominant pattern in this repo's sampled files: async/await; this change uses .then() chains. See ref.ts.",
+    );
+    expect(r.conflicts[0].fixHint).not.toMatch(/—|--/);
+  });
+
   it("returns ok for a conforming, non-duplicate change", () => {
     const r = validateChange(baseline("async/await", [{ path: "u.ts", name: "unrelated", body: "function u(){ return 1; }" }]), "new.ts", AWAIT_BODY);
     expect(r.ok).toBe(true);
@@ -105,6 +115,15 @@ describe("validateChange — declared-convention fallback (no detector vote)", (
     expect(r.conflicts[0].dominantPattern).toBe("async/await");
     expect(r.conflicts[0].yourPattern).toBe(".then() chains");
     expect(r.conflicts[0].fixHint).toMatch(/declared in CLAUDE\.md:101/);
+  });
+
+  it("does NOT use the sampled-files hedge for a declared rule (nothing was sampled)", () => {
+    // A declared convention is binding regardless of what files do; claiming a
+    // sampled dominance for it would be a new inaccuracy in the other direction.
+    const r = validateChange(withHints([AWAIT_HINT]), "new.ts", THEN_BODY);
+    expect(r.conflicts[0].fixHint).toBe(
+      "Repo uses async/await; this change uses .then() chains. (declared in CLAUDE.md:101)",
+    );
   });
 
   it("picks the HIGHEST-confidence hint when async hints conflict (async_await 0.7 beats then_chain 0.5)", () => {

@@ -175,11 +175,19 @@ export function validateChange(
     if (!mine || mine === dom.display) continue;
     const where =
       dom.source === "declared" ? ` (declared in ${dom.cite})` : dom.refFiles[0] ? ` See ${dom.refFiles[0]}.` : "";
+    // Honest quantifier: a vote's dominance is computed over the sampled/indexed
+    // files, not the whole repo, so the hint must not claim "Repo uses". A
+    // declared rule keeps the direct phrasing — nothing was sampled, and the
+    // "(declared in ...)" cite names the actual source of authority.
+    const lead =
+      dom.source === "vote"
+        ? `Dominant pattern in this repo's sampled files: ${dom.display}`
+        : `Repo uses ${dom.display}`;
     conflicts.push({
       dimension: check.dimension,
       dominantPattern: dom.display,
       yourPattern: mine,
-      fixHint: `Repo uses ${dom.display}; this change uses ${mine}.${where}`,
+      fixHint: `${lead}; this change uses ${mine}.${where}`,
     });
   }
 
