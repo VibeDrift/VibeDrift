@@ -12,8 +12,15 @@ import { appendEvent, newActivityId, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
 
-/** A session is "active" if its ledger was touched within this window. */
-export const ACTIVE_WINDOW_MS = 10 * 60_000;
+/** A session is "active" if its ledger was touched within this window.
+ *
+ *  15 minutes, deliberately equal to the dashboard's live-session freshness
+ *  window: a session the dashboard still shows as live must never be refused
+ *  by the paths that gate on activity. Both call sites share this one bound —
+ *  the MCP verdict tee (teeMcpVerdict, below) and decision capture
+ *  (recordFlagDecision in src/session/decision.ts, via listActiveSessions).
+ *  If the dashboard window ever changes, change this with it. */
+export const SESSION_ACTIVE_WINDOW_MS = 15 * 60_000;
 
 export interface TeeOptions {
   sessionsDir: string;
@@ -30,7 +37,7 @@ export interface TeeOptions {
 export async function listActiveSessions(
   dir: string,
   now: number,
-  windowMs: number = ACTIVE_WINDOW_MS,
+  windowMs: number = SESSION_ACTIVE_WINDOW_MS,
 ): Promise<Array<{ sid: string; mtime: number }>> {
   let names: string[];
   try {

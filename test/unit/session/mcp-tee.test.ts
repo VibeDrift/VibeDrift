@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, realpathSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { teeMcpVerdict, ACTIVE_WINDOW_MS } from "@/session/mcp-tee";
+import { teeMcpVerdict, SESSION_ACTIVE_WINDOW_MS } from "@/session/mcp-tee";
 import { appendEvent, sessionFilePath, readSessionEvents } from "@/session/ledger";
 import { projectHash } from "@/core/baseline";
 import type { SessionEvent } from "@/session/types";
@@ -20,6 +20,12 @@ const ev = (sid: string): SessionEvent => ({
   detail: {},
 });
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "vd-tee-")));
+
+describe("SESSION_ACTIVE_WINDOW_MS", () => {
+  it("is 15 minutes, matching the dashboard's live-session freshness window", () => {
+    expect(SESSION_ACTIVE_WINDOW_MS).toBe(15 * 60_000);
+  });
+});
 
 describe("teeMcpVerdict", () => {
   it("appends mcp_ask + mcp_verdict to the active session", async () => {
@@ -75,7 +81,7 @@ describe("teeMcpVerdict", () => {
     const hash = projectHash(rootDir);
     await appendEvent(sessionsDir, hash, "stale", ev("stale"));
     // age the file well past the window
-    const old = Date.now() / 1000 - (ACTIVE_WINDOW_MS / 1000) - 60;
+    const old = Date.now() / 1000 - (SESSION_ACTIVE_WINDOW_MS / 1000) - 60;
     utimesSync(sessionFilePath(sessionsDir, hash, "stale"), old, old);
 
     await teeMcpVerdict({ sessionsDir, rootDir, tool: "t", ask: "a", verdict: "v" });

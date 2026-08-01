@@ -122,6 +122,49 @@ describe("recordFlagDecision", () => {
     expect(events.some((e) => e.type === "decision")).toBe(false);
   });
 
+  // The active window must match the dashboard's 15-minute live-session
+  // freshness window: a session the dashboard still shows as live must never
+  // be refused here.
+  it("records a decision 12 minutes after the last ledger touch", async () => {
+    const sessionsDir = tmp();
+    const rootDir = tmp();
+    const hash = projectHash(rootDir);
+    await appendEvent(sessionsDir, hash, "live", flag("live", "DF-1"));
+    const base = Date.now();
+    utimesSync(sessionFilePath(sessionsDir, hash, "live"), new Date(base), new Date(base));
+
+    const res = await recordFlagDecision({
+      sessionsDir,
+      rootDir,
+      findingId: "DF-1",
+      decision: "accept",
+      reason: "dashboard still shows this session live",
+      now: () => base + 12 * 60_000,
+    });
+
+    expect(res).toMatchObject({ ok: true, sid: "live", findingId: "DF-1" });
+  });
+
+  it("refuses a decision 16 minutes after the last ledger touch", async () => {
+    const sessionsDir = tmp();
+    const rootDir = tmp();
+    const hash = projectHash(rootDir);
+    await appendEvent(sessionsDir, hash, "live", flag("live", "DF-1"));
+    const base = Date.now();
+    utimesSync(sessionFilePath(sessionsDir, hash, "live"), new Date(base), new Date(base));
+
+    const res = await recordFlagDecision({
+      sessionsDir,
+      rootDir,
+      findingId: "DF-1",
+      decision: "accept",
+      reason: "too late",
+      now: () => base + 16 * 60_000,
+    });
+
+    expect(res).toEqual({ ok: false, code: "no_active_session" });
+  });
+
   it("reports no_active_session when the repo has no ledger", async () => {
     const sessionsDir = tmp();
     const rootDir = tmp(); // never wrote a ledger for this hash
