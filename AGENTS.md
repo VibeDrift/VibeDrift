@@ -61,6 +61,8 @@ Supporting modules: `src/scoring/` turns findings into 5 categories of 0-20 into
 
 The registries are the source of truth for what runs: `src/analyzers/index.ts` and `src/drift/index.ts`. For the deep reference — code paths, constants, invariants, and the why behind them — read the **Developer Handbook** in [`docs/handbook/`](./docs/handbook/) (published at [vibedrift.ai/handbook](https://www.vibedrift.ai/handbook)).
 
+If you are an AI agent working in this repo, read [`docs/AI_CONTRIBUTOR_GUIDE.md`](./docs/AI_CONTRIBUTOR_GUIDE.md) as well. This file gives you the rules; that one gives you the method, including the traps in this codebase where a confident reading produces a wrong answer.
+
 ## Conventions
 
 - ESM throughout (`"type": "module"`). Path alias `@/*` maps to `src/*`.

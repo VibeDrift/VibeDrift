@@ -28,6 +28,17 @@ Things we deliberately avoid:
 When in doubt, ask: what is the baseline, and how confidently is this deviating
 from it?
 
+## Contributing with an AI coding agent
+
+If an AI agent is doing the reading and writing for you, also load
+[`docs/AI_CONTRIBUTOR_GUIDE.md`](./docs/AI_CONTRIBUTOR_GUIDE.md). It covers the
+method rather than the rules: how to establish that a claim about this codebase
+is actually true, how to measure the size of a problem instead of guessing at
+it, and the specific places in this repo where a confident reading produces a
+wrong answer. Agent-written issues and pull requests are welcome and are held to
+the same bar as any other, which in practice means the numbers in them have to
+be measured rather than estimated.
+
 ## Getting set up
 
 Prerequisites: Node.js >= 20.
