@@ -168,6 +168,55 @@ describe("pattern-classifier ORM signal (issue #87)", () => {
     });
   });
 
+  describe("handler/service path gate matches segments, not substrings", () => {
+    // Every input carries one unambiguous signal, so classification depends
+    // only on the gate.
+    const BODY = "await fetch(url);";
+    const classified = (path: string): boolean => classifyPatterns([file(path, BODY)]).length > 0;
+
+    const rejected = [
+      ["autorouter.ts", "src/autorouter.ts"],
+      ["AutoRouter.ts", "src/AutoRouter.ts"],
+      ["itty-router.js", "benchmarks/webapp/itty-router.js"],
+      ["route-extractors", "src/drift/route-extractors/go.ts"],
+      ["therapist.ts (api substring)", "src/therapist.ts"],
+      ["capital.ts (api substring)", "src/capital.ts"],
+      ["rapid.ts (api substring)", "src/rapid.ts"],
+      ["serviceable.ts", "src/serviceable.ts"],
+    ] as const;
+
+    for (const [name, path] of rejected) {
+      it(`rejects ${name}`, () => {
+        expect(classified(path)).toBe(false);
+      });
+    }
+
+    const admitted = [
+      ["api segment", "src/auth/api.ts"],
+      ["nested api route", "src/app/api/auth/cli/route.ts"],
+      ["handlers dir", "src/handlers/carts.ts"],
+      ["go api dir", "internal/api/router.go"],
+      ["python api dir", "app/api/views.py"],
+      ["services dir", "src/services/thing.ts"],
+      ["rust handlers file", "crates/vibe_lsp/src/handlers.rs"],
+      // `routers` is a real routing directory, not a substring accident.
+      // trpc keeps its Prisma data access here, so excluding it would be a
+      // recall regression rather than a false-positive fix.
+      ["routers dir", "examples/next-prisma-starter/src/server/routers/post.ts"],
+      ["router.go as a full segment", "internal/router.go"],
+    ] as const;
+
+    for (const [name, path] of admitted) {
+      it(`admits ${name}`, () => {
+        expect(classified(path)).toBe(true);
+      });
+    }
+
+    it("still rejects an ordinary source file", () => {
+      expect(classified("src/scoring/engine.ts")).toBe(false);
+    });
+  });
+
   describe("finding level: the reported symptom", () => {
     it("does not invent an ORM majority from `content.` substrings", () => {
       // Five files whose only data-access-looking line is a string split, plus one

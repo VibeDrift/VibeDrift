@@ -80,9 +80,23 @@ const SIGNAL_DEFS: SignalDef[] = [
   { pattern: "http_client", regex: /fetch\(|axios\.|requests\.(?:get|post)/i, label: "HTTP fetch/axios/requests" },
 ];
 
-// Files that are likely "handler" or "service" files (where pattern drift matters)
+// Files that are likely "handler" or "service" files (where pattern drift matters).
+//
+// SEGMENT match, not substring. Unanchored, "route" admitted router.go,
+// autorouter.ts, itty-router.js and this repo's own src/drift/route-extractors/,
+// and "api" admitted therapist.ts, capital.ts and rapid.ts. Across seven repos,
+// 344 of 499 gated files entered on a substring rather than a path segment, and
+// a file that enters the classifier gets labelled by whatever signal fires first.
+//
+// `routers?` is included deliberately: a directory or file named `router`/
+// `routers` is real routing code and holds real data access (trpc's Prisma
+// usage lives in src/server/routers/). Only the SUBSTRING matches are dropped,
+// so autorouter.ts, itty-router.js and route-extractors/ no longer qualify
+// while routers/post.ts still does.
+//
+// This mirrors the anchored form CONTEXT_PRIORS already uses just below.
 function isHandlerOrServiceFile(path: string): boolean {
-  return /(?:handler|controller|service|route|endpoint|api|resource)/i.test(path);
+  return /(?:^|\/)(?:handlers?|controllers?|services?|routes?|routers?|endpoints?|api|resources?)(?:[/.]|$)/i.test(path);
 }
 
 // ─── Bayesian context priors ─────────────────────────────────────────
