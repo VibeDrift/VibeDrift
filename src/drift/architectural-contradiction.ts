@@ -55,8 +55,23 @@ function detectDataAccess(file: DriftFile): { pattern: DataAccessPattern; eviden
     results.push({ pattern: "raw_sql", evidence: sqlEvidence });
   }
 
-  // ORM
-  const ormPatterns = /\.(?:Where|Find|Create|Save|Delete|First|Preload|findOne|findMany|findAll|objects\.filter)\s*\(/g;
+  // ORM. Route registrations share these verb names with ORM CRUD calls:
+  // router.Create("/users", h), r.Delete("/orders/{id}", h.Del),
+  // app.Delete("/users/:id", deleteUser). The discriminator is the FIRST
+  // ARGUMENT: a route path is a string literal beginning with "/", and no ORM
+  // idiom measured here (gorm, prisma, sequelize, typeorm, django, ent,
+  // mongoose) passes one in that position.
+  //
+  // A receiver or import gate would be stronger, but this module has no ORM
+  // vocabulary and no manifest access — classifyDataAccessLabel and
+  // hasDataAccessPattern take only (content, path) and are the MCP
+  // validate_change and session-resolve contracts. Measured alternatives:
+  // requiring a known ORM token keeps 2 of 8 real ORM idioms, requiring an
+  // ORM-ish chain root keeps 4 of 8. Argument shape keeps 10 of 10.
+  //
+  // The lookahead is zero-width, so extractEvidence still advances and still
+  // records line numbers from match.index.
+  const ormPatterns = /\.(?:Where|Find|Create|Save|Delete|First|Preload|findOne|findMany|findAll|objects\.filter)\s*\(\s*(?!['"`]\/)/g;
   const ormEvidence = extractEvidence(c, ormPatterns);
   if (ormEvidence.length > 0) results.push({ pattern: "orm", evidence: ormEvidence });
 

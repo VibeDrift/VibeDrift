@@ -73,6 +73,22 @@ const GOLDEN: [string, string | null, string | null, string | null][] = [
   ["decodeTokenShapeTie", null, null, "tuple returns (value, error)"],
   ["readCursorShapeTie", null, null, "error-object returns"],
   ["loadProfileAccessTie", "async_await", "inline HTTP client calls", null],
+
+  // Issue #87: route registrations share verb names with ORM CRUD calls.
+  // The first three must classify as null (they are routers, not data access);
+  // the next three are real ORM idioms that must keep classifying as ORM.
+  ["mountChiRoutes", null, null, null],
+  ["mountFiberRoutes", null, null, null],
+  ["mountCustomRouter", null, null, null],
+  ["loadUserViaGorm", null, "ORM methods", "tuple returns (value, error)"],
+  ["listSeatsViaSequelize", null, "ORM methods", null],
+  ["filterUsersViaDjango", null, "ORM methods", null],
+  // KNOWN REMAINING FALSE POSITIVE, deliberately pinned rather than fixed.
+  // `routes.findOne(pattern)` passes an identifier, not a route-path literal,
+  // so it is indistinguishable from `Model.findOne(id)` without receiver or
+  // import knowledge. Both gates that would provide that knowledge cost 4 to 6
+  // of 8 real ORM idioms, so the recall trade was refused. Tracked in todo.md.
+  ["lookupRouteTable", null, "ORM methods", "null/undefined sentinels"],
 ];
 
 describe("shared single-body classifiers (characterization golden)", () => {

@@ -31,7 +31,7 @@ import type { IntentHint } from "../intent/types.js";
 
 const CACHE_DIR = join(vibedriftHome(), "baseline-cache");
 /** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 3;
+export const BASELINE_VERSION = 4;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;

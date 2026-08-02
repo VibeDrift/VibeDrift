@@ -391,3 +391,42 @@ export async function loadProfile(userId: string) {
   await repo.put(userId, res);
   return { ...res, extra };
 }
+=== mountChiRoutes synthetic ===
+func mountOrderRoutes(r chi.Router, h *OrderHandler) {
+  r.Get("/orders", h.List)
+  r.Create("/orders", h.New)
+  r.Delete("/orders/{id}", h.Del)
+}
+=== mountFiberRoutes synthetic ===
+func mountUserRoutes(app *fiber.App) {
+  app.Get("/users", listUsers)
+  app.Delete("/users/:id", deleteUser)
+}
+=== mountCustomRouter synthetic ===
+export function mount(router: Router) {
+  router.Create("/users", handleCreateUser);
+  router.Delete("/users/:id", handleDeleteUser);
+}
+=== loadUserViaGorm synthetic ===
+func (s *Store) loadUser(id string) (*User, error) {
+  var u User
+  if err := s.db.Where("id = ?", id).First(&u).Error; err != nil {
+    return nil, err
+  }
+  return &u, nil
+}
+=== listSeatsViaSequelize synthetic ===
+export async function listSeats(orgId: string) {
+  const rows = await Seat.findAll({ where: { orgId, active: true } });
+  return rows.map((r) => r.get({ plain: true }));
+}
+=== filterUsersViaDjango synthetic ===
+def active_users(org_id):
+    qs = User.objects.filter(org_id=org_id, active=True)
+    return list(qs)
+=== lookupRouteTable synthetic ===
+export function resolveRoute(pattern: string) {
+  const hit = routes.findOne(pattern);
+  if (!hit) return null;
+  return hit.handler;
+}
