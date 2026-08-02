@@ -30,6 +30,7 @@
 
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { debug } from "../core/debug.js";
 import { safeSegment } from "./ledger.js";
 import { UploadStateStore } from "./upload-state.js";
 import { toUploadEvent } from "./upload-schema.js";
@@ -43,6 +44,15 @@ import type { SessionEvent } from "./types.js";
 
 /** Server batch cap; a request never carries more than this many entries. */
 export const NAMES_BATCH_MAX = 500;
+/**
+ * Byte cap per request, comfortably under the endpoint's 256KB body limit.
+ * The entry cap alone is NOT enough: 500 entries of long multi-byte paths
+ * measure several hundred KB, and because names upload fail-open a 413 would be
+ * SILENT — the names would simply never appear on the dashboard.
+ */
+export const NAMES_BATCH_MAX_BYTES = 180 * 1024;
+/** Room for the `{"projectHash":"...","names":[]}` envelope in that budget. */
+const ENVELOPE_BYTES = 128;
 /** Server path cap, mirrored client-side. */
 export const MAX_REL_PATH_LEN = 300;
 
@@ -127,10 +137,44 @@ export async function collectFileNames(sessionsDir: string, projectHash: string)
       // The hash comes from the upload schema itself: never re-derived here.
       const hash = toUploadEvent(ev)?.fileHash;
       if (!isFileHash(hash)) continue;
-      if (!byHash.has(hash)) byHash.set(hash, rel);
+      byHash.set(hash, rel); // last occurrence wins; position stays ledger order
     }
   }
   return [...byHash].map(([fileHash, path]) => ({ fileHash, path }));
+}
+
+/**
+ * Split a manifest into the requests that may actually be sent. The last gate
+ * before the wire, so it re-applies every rule rather than trusting its input:
+ *  - drops anything whose hash or path fails validation,
+ *  - collapses a repeated fileHash (last occurrence wins) so no request can
+ *    carry the same conflict target twice,
+ *  - caps each request at NAMES_BATCH_MAX entries AND NAMES_BATCH_MAX_BYTES of
+ *    serialized JSON, whichever binds first.
+ */
+export function planNameBatches(entries: readonly FileNameEntry[]): FileNameEntry[][] {
+  const unique = new Map<string, string>();
+  for (const e of entries) {
+    if (!e || !isFileHash(e.fileHash) || !isSafeRelPath(e.path)) continue;
+    unique.set(e.fileHash, e.path); // last occurrence wins, first position kept
+  }
+
+  const batches: FileNameEntry[][] = [];
+  let current: FileNameEntry[] = [];
+  let bytes = ENVELOPE_BYTES;
+  for (const [fileHash, path] of unique) {
+    const entry: FileNameEntry = { fileHash, path };
+    const size = Buffer.byteLength(JSON.stringify(entry), "utf8") + 1; // +1 comma
+    if (current.length > 0 && (current.length >= NAMES_BATCH_MAX || bytes + size > NAMES_BATCH_MAX_BYTES)) {
+      batches.push(current);
+      current = [];
+      bytes = ENVELOPE_BYTES;
+    }
+    current.push(entry);
+    bytes += size;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
 }
 
 export function namesStatePath(sessionsDir: string, projectHash: string): string {
@@ -177,13 +221,20 @@ export async function clearUploadedNames(sessionsDir: string, projectHash: strin
   }
 }
 
+/** What the server reports per batch. Legacy/void answers count as all-stored. */
+export interface NamesPostAck {
+  stored?: number;
+  /** Entries the server refused (bad hash/path, duplicate in batch). */
+  rejected?: number;
+}
+
 export interface NamesSyncOptions {
   sessionsDir: string;
   projectHash: string;
   /** VibeDrift home: the activation store (the opt-in flag) lives here. */
   home: string;
-  /** POST one batch of at most NAMES_BATCH_MAX entries. Must reject on failure. */
-  postNames?: (entries: FileNameEntry[]) => Promise<unknown>;
+  /** POST one planned batch. Must reject on failure. */
+  postNames?: (entries: FileNameEntry[]) => Promise<NamesPostAck | void>;
   /** DELETE every uploaded name for this project. Must reject on failure. */
   deleteNames?: () => Promise<unknown>;
   /** false when the account is entitlement-locked: an owed deletion is still
@@ -192,10 +243,12 @@ export interface NamesSyncOptions {
 }
 
 export interface NamesSyncResult {
-  /** Entries the server accepted this run. */
+  /** Entries sent in requests the server answered successfully. */
   uploaded: number;
   /** Requests actually made. */
   batches: number;
+  /** Entries the server itself refused (should be 0: we validate first). */
+  rejected: number;
   /** An owed opt-out deletion completed this run. */
   deleted: boolean;
   /** A deletion is still owed to the server (retried on the next flush). */
@@ -209,7 +262,7 @@ export interface NamesSyncResult {
  * a bad server never turns into a request storm. Never throws.
  */
 export async function syncFileNames(opts: NamesSyncOptions): Promise<NamesSyncResult> {
-  const res: NamesSyncResult = { uploaded: 0, batches: 0, deleted: false, deletePending: false };
+  const res: NamesSyncResult = { uploaded: 0, batches: 0, rejected: 0, deleted: false, deletePending: false };
   try {
     const { sessionsDir, projectHash, home } = opts;
     const store = loadActivation(home);
@@ -240,16 +293,22 @@ export async function syncFileNames(opts: NamesSyncOptions): Promise<NamesSyncRe
     const fresh = entries.filter((e) => !known.has(e.fileHash));
     if (fresh.length === 0) return res;
 
-    for (let i = 0; i < fresh.length; i += NAMES_BATCH_MAX) {
-      const batch = fresh.slice(i, i + NAMES_BATCH_MAX);
+    for (const batch of planNameBatches(fresh)) {
+      let ack: NamesPostAck | void;
       try {
-        await opts.postNames(batch);
+        ack = await opts.postNames(batch);
       } catch {
         break; // one attempt per flush run; the rest waits for the next flush
       }
       res.batches++;
       res.uploaded += batch.length;
+      if (ack && typeof ack.rejected === "number") res.rejected += ack.rejected;
       await recordUploadedHashes(sessionsDir, projectHash, batch.map((e) => e.fileHash));
+    }
+    // We validate before sending, so a rejection means the server disagrees with
+    // this client. Say so once, quietly, and never retry it.
+    if (res.rejected > 0) {
+      debug("session-names", `${res.rejected} file-name entr${res.rejected === 1 ? "y" : "ies"} rejected by the server`);
     }
     return res;
   } catch {

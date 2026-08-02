@@ -8,7 +8,9 @@ import { toUploadEvent } from "@/session/upload-schema";
 import { loadActivation, setShareFileNames, setNamesDeletePending, namesDeleteIsPending } from "@/session/activation";
 import {
   NAMES_BATCH_MAX,
+  NAMES_BATCH_MAX_BYTES,
   MAX_REL_PATH_LEN,
+  planNameBatches,
   isSafeRelPath,
   collectFileNames,
   syncFileNames,
@@ -168,6 +170,60 @@ describe("collectFileNames (manifest built from this project's own ledger)", () 
   });
 });
 
+const batchBytes = (batch: FileNameEntry[]): number =>
+  Buffer.byteLength(JSON.stringify({ projectHash: "0123456789abcdef", names: batch }), "utf8");
+
+describe("planNameBatches (what one request may carry)", () => {
+  const entry = (i: number, path?: string): FileNameEntry => ({
+    fileHash: i.toString(16).padStart(16, "0"),
+    path: path ?? `src/f${i}.ts`,
+  });
+
+  it("caps a request at 500 entries", () => {
+    const batches = planNameBatches(Array.from({ length: NAMES_BATCH_MAX * 2 + 3 }, (_, i) => entry(i)));
+    expect(batches.map((b) => b.length)).toEqual([NAMES_BATCH_MAX, NAMES_BATCH_MAX, 3]);
+  });
+
+  it("caps a request by BYTES too, so a multi-byte monorepo never nears the server limit", () => {
+    // 500 entries of long multi-byte paths blow past the byte budget well
+    // before the entry cap; a silent 413 would lose the names entirely.
+    const long = `src/${"\u65e5\u672c\u8a9e".repeat(60)}.ts`;
+    expect(long.length).toBeLessThanOrEqual(MAX_REL_PATH_LEN);
+    const batches = planNameBatches(Array.from({ length: NAMES_BATCH_MAX }, (_, i) => entry(i, `${i}/${long}`)));
+    expect(batches.length).toBeGreaterThan(1);
+    for (const b of batches) expect(batchBytes(b)).toBeLessThanOrEqual(NAMES_BATCH_MAX_BYTES);
+    expect(batches.flat()).toHaveLength(NAMES_BATCH_MAX);
+  });
+
+  it("never repeats a fileHash inside a batch: last occurrence wins", () => {
+    const batches = planNameBatches([
+      { fileHash: "a".repeat(16), path: "src/old.ts" },
+      { fileHash: "b".repeat(16), path: "src/other.ts" },
+      { fileHash: "a".repeat(16), path: "src/new.ts" },
+    ]);
+    expect(batches).toEqual([
+      [
+        { fileHash: "a".repeat(16), path: "src/new.ts" },
+        { fileHash: "b".repeat(16), path: "src/other.ts" },
+      ],
+    ]);
+  });
+
+  it("is the last gate: bad hashes and unsafe paths never reach a request", () => {
+    const batches = planNameBatches([
+      { fileHash: "NOTHEX", path: "src/a.ts" },
+      { fileHash: "a".repeat(16), path: "/etc/passwd" },
+      { fileHash: "b".repeat(16), path: "../../.ssh/id_rsa" },
+      { fileHash: "c".repeat(16), path: "src/ok.ts" },
+    ]);
+    expect(batches).toEqual([[{ fileHash: "c".repeat(16), path: "src/ok.ts" }]]);
+  });
+
+  it("returns no batches for nothing to send", () => {
+    expect(planNameBatches([])).toEqual([]);
+  });
+});
+
 describe("syncFileNames (flush-time upload, opt-in gated)", () => {
   it("makes NO request at all when the repo flag is off", async () => {
     const { base, sessionsDir, hash } = await project(["src/a.ts"]);
@@ -295,6 +351,51 @@ describe("syncFileNames (flush-time upload, opt-in gated)", () => {
       postNames: async () => { retried++; },
     });
     expect(retried).toBe(2);
+  });
+
+  it("keeps every request inside the entry AND byte caps", async () => {
+    const base = tmp();
+    const sessionsDir = join(base, "sessions");
+    const hash = "p1";
+    const dir = join(sessionsDir, hash);
+    mkdirSync(dir, { recursive: true });
+    const long = `${"\u65e5\u672c\u8a9e".repeat(60)}.ts`;
+    const lines = Array.from({ length: NAMES_BATCH_MAX }, (_, i) =>
+      JSON.stringify(ev({ detail: { file: `src/${i}/${long}`, diffstat: "+1" } })),
+    );
+    writeFileSync(join(dir, "s1.jsonl"), `${lines.join("\n")}\n`);
+    await markFlushed(sessionsDir, hash);
+    setShareFileNames(hash, true, base);
+    const sent: FileNameEntry[][] = [];
+    await syncFileNames({
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async (entries) => { sent.push(entries); },
+    });
+    expect(sent.length).toBeGreaterThan(1);
+    for (const b of sent) {
+      expect(b.length).toBeLessThanOrEqual(NAMES_BATCH_MAX);
+      expect(batchBytes(b)).toBeLessThanOrEqual(NAMES_BATCH_MAX_BYTES);
+      expect(new Set(b.map((e) => e.fileHash)).size).toBe(b.length);
+    }
+    expect(sent.flat()).toHaveLength(NAMES_BATCH_MAX);
+  });
+
+  it("counts server-side rejections without retrying them", async () => {
+    const { base, sessionsDir, hash } = await project(["src/a.ts", "src/b.ts"]);
+    setShareFileNames(hash, true, base);
+    let posts = 0;
+    const res = await syncFileNames({
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async () => { posts++; return { ok: true, stored: 1, rejected: 1 }; },
+    });
+    expect(posts).toBe(1);
+    expect(res).toMatchObject({ batches: 1, rejected: 1 });
   });
 
   it("retries a pending opt-out delete, clears the flag state and the local manifest record", async () => {
