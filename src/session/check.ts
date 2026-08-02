@@ -134,7 +134,11 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     return { flags: [], fyi: null, baseline: null, anchors: {}, checked: false };
   }
 
-  const relPath = relative(opts.rootDir, opts.file) || opts.file;
+  // Forward slashes on every platform: the baseline stores its relative paths
+  // that way (core/discovery.ts) and so does the edit event the hook records,
+  // so a Windows separator here would both miss the baseline and hash a flag to
+  // a different file pseudonym than its own edit.
+  const relPath = relative(opts.rootDir, opts.file).replace(/\\/g, "/") || opts.file;
 
   // Non-code is a skip class (P1 contract): prose and config bodies would
   // dilute the checked-edit denominator, and a code snippet quoted inside

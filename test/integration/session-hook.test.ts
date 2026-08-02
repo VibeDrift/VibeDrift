@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectFileNames } from "@/session/file-names";
 import { UploadStateStore } from "@/session/upload-state";
+import { toUploadEvent } from "@/session/upload-schema";
+import type { SessionEvent } from "@/session/types";
 
 const ENTRY = join(process.cwd(), "src", "session", "hook-entry.ts");
 const BUILDER = join(process.cwd(), "test", "helpers", "session-build-baseline.ts");
@@ -125,6 +127,39 @@ describe("hook entry (integration)", () => {
     const entries = await collectFileNames(sessions, hash);
     expect(entries.map((e) => e.path)).toEqual([join("src", "in.ts")]);
     expect(JSON.stringify(entries)).not.toContain("secret-notes.ts");
+  });
+
+  it("records a Windows-style relative path portably, so the manifest still fills", async () => {
+    const home = tmp("vd-home-");
+    const repo = tmp("vd-repo-");
+    mkdirSync(join(repo, ".git"));
+    // Byte for byte what node's relative() returns on win32 for
+    // <repo>\src\payments\refund.ts. A backslash is refused by the wire rules,
+    // so an unnormalized ledger leaves the manifest permanently empty on
+    // Windows while `--names on` still reports success.
+    const r = runHook(home, {
+      session_id: "it-win",
+      cwd: repo,
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: "src\\payments\\refund.ts", content: "export const x = 1;\n" },
+    });
+    expect(r.status).toBe(0);
+    const event = JSON.parse(ledgerLines(home, "it-win")[0]) as SessionEvent;
+    expect(event.detail.file).toBe("src/payments/refund.ts");
+    expect(event.detail.inRepo).toBe(true);
+
+    const sessions = join(home, ".vibedrift", "sessions");
+    const hash = readdirSync(sessions)[0];
+    const ledger = join(sessions, hash, "it-win.jsonl");
+    const store = new UploadStateStore(sessions, hash);
+    await store.load();
+    await store.commit(new Map([["it-win.jsonl", readFileSync(ledger, "utf8").length]]));
+
+    const entries = await collectFileNames(sessions, hash);
+    expect(entries.map((e) => e.path)).toEqual(["src/payments/refund.ts"]);
+    // and it names the very hash the uploaded event carries for that file
+    expect(entries[0].fileHash).toBe(toUploadEvent(event)?.fileHash);
   });
 
   it("captures NOTHING when the entitlement cache says locked", () => {

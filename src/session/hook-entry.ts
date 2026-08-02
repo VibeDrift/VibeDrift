@@ -238,6 +238,14 @@ async function main(): Promise<number> {
   // from a file at the repo root. Downstream consumers that promise "nothing
   // outside this repo" — the opt-in file-name manifest — read this mark rather
   // than guessing from the path's shape.
+  //
+  // The recorded path always uses FORWARD slashes, the same normalization the
+  // scanner applies to its own relative paths (core/discovery.ts). `relative()`
+  // answers "src\payments\refund.ts" on Windows, and a backslash is refused by
+  // the wire rules, so without this the file-name manifest stays permanently
+  // empty on win32 while `--names on` reports success. This is the ledger's own
+  // field and the upload schema hashes exactly this string, so the name and the
+  // pseudonym cannot drift apart.
   let checkAbsFile: string | null = null;
   if (event.detail.file) {
     const abs = isAbsolute(event.detail.file)
@@ -245,7 +253,7 @@ async function main(): Promise<number> {
       : resolve(rootDir, event.detail.file);
     const rel = relative(rootDir, abs);
     if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
-      event.detail.file = rel;
+      event.detail.file = rel.replace(/\\/g, "/");
       event.detail.inRepo = true;
       checkAbsFile = abs;
     } else {

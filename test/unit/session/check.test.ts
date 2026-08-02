@@ -75,6 +75,15 @@ describe("runEditChecks", () => {
     expect(out.fyi!.toLowerCase()).not.toContain("prevented");
   });
 
+  it("records the flagged file with forward slashes, whatever the separator was", async () => {
+    // What relative() answers on win32 for <repo>\src\winroutes.ts. The flag's
+    // file must land in the same form the edit event records, or the two hash
+    // to different pseudonyms and one file shows up as two on the dashboard.
+    const out = await runEditChecks(opts({ sessionId: "s-winpath", file: join(repo, "src\\winroutes.ts") }));
+    expect(out.flags.length).toBeGreaterThanOrEqual(1);
+    expect(out.flags[0].detail.file).toBe("src/winroutes.ts");
+  });
+
   it("suppresses the FYI (but keeps flags) within the cooldown window", async () => {
     const first = await runEditChecks(opts({ sessionId: "s-cool" }));
     expect(first.fyi).toBeTruthy();
