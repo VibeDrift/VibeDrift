@@ -72,6 +72,7 @@ describe("isSafeRelPath (client-side mirror of the ingest validation)", () => {
     expect(isSafeRelPath("C:\\repo\\a.ts")).toBe(false);
     expect(isSafeRelPath("c:/repo/a.ts")).toBe(false);
     expect(isSafeRelPath("../../.ssh/id_rsa")).toBe(false);
+    expect(isSafeRelPath("../notes.ts")).toBe(false); // the hook's out-of-repo marker
     expect(isSafeRelPath("src/../../secrets.env")).toBe(false);
     expect(isSafeRelPath("..")).toBe(false);
     expect(isSafeRelPath("src\\a.ts")).toBe(false);

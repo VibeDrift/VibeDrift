@@ -69,14 +69,14 @@ describe("hook entry (integration)", () => {
     const ev = JSON.parse(lines[0]);
     expect(ev.type).toBe("edit");
     expect(ev.detail.diffstat).toBe("+1");
-    expect(ev.detail.file).toBe(join("src", "a.ts"));
+    expect(ev.detail.file).toBe("src/a.ts");
     expect(lines[0]).not.toContain("UNIQUE_BODY_SENTINEL_9f2");
     expect(ev.body).toBeUndefined();
     // no baseline in this repo, so the inline check was skipped
     expect(ev.detail.checked).toBe(false);
   });
 
-  it("records checked=false (and only the basename) for an out-of-repo edit", () => {
+  it("records checked=false (and only the marked basename) for an out-of-repo edit", () => {
     const home = tmp("vd-home-");
     const repo = tmp("vd-repo-");
     const elsewhere = tmp("vd-outside-");
@@ -91,7 +91,9 @@ describe("hook entry (integration)", () => {
     expect(r.status).toBe(0);
     const ev = JSON.parse(ledgerLines(home, "it-out")[0]);
     expect(ev.type).toBe("edit");
-    expect(ev.detail.file).toBe("notes.ts");
+    // the basename only, marked so it can never be read as a repo-root file
+    expect(ev.detail.file).toBe("../notes.ts");
+    expect(ev.detail.file).not.toContain(elsewhere);
     expect(ev.detail.checked).toBe(false);
     // provenance is stamped at the source: this file was NOT in the repo
     expect(ev.detail.inRepo).toBe(false);
@@ -110,7 +112,7 @@ describe("hook entry (integration)", () => {
       tool_input: { file_path: file, content: "export const x = 1;\n" },
     });
     expect(runHook(home, edit(join(repo, "src", "in.ts"))).status).toBe(0);
-    // an edit outside the repo, recorded by basename — the shape of a root file
+    // an edit outside the repo, recorded by basename under an out-of-repo marker
     expect(runHook(home, edit(join(elsewhere, "secret-notes.ts"))).status).toBe(0);
 
     const sessions = join(home, ".vibedrift", "sessions");
@@ -121,12 +123,53 @@ describe("hook entry (integration)", () => {
     await store.commit(new Map([["it-manifest.jsonl", readFileSync(ledger, "utf8").length]]));
 
     const events = ledgerLines(home, "it-manifest").map((l) => JSON.parse(l));
-    expect(events.map((e) => e.detail.file)).toEqual([join("src", "in.ts"), "secret-notes.ts"]);
+    expect(events.map((e) => e.detail.file)).toEqual(["src/in.ts", "../secret-notes.ts"]);
     expect(events.map((e) => e.detail.inRepo)).toEqual([true, false]);
 
     const entries = await collectFileNames(sessions, hash);
-    expect(entries.map((e) => e.path)).toEqual([join("src", "in.ts")]);
+    expect(entries.map((e) => e.path)).toEqual(["src/in.ts"]);
     expect(JSON.stringify(entries)).not.toContain("secret-notes.ts");
+  });
+
+  it("an out-of-repo edit can never share a file hash with a repo-ROOT file", async () => {
+    const home = tmp("vd-home-");
+    const repo = tmp("vd-repo-");
+    const elsewhere = tmp("vd-outside-");
+    mkdirSync(join(repo, ".git"));
+    const edit = (file: string) => ({
+      session_id: "it-collide",
+      cwd: repo,
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: file, content: "export const x = 1;\n" },
+    });
+    // the same basename, once at the repo root and once outside the repo
+    expect(runHook(home, edit(join(repo, "notes.ts"))).status).toBe(0);
+    expect(runHook(home, edit(join(elsewhere, "notes.ts"))).status).toBe(0);
+
+    const events = ledgerLines(home, "it-collide").map((l) => JSON.parse(l) as SessionEvent);
+    const edits = events.filter((e) => e.type === "edit");
+    expect(edits.map((e) => e.detail.inRepo)).toEqual([true, false]);
+    const [inside, outside] = edits.map((e) => toUploadEvent(e)?.fileHash);
+    expect(inside).toMatch(/^[0-9a-f]{16}$/);
+    // two different files, so nothing else is recorded: identical recorded
+    // paths also had the revert detector read the second edit as the first
+    // file being restored.
+    expect(events.map((e) => e.type)).toEqual(["edit", "edit"]);
+    // The pseudonym the manifest puts a real name on must not ALSO stand for
+    // out-of-repo activity, or the dashboard shows an in-repo path on a row
+    // that is partly someone else's file.
+    expect(outside).not.toBe(inside);
+
+    const sessions = join(home, ".vibedrift", "sessions");
+    const hash = readdirSync(sessions)[0];
+    const ledger = join(sessions, hash, "it-collide.jsonl");
+    const store = new UploadStateStore(sessions, hash);
+    await store.load();
+    await store.commit(new Map([["it-collide.jsonl", readFileSync(ledger, "utf8").length]]));
+
+    const entries = await collectFileNames(sessions, hash);
+    expect(entries).toEqual([{ fileHash: inside, path: "notes.ts" }]);
   });
 
   it("records a Windows-style relative path portably, so the manifest still fills", async () => {

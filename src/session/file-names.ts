@@ -18,12 +18,14 @@
  *     already committed (flushed). A line stamped with another project's hash
  *     is skipped, so a stray record can never be relabeled into this repo.
  *  3. PROVENANCE, not path shape, decides what is in this repo. The hook stamps
- *     `detail.inRepo` when it resolves the edited file (hook-entry.ts), because
- *     an out-of-repo edit is recorded by BASENAME and a basename is
- *     indistinguishable from a file at the repo root. Only lines marked
- *     `inRepo: true` contribute; an unmarked line (written before the field
- *     existed) is unknown provenance and contributes nothing. That is what makes
- *     "nothing outside this repo" a fact rather than a hope.
+ *     `detail.inRepo` when it resolves the edited file (hook-entry.ts). Only
+ *     lines marked `inRepo: true` contribute; an unmarked line (written before
+ *     the field existed) is unknown provenance and contributes nothing. That is
+ *     what makes "nothing outside this repo" a fact rather than a hope. The hook
+ *     also records an out-of-repo edit as `../<basename>`, a form no in-repo
+ *     relative path can take, so the two can never be the same string and
+ *     therefore never the same pseudonym: a hash this manifest puts a real name
+ *     on cannot also stand for an edit outside the repo.
  *  4. Every path is ALSO validated client-side with the same rules the ingest
  *     endpoint applies (defense in depth): an absolute path, a drive letter, a
  *     `..` segment, a backslash, a control character or an overlong path never

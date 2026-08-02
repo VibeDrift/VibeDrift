@@ -233,11 +233,9 @@ async function main(): Promise<number> {
   // in this repo's baseline, so we record only its basename (never a machine
   // path) and skip the inline check.
   //
-  // The answer is STAMPED on the event (`detail.inRepo`), because it cannot be
-  // recovered later: an out-of-repo basename ("notes.ts") is indistinguishable
-  // from a file at the repo root. Downstream consumers that promise "nothing
-  // outside this repo" — the opt-in file-name manifest — read this mark rather
-  // than guessing from the path's shape.
+  // The answer is STAMPED on the event (`detail.inRepo`) rather than inferred
+  // downstream: consumers that promise "nothing outside this repo" — the opt-in
+  // file-name manifest — read the mark, never the path's shape.
   //
   // The recorded path always uses FORWARD slashes, the same normalization the
   // scanner applies to its own relative paths (core/discovery.ts). `relative()`
@@ -257,7 +255,15 @@ async function main(): Promise<number> {
       event.detail.inRepo = true;
       checkAbsFile = abs;
     } else {
-      event.detail.file = basename(abs);
+      // Outside the repo: still only the basename (never a machine path), but
+      // marked with a leading "../" so the recorded form CANNOT equal an
+      // in-repo path. An in-repo relative path never starts with ".." — that is
+      // exactly what sends an edit down this branch — so a repo-ROOT file and
+      // an out-of-repo file sharing a basename stay two distinct strings, and
+      // therefore two distinct pseudonyms, everywhere the hash is the identity.
+      // The marker also makes the path unshareable by construction: a ".."
+      // segment is refused by the wire rules on both sides.
+      event.detail.file = `../${basename(abs)}`;
       event.detail.inRepo = false;
     }
   }
