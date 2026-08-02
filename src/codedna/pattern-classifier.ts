@@ -48,7 +48,25 @@ const SIGNAL_DEFS: SignalDef[] = [
   { pattern: "raw_sql", regex: /\.query\s*\(\s*[`'"]/i, label: "inline SQL query string" },
 
   // ORM
-  { pattern: "orm", regex: /(?:gorm|prisma|sequelize|typeorm|sqlalchemy|django\.db|ent\.)\.?/i, label: "ORM import/usage" },
+  { pattern: "orm", regex: /(?:gorm|prisma|sequelize|typeorm|sqlalchemy|django\.db)\.?/i, label: "ORM import/usage" },
+  // Ent (entgo.io) is split out of the alternation above, anchored AND case-sensitive.
+  // A bare `ent\.` had no left boundary, so it matched every identifier ending in the
+  // letters "ent" followed by a dot: content., fullContent., client., component.,
+  // current., event., document., agent., environment., argument., management. That
+  // single alternative produced 125 of 125 "ORM import/usage" signals across five
+  // repos that declare no ORM at all.
+  //
+  // A left \b alone is NOT sufficient: it still fires on a local variable named `ent`
+  // (ent.ty, ent.entitled, ent.capture_types). Real Ent usage is a package selector
+  // followed by an exported Go identifier (ent.Client, ent.NewClient, ent.Open,
+  // ent.Tx, ent.IsNotFound, []*ent.User), whereas a local `ent` is followed by a
+  // lowercase field. The [A-Z] discriminator separates them.
+  //
+  // The /i flag is deliberately omitted: with it, [A-Z] also matches lowercase and
+  // the discriminator becomes a no-op. Known and accepted recall gap: a package
+  // alias (myent.Client, some_ent.Client) is not recognised. The generated Ent
+  // package is named `ent` by default.
+  { pattern: "orm", regex: /\bent\.[A-Z]/, label: "Ent ORM usage" },
   { pattern: "orm", regex: /\.Find\(\s*&|\.Create\(\s*&|\.Save\(\s*&|\.Where\(/i, label: "ORM method call (Go)" },
   { pattern: "orm", regex: /\.findOne\(|\.findAll\(|\.create\(.*{|\.update\(.*{|\.destroy\(/i, label: "ORM method call (JS)" },
   { pattern: "orm", regex: /objects\.(?:filter|get|create|all)\(/i, label: "Django ORM call" },
