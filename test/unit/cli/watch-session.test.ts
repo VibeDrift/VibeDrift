@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runWatchSession } from "@/cli/commands/watch-session";
 import { readConfig } from "@/auth/config";
+import { repoIdentity } from "@/session/repo";
+import { loadActivation, shareFileNamesEnabled, namesDeleteIsPending } from "@/session/activation";
 
 function tmp(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -159,5 +161,93 @@ describe("runWatchSession", () => {
     });
     expect(status).toBe("login_required");
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("runWatchSession — file-name sharing toggle (--names)", () => {
+  const hashOf = (repo: string) => repoIdentity(repo).projectHash;
+
+  it("--names on prints the disclosure BEFORE writing the flag, and installs nothing", async () => {
+    const repo = repoWithAgent();
+    const activationHome = tmp("vd-ws-act-");
+    const sessionsDir = tmp("vd-ws-sess-");
+    const hash = hashOf(repo);
+    const lines: string[] = [];
+    const flagWhenPrinted: boolean[] = [];
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+      flagWhenPrinted.push(shareFileNamesEnabled(loadActivation(activationHome), hash));
+    });
+    const status = await runWatchSession(repo, { names: "on", activationHome, sessionsDir });
+    expect(status).toBe("names_updated");
+    expect(shareFileNamesEnabled(loadActivation(activationHome), hash)).toBe(true);
+    // the whole disclosure was on screen before the flag existed on disk
+    const confirmIdx = lines.findIndex((l) => /File names are ON/i.test(l));
+    expect(confirmIdx).toBeGreaterThan(0);
+    expect(flagWhenPrinted.slice(0, confirmIdx)).toEqual(flagWhenPrinted.slice(0, confirmIdx).map(() => false));
+    expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(false);
+  });
+
+  it("the disclosure says paths only, names the reversal, and uses no em-dashes", async () => {
+    const repo = repoWithAgent();
+    const activationHome = tmp("vd-ws-act-");
+    const sessionsDir = tmp("vd-ws-sess-");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runWatchSession(repo, { names: "on", activationHome, sessionsDir });
+    const printed = log.mock.calls.flat().map(String).join("\n");
+    expect(printed).toMatch(/repo-relative/i);
+    expect(printed).toMatch(/never .*file contents/i);
+    expect(printed).toMatch(/never .*absolute path/i);
+    expect(printed).toContain("vibedrift watch-session --names off");
+    expect(printed).toMatch(/delete/i);
+    expect(printed).not.toMatch(/[—–]/);
+  });
+
+  it("--names off deletes the uploaded names, then clears the flag", async () => {
+    const repo = repoWithAgent();
+    const activationHome = tmp("vd-ws-act-");
+    const sessionsDir = tmp("vd-ws-sess-");
+    const hash = hashOf(repo);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runWatchSession(repo, { names: "on", activationHome, sessionsDir });
+    let deletes = 0;
+    const flagWhenDeleted: boolean[] = [];
+    const status = await runWatchSession(repo, {
+      names: "off",
+      activationHome,
+      sessionsDir,
+      deleteNames: async () => {
+        deletes++;
+        flagWhenDeleted.push(shareFileNamesEnabled(loadActivation(activationHome), hash));
+        return { deleted: 3 };
+      },
+    });
+    expect(status).toBe("names_updated");
+    expect(deletes).toBe(1);
+    expect(flagWhenDeleted).toEqual([true]); // DELETE first, then clear the flag
+    expect(shareFileNamesEnabled(loadActivation(activationHome), hash)).toBe(false);
+    expect(namesDeleteIsPending(loadActivation(activationHome), hash)).toBe(false);
+    const printed = log.mock.calls.flat().map(String).join("\n");
+    expect(printed).toMatch(/File names are OFF/i);
+  });
+
+  it("--names off with an unreachable server still turns sharing off and queues the delete", async () => {
+    const repo = repoWithAgent();
+    const activationHome = tmp("vd-ws-act-");
+    const sessionsDir = tmp("vd-ws-sess-");
+    const hash = hashOf(repo);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runWatchSession(repo, { names: "on", activationHome, sessionsDir });
+    const status = await runWatchSession(repo, {
+      names: "off",
+      activationHome,
+      sessionsDir,
+      deleteNames: async () => { throw new Error("offline"); },
+    });
+    expect(status).toBe("names_updated");
+    expect(shareFileNamesEnabled(loadActivation(activationHome), hash)).toBe(false);
+    expect(namesDeleteIsPending(loadActivation(activationHome), hash)).toBe(true);
+    const printed = log.mock.calls.flat().map(String).join("\n");
+    expect(printed).toMatch(/retried on the next/i);
   });
 });

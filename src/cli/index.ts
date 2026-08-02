@@ -276,16 +276,22 @@ program
   .option("--yes", "skip the consent prompt (you have read what it records)")
   .option("--no-watch", "install only; do not follow the live event tape")
   .option("--sync <state>", "hosted sync (Pro): 'on' opts into derived-only upload, 'off' disables it")
+  .option(
+    "--names <state>",
+    "share this repo's file NAMES with your dashboard: 'on' uploads repo-relative paths (never file contents), 'off' deletes them",
+  )
   .option("--local-only", "force hosted sync off for this run")
   .action(async (path: string, options) => {
     const sync = options.sync === "on" ? "on" : options.sync === "off" ? "off" : undefined;
+    const names = options.names === "on" ? "on" : options.names === "off" ? "off" : undefined;
     await runWatchSession(path, {
       uninstall: options.uninstall,
       status: options.status,
       yes: options.yes,
       sync,
+      names,
       localOnly: options.localOnly === true,
-      watch: options.watch !== false && !options.uninstall && !options.status && !sync,
+      watch: options.watch !== false && !options.uninstall && !options.status && !sync && !names,
     });
   });
 

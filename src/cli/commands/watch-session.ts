@@ -22,7 +22,8 @@ import {
   resolveHookCommand,
   detectClaudeCode,
 } from "../../session/install.js";
-import { recordAnswer } from "../../session/activation.js";
+import { recordAnswer, setShareFileNames, setNamesDeletePending } from "../../session/activation.js";
+import { clearUploadedNames } from "../../session/file-names.js";
 import { appendConsentReceipt } from "../../session/consent.js";
 import { vibedriftHome } from "../../core/vibedrift-home.js";
 import { runLiveTape } from "../../session/live.js";
@@ -58,6 +59,12 @@ export interface WatchSessionOptions {
   /** Toggle hosted sync (Phase 5): "on" opts into derived-only upload, "off"
    *  disables it. A standalone control — sets config and returns. */
   sync?: "on" | "off";
+  /** Toggle the opt-in file-name manifest for THIS repo: "on" shares
+   *  repo-relative paths (never contents) so the dashboard can name files,
+   *  "off" deletes what was uploaded and stops future uploads. */
+  names?: "on" | "off";
+  /** Test seam: perform the server-side name deletion (default: the API). */
+  deleteNames?: () => Promise<{ deleted?: number }>;
   /** Force hosted sync off for THIS run regardless of the saved setting. */
   localOnly?: boolean;
   /** Test seam: inject config instead of reading ~/.vibedrift (bypasses network). */
@@ -89,6 +96,7 @@ export type WatchSessionStatus =
   | "locked"
   | "login_required"
   | "sync_updated"
+  | "names_updated"
   | "aborted_unparseable";
 
 async function askConsent(question: string): Promise<boolean> {
@@ -160,6 +168,18 @@ export async function runWatchSession(
       console.log(`${chalk.green("✓")} Drift Sessions hosted sync is OFF — sessions stay entirely on this machine.`);
     }
     return "sync_updated";
+  }
+
+  // File-name sharing toggle: per repo, default off, fully reversible. Also a
+  // standalone control, so it never installs hooks or starts a watch.
+  if (options.names) {
+    await toggleFileNames(options.names === "on", {
+      projectHash,
+      sessionsDir,
+      activationHome: options.activationHome ?? vibedriftHome(),
+      deleteNames: options.deleteNames,
+    });
+    return "names_updated";
   }
 
   // Entitlement gate (decision 8): sessions are Pro-only with a one-time
@@ -267,6 +287,81 @@ export async function runWatchSession(
     console.log(chalk.dim("  next Claude Code session in this repo will be recorded; run with --status to check."));
   }
   return installed;
+}
+
+/**
+ * `--names on|off`: the per-repo file-name opt-in.
+ *
+ * ON prints the full disclosure BEFORE the flag is written, so the state on
+ * disk never runs ahead of what the user was told. OFF deletes what was already
+ * uploaded and then clears the flag; if that DELETE cannot reach the server the
+ * flag still ends up off and the deletion is queued for the next flush, so
+ * "off" always means off locally, immediately.
+ */
+async function toggleFileNames(
+  on: boolean,
+  ctx: {
+    projectHash: string;
+    sessionsDir: string;
+    activationHome: string;
+    deleteNames?: () => Promise<{ deleted?: number }>;
+  },
+): Promise<void> {
+  const { projectHash, sessionsDir, activationHome } = ctx;
+
+  if (on) {
+    console.log(chalk.bold("Drift Sessions file names for this repo"));
+    console.log(
+      chalk.dim(
+        [
+          '  What gets shared: repo-relative file paths, for example src/payments/refund.ts,',
+          '  so your dashboard can name files instead of showing "file ab12cd34".',
+          "  What never gets shared: file contents, absolute paths, or anything outside this repo.",
+          "  Scope: this repo only, and only while hosted sync is on (vibedrift watch-session --sync on).",
+          "  Reversible: vibedrift watch-session --names off deletes the names already uploaded",
+          "  for this repo and stops future uploads.",
+        ].join("\n"),
+      ),
+    );
+    setShareFileNames(projectHash, true, activationHome);
+    console.log(`${chalk.green("✓")} File names are ON for this repo.`);
+    return;
+  }
+
+  let deleted: number | undefined;
+  let failed = false;
+  try {
+    const res = ctx.deleteNames ? await ctx.deleteNames() : await deleteNamesViaNetwork(projectHash);
+    deleted = typeof res?.deleted === "number" ? res.deleted : undefined;
+  } catch {
+    failed = true;
+  }
+  setShareFileNames(projectHash, false, activationHome);
+  if (failed) {
+    setNamesDeletePending(projectHash, true, activationHome);
+    console.log(`${chalk.green("✓")} File names are OFF for this repo; nothing more will be uploaded.`);
+    console.log(
+      chalk.dim("  The delete request did not reach the server. It will be retried on the next session flush."),
+    );
+    return;
+  }
+  setNamesDeletePending(projectHash, false, activationHome);
+  await clearUploadedNames(sessionsDir, projectHash);
+  console.log(
+    `${chalk.green("✓")} File names are OFF for this repo${
+      deleted !== undefined ? ` (${deleted} removed from your dashboard)` : ""
+    }.`,
+  );
+  console.log(chalk.dim('  The dashboard shows per-repo pseudonyms again, like "file ab12cd34".'));
+}
+
+/** Delete this repo's uploaded names server-side. Throws when there is no
+ *  account or the request fails, which queues the deletion for the next flush. */
+async function deleteNamesViaNetwork(projectHash: string): Promise<{ deleted?: number }> {
+  const cfg = await readConfig();
+  if (!cfg.token) throw new Error("not logged in");
+  const { deleteSessionNames } = await import("../../auth/api.js");
+  return deleteSessionNames(cfg.token, projectHash, { apiUrl: cfg.apiUrl });
 }
 
 /** Resolve entitlement from the server, tolerating offline via the local cache.
