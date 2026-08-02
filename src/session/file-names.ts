@@ -9,7 +9,7 @@
  * flush. Paths only. Never file contents, never an absolute path, never a path
  * outside the repo.
  *
- * Three rules hold this honest:
+ * Four rules hold this honest:
  *  1. The hash is NEVER re-derived here. Every entry's `fileHash` comes from
  *     `toUploadEvent()` itself, so a manifest entry can only ever describe a
  *     hash the events already carry. If the derivation changes, both move
@@ -17,7 +17,14 @@
  *  2. Only this project's own ledger contributes, and only lines the uploader
  *     already committed (flushed). A line stamped with another project's hash
  *     is skipped, so a stray record can never be relabeled into this repo.
- *  3. Every path is validated client-side with the same rules the ingest
+ *  3. PROVENANCE, not path shape, decides what is in this repo. The hook stamps
+ *     `detail.inRepo` when it resolves the edited file (hook-entry.ts), because
+ *     an out-of-repo edit is recorded by BASENAME and a basename is
+ *     indistinguishable from a file at the repo root. Only lines marked
+ *     `inRepo: true` contribute; an unmarked line (written before the field
+ *     existed) is unknown provenance and contributes nothing. That is what makes
+ *     "nothing outside this repo" a fact rather than a hope.
+ *  4. Every path is ALSO validated client-side with the same rules the ingest
  *     endpoint applies (defense in depth): an absolute path, a drive letter, a
  *     `..` segment, a backslash, a control character or an overlong path never
  *     leaves the machine, even if some future producer wrote one to the ledger.
@@ -135,8 +142,10 @@ export async function collectFileNames(sessionsDir: string, projectHash: string)
       } catch {
         continue; // corrupt line: skip, never wedge the manifest
       }
-      // Only this project's own records, and only paths that pass the wire rules.
+      // Only this project's own records, only files the hook stamped as being
+      // INSIDE this repo, and only paths that pass the wire rules.
       if (!ev || ev.projectHash !== projectHash) continue;
+      if (ev.detail?.inRepo !== true) continue; // unmarked or out-of-repo: never shared
       const rel = ev.detail?.file;
       if (!isSafeRelPath(rel)) continue;
       // The hash comes from the upload schema itself: never re-derived here.

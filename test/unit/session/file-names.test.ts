@@ -32,7 +32,7 @@ const ev = (over: Partial<SessionEvent> = {}): SessionEvent => ({
   channel: "hook",
   type: "edit",
   mode: "passive",
-  detail: { file: "src/a.ts", diffstat: "+1" },
+  detail: { file: "src/a.ts", diffstat: "+1", inRepo: true },
   ...over,
 });
 
@@ -54,7 +54,7 @@ async function project(files: string[]): Promise<{ base: string; sessionsDir: st
   const base = tmp();
   const sessionsDir = join(base, "sessions");
   const hash = "p1";
-  for (const file of files) await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file, diffstat: "+1" } }));
+  for (const file of files) await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file, diffstat: "+1", inRepo: true } }));
   await markFlushed(sessionsDir, hash);
   return { base, sessionsDir, hash };
 }
@@ -104,7 +104,7 @@ describe("collectFileNames (manifest built from this project's own ledger)", () 
     const base = tmp();
     const sessionsDir = join(base, "sessions");
     const hash = "p1";
-    const e = ev({ detail: { file: "src/payments/refund.ts", diffstat: "+9" } });
+    const e = ev({ detail: { file: "src/payments/refund.ts", diffstat: "+9", inRepo: true } });
     await appendEvent(sessionsDir, hash, "s1", e);
     await markFlushed(sessionsDir, hash);
     const [entry] = await collectFileNames(sessionsDir, hash);
@@ -116,9 +116,9 @@ describe("collectFileNames (manifest built from this project's own ledger)", () 
     const base = tmp();
     const sessionsDir = join(base, "sessions");
     const hash = "p1";
-    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/flushed.ts", diffstat: "+1" } }));
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/flushed.ts", diffstat: "+1", inRepo: true } }));
     const firstLineEnd = readFileSync(join(sessionsDir, hash, "s1.jsonl"), "utf8").length;
-    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/pending.ts", diffstat: "+1" } }));
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/pending.ts", diffstat: "+1", inRepo: true } }));
     await markFlushed(sessionsDir, hash, firstLineEnd);
     const entries = await collectFileNames(sessionsDir, hash);
     expect(entries.map((e) => e.path)).toEqual(["src/flushed.ts"]);
@@ -128,8 +128,8 @@ describe("collectFileNames (manifest built from this project's own ledger)", () 
     const base = tmp();
     const sessionsDir = join(base, "sessions");
     const hash = "p1";
-    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/mine.ts", diffstat: "+1" } }));
-    await appendEvent(sessionsDir, hash, "s1", ev({ projectHash: "other", detail: { file: "src/theirs.ts", diffstat: "+1" } }));
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/mine.ts", diffstat: "+1", inRepo: true } }));
+    await appendEvent(sessionsDir, hash, "s1", ev({ projectHash: "other", detail: { file: "src/theirs.ts", diffstat: "+1", inRepo: true } }));
     await markFlushed(sessionsDir, hash);
     const entries = await collectFileNames(sessionsDir, hash);
     expect(entries.map((e) => e.path)).toEqual(["src/mine.ts"]);
@@ -150,11 +150,33 @@ describe("collectFileNames (manifest built from this project's own ledger)", () 
     const sessionsDir = join(base, "sessions");
     const hash = "p1";
     for (const file of ["/etc/passwd", "../../.ssh/id_rsa", "C:\\Users\\me\\secrets.env", "src/ok.ts"]) {
-      await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file, diffstat: "+1" } }));
+      await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file, diffstat: "+1", inRepo: true } }));
     }
     await markFlushed(sessionsDir, hash);
     const entries = await collectFileNames(sessionsDir, hash);
     expect(entries.map((e) => e.path)).toEqual(["src/ok.ts"]);
+  });
+
+  it("never shares a file the hook recorded as OUTSIDE this repo, whatever its path looks like", async () => {
+    const base = tmp();
+    const sessionsDir = join(base, "sessions");
+    const hash = "p1";
+    // The hook records an out-of-repo edit by BASENAME, which is shaped exactly
+    // like a file at the repo root: only the provenance mark tells them apart.
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "secrets.env", diffstat: "+1", inRepo: false } }));
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "README.md", diffstat: "+1", inRepo: true } }));
+    await markFlushed(sessionsDir, hash);
+    const entries = await collectFileNames(sessionsDir, hash);
+    expect(entries.map((e) => e.path)).toEqual(["README.md"]);
+  });
+
+  it("fails closed: a line with no provenance mark is never shared", async () => {
+    const base = tmp();
+    const sessionsDir = join(base, "sessions");
+    const hash = "p1";
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/legacy.ts", diffstat: "+1" } }));
+    await markFlushed(sessionsDir, hash);
+    expect(await collectFileNames(sessionsDir, hash)).toEqual([]);
   });
 
   it("tolerates a corrupt line and a missing project dir", async () => {
@@ -164,7 +186,7 @@ describe("collectFileNames (manifest built from this project's own ledger)", () 
     expect(await collectFileNames(sessionsDir, hash)).toEqual([]);
     mkdirSync(join(sessionsDir, hash), { recursive: true });
     writeFileSync(join(sessionsDir, hash, "s1.jsonl"), "{not json\n");
-    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/a.ts", diffstat: "+1" } }));
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/a.ts", diffstat: "+1", inRepo: true } }));
     await markFlushed(sessionsDir, hash);
     expect((await collectFileNames(sessionsDir, hash)).map((e) => e.path)).toEqual(["src/a.ts"]);
   });
@@ -280,7 +302,7 @@ describe("syncFileNames (flush-time upload, opt-in gated)", () => {
     const dir = join(sessionsDir, hash);
     mkdirSync(dir, { recursive: true });
     const lines = Array.from({ length: NAMES_BATCH_MAX + 7 }, (_, i) =>
-      JSON.stringify(ev({ detail: { file: `src/f${i}.ts`, diffstat: "+1" } })),
+      JSON.stringify(ev({ detail: { file: `src/f${i}.ts`, diffstat: "+1", inRepo: true } })),
     );
     writeFileSync(join(dir, "s1.jsonl"), `${lines.join("\n")}\n`);
     await markFlushed(sessionsDir, hash);
@@ -312,7 +334,7 @@ describe("syncFileNames (flush-time upload, opt-in gated)", () => {
     await syncFileNames(opts);
     expect(posts).toBe(1);
     // a newly edited file is the only thing the next flush sends
-    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/new.ts", diffstat: "+1" } }));
+    await appendEvent(sessionsDir, hash, "s1", ev({ detail: { file: "src/new.ts", diffstat: "+1", inRepo: true } }));
     await markFlushed(sessionsDir, hash);
     const sent: FileNameEntry[][] = [];
     await syncFileNames({ ...opts, postNames: async (e) => { sent.push(e); } });
@@ -326,7 +348,7 @@ describe("syncFileNames (flush-time upload, opt-in gated)", () => {
     const dir = join(sessionsDir, hash);
     mkdirSync(dir, { recursive: true });
     const lines = Array.from({ length: NAMES_BATCH_MAX + 3 }, (_, i) =>
-      JSON.stringify(ev({ detail: { file: `src/f${i}.ts`, diffstat: "+1" } })),
+      JSON.stringify(ev({ detail: { file: `src/f${i}.ts`, diffstat: "+1", inRepo: true } })),
     );
     writeFileSync(join(dir, "s1.jsonl"), `${lines.join("\n")}\n`);
     await markFlushed(sessionsDir, hash);
@@ -361,7 +383,7 @@ describe("syncFileNames (flush-time upload, opt-in gated)", () => {
     mkdirSync(dir, { recursive: true });
     const long = `${"\u65e5\u672c\u8a9e".repeat(60)}.ts`;
     const lines = Array.from({ length: NAMES_BATCH_MAX }, (_, i) =>
-      JSON.stringify(ev({ detail: { file: `src/${i}/${long}`, diffstat: "+1" } })),
+      JSON.stringify(ev({ detail: { file: `src/${i}/${long}`, diffstat: "+1", inRepo: true } })),
     );
     writeFileSync(join(dir, "s1.jsonl"), `${lines.join("\n")}\n`);
     await markFlushed(sessionsDir, hash);

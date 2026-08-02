@@ -27,7 +27,9 @@ const ev = (over: Partial<SessionEvent> = {}): SessionEvent => ({
   channel: "hook",
   type: "edit",
   mode: "passive",
-  detail: { file: "a.ts", diffstat: "+1" },
+  // inRepo is the hook's provenance stamp: this edit landed inside the repo,
+  // which is what makes "a.ts" shareable as a name at all.
+  detail: { file: "a.ts", diffstat: "+1", inRepo: true },
   ...over,
 });
 

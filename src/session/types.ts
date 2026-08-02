@@ -32,6 +32,14 @@ export interface SessionEventDetail {
    *  baseline, check error). Absent on ledger lines written before this
    *  field existed. */
   checked?: boolean;
+  /** edit events only: PROVENANCE of `file`, stamped by the hook at the moment
+   *  it resolved the path. true = the edit landed inside this repo and `file` is
+   *  repo-relative; false = it landed outside, so `file` is only a basename.
+   *  The two look identical for a root-level file, so the opt-in file-name
+   *  manifest keys on this mark, never on the path's shape. Absent on ledger
+   *  lines written before this field existed: unknown, and treated as
+   *  "not shareable" rather than assumed in-repo. */
+  inRepo?: boolean;
   category?: string;
   dominant?: string;
   observed?: string;

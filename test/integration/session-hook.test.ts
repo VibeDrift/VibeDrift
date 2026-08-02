@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { collectFileNames } from "@/session/file-names";
+import { UploadStateStore } from "@/session/upload-state";
 
 const ENTRY = join(process.cwd(), "src", "session", "hook-entry.ts");
 const BUILDER = join(process.cwd(), "test", "helpers", "session-build-baseline.ts");
@@ -89,6 +91,40 @@ describe("hook entry (integration)", () => {
     expect(ev.type).toBe("edit");
     expect(ev.detail.file).toBe("notes.ts");
     expect(ev.detail.checked).toBe(false);
+    // provenance is stamped at the source: this file was NOT in the repo
+    expect(ev.detail.inRepo).toBe(false);
+  });
+
+  it("an out-of-repo edit never becomes a file-name manifest entry", async () => {
+    const home = tmp("vd-home-");
+    const repo = tmp("vd-repo-");
+    const elsewhere = tmp("vd-outside-");
+    mkdirSync(join(repo, ".git"));
+    const edit = (file: string) => ({
+      session_id: "it-manifest",
+      cwd: repo,
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: file, content: "export const x = 1;\n" },
+    });
+    expect(runHook(home, edit(join(repo, "src", "in.ts"))).status).toBe(0);
+    // an edit outside the repo, recorded by basename — the shape of a root file
+    expect(runHook(home, edit(join(elsewhere, "secret-notes.ts"))).status).toBe(0);
+
+    const sessions = join(home, ".vibedrift", "sessions");
+    const hash = readdirSync(sessions)[0];
+    const ledger = join(sessions, hash, "it-manifest.jsonl");
+    const store = new UploadStateStore(sessions, hash);
+    await store.load();
+    await store.commit(new Map([["it-manifest.jsonl", readFileSync(ledger, "utf8").length]]));
+
+    const events = ledgerLines(home, "it-manifest").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.detail.file)).toEqual([join("src", "in.ts"), "secret-notes.ts"]);
+    expect(events.map((e) => e.detail.inRepo)).toEqual([true, false]);
+
+    const entries = await collectFileNames(sessions, hash);
+    expect(entries.map((e) => e.path)).toEqual([join("src", "in.ts")]);
+    expect(JSON.stringify(entries)).not.toContain("secret-notes.ts");
   });
 
   it("captures NOTHING when the entitlement cache says locked", () => {

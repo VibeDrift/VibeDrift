@@ -232,6 +232,12 @@ async function main(): Promise<number> {
   // the hook is resolved against the repo root; an edit OUTSIDE the repo is not
   // in this repo's baseline, so we record only its basename (never a machine
   // path) and skip the inline check.
+  //
+  // The answer is STAMPED on the event (`detail.inRepo`), because it cannot be
+  // recovered later: an out-of-repo basename ("notes.ts") is indistinguishable
+  // from a file at the repo root. Downstream consumers that promise "nothing
+  // outside this repo" — the opt-in file-name manifest — read this mark rather
+  // than guessing from the path's shape.
   let checkAbsFile: string | null = null;
   if (event.detail.file) {
     const abs = isAbsolute(event.detail.file)
@@ -240,9 +246,11 @@ async function main(): Promise<number> {
     const rel = relative(rootDir, abs);
     if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
       event.detail.file = rel;
+      event.detail.inRepo = true;
       checkAbsFile = abs;
     } else {
       event.detail.file = basename(abs);
+      event.detail.inRepo = false;
     }
   }
 
