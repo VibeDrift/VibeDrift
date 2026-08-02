@@ -254,11 +254,19 @@ export async function postSessionIngest(
 }
 
 export interface SessionNamesResponse {
+  /** false when the server took the request but did NOT store it (its write
+   *  failed): the entries come back `held` and the caller must re-send them. */
   ok: boolean;
   /** Entries stored (upserted) by the server. */
   stored: number;
   /** Entries the server refused (bad hash or path); the batch still succeeds. */
   rejected: number;
+  /** Per-entry acknowledgments, mirroring ingest. Absent on legacy servers. */
+  results?: Array<{
+    fileHash?: string;
+    status: "stored" | "duplicate" | "rejected" | "held";
+    code?: string;
+  }>;
 }
 
 export interface SessionNamesDeleteResponse {

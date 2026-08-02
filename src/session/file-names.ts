@@ -22,6 +22,11 @@
  *     `..` segment, a backslash, a control character or an overlong path never
  *     leaves the machine, even if some future producer wrote one to the ledger.
  *
+ * A name counts as uploaded only when the SERVER says it stored it. The endpoint
+ * answers HTTP 200 with `ok:false` (entries `held`, code `db_error`) when its
+ * write fails, so a 2xx alone is not an acceptance: held entries stay out of the
+ * local record and the next flush sends them again.
+ *
  * Fail-open, always: nothing here throws, and it runs AFTER the event flush has
  * committed its offsets, so a names failure cannot block, delay or corrupt the
  * flush. Turning sharing off deletes what was uploaded; if that DELETE cannot
@@ -223,9 +228,39 @@ export async function clearUploadedNames(sessionsDir: string, projectHash: strin
 
 /** What the server reports per batch. Legacy/void answers count as all-stored. */
 export interface NamesPostAck {
+  /**
+   * `false` when the server answered 200 but did NOT persist the batch (its
+   * write failed, so every entry comes back `held`). Honoring this is what
+   * makes the upload recoverable: a held batch is left out of the local record
+   * so the NEXT flush sends it again. Absent means "stored" (a legacy or void
+   * answer), which is the only safe reading of a server that predates the flag.
+   */
+  ok?: boolean;
   stored?: number;
   /** Entries the server refused (bad hash/path, duplicate in batch). */
   rejected?: number;
+  /** Per-entry outcome, when the server reports one. Only `stored` (and
+   *  `duplicate`, whose winning entry IS stored) means the row exists; `held`
+   *  and `rejected` do not. */
+  results?: Array<{ fileHash?: string | null; status?: string; code?: string }>;
+}
+
+/** Hashes a batch's ack says are actually on the server, or null when the ack
+ *  carries no per-entry detail (then the batch is judged as a whole). */
+function persistedHashes(ack: NamesPostAck | void): Set<string> | null {
+  if (!ack || !Array.isArray(ack.results)) return null;
+  const stored = new Set<string>();
+  for (const r of ack.results) {
+    if (!r || (r.status !== "stored" && r.status !== "duplicate")) continue;
+    if (isFileHash(r.fileHash)) stored.add(r.fileHash);
+  }
+  return stored;
+}
+
+/** Entries this ack reports as accepted-but-unstored. 0 when it says nothing. */
+function heldCount(ack: NamesPostAck | void): number {
+  if (!ack || !Array.isArray(ack.results)) return 0;
+  return ack.results.filter((r) => r?.status === "held").length;
 }
 
 export interface NamesSyncOptions {
@@ -243,12 +278,16 @@ export interface NamesSyncOptions {
 }
 
 export interface NamesSyncResult {
-  /** Entries sent in requests the server answered successfully. */
+  /** Entries the server actually stored (the only ones recorded locally). */
   uploaded: number;
   /** Requests actually made. */
   batches: number;
   /** Entries the server itself refused (should be 0: we validate first). */
   rejected: number;
+  /** Entries the server accepted the request for but did NOT store (`ok:false`
+   *  or a per-entry `held`). Deliberately left unrecorded: the next flush
+   *  re-sends them. */
+  held: number;
   /** An owed opt-out deletion completed this run. */
   deleted: boolean;
   /** A deletion is still owed to the server (retried on the next flush). */
@@ -262,7 +301,7 @@ export interface NamesSyncResult {
  * a bad server never turns into a request storm. Never throws.
  */
 export async function syncFileNames(opts: NamesSyncOptions): Promise<NamesSyncResult> {
-  const res: NamesSyncResult = { uploaded: 0, batches: 0, rejected: 0, deleted: false, deletePending: false };
+  const res: NamesSyncResult = { uploaded: 0, batches: 0, rejected: 0, held: 0, deleted: false, deletePending: false };
   try {
     const { sessionsDir, projectHash, home } = opts;
     const store = loadActivation(home);
@@ -301,9 +340,27 @@ export async function syncFileNames(opts: NamesSyncOptions): Promise<NamesSyncRe
         break; // one attempt per flush run; the rest waits for the next flush
       }
       res.batches++;
-      res.uploaded += batch.length;
       if (ack && typeof ack.rejected === "number") res.rejected += ack.rejected;
-      await recordUploadedHashes(sessionsDir, projectHash, batch.map((e) => e.fileHash));
+
+      // A 200 is NOT an acceptance: the server answers ok:false (every entry
+      // `held`) when its write failed. Recording those hashes would filter them
+      // out of every future flush — the names would be lost for good, silently.
+      if (ack && ack.ok === false) {
+        res.held += batch.length;
+        break; // one attempt per run: the next flush re-sends this batch
+      }
+      const persisted = persistedHashes(ack);
+      const stored = persisted ? batch.filter((e) => persisted.has(e.fileHash)) : batch;
+      res.uploaded += stored.length;
+      res.held += heldCount(ack);
+      if (stored.length > 0) {
+        await recordUploadedHashes(sessionsDir, projectHash, stored.map((e) => e.fileHash));
+      }
+    }
+    // Said once, quietly: a held entry is not an error the user can act on, and
+    // it costs nothing (the next flush re-sends it).
+    if (res.held > 0) {
+      debug("session-names", `${res.held} file-name entr${res.held === 1 ? "y" : "ies"} held by the server; retrying on the next flush`);
     }
     // We validate before sending, so a rejection means the server disagrees with
     // this client. Say so once, quietly, and never retry it.

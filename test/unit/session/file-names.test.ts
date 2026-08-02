@@ -398,6 +398,107 @@ describe("syncFileNames (flush-time upload, opt-in gated)", () => {
     expect(res).toMatchObject({ batches: 1, rejected: 1 });
   });
 
+  it("a held batch (ok:false) records nothing, and the next flush re-sends it", async () => {
+    const { base, sessionsDir, hash } = await project(["src/a.ts", "src/b.ts"]);
+    setShareFileNames(hash, true, base);
+    const res = await syncFileNames({
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async (entries) => ({
+        ok: false,
+        stored: 0,
+        rejected: 0,
+        results: entries.map((e) => ({ fileHash: e.fileHash, status: "held" as const, code: "db_error" })),
+      }),
+    });
+    expect(res).toMatchObject({ uploaded: 0, held: 2 });
+    // nothing was written to the local record, so nothing is filtered out later
+    expect(existsSync(namesStatePath(sessionsDir, hash))).toBe(false);
+    const sent: FileNameEntry[][] = [];
+    await syncFileNames({
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async (entries) => { sent.push(entries); return { ok: true, stored: entries.length, rejected: 0 }; },
+    });
+    expect(sent.flat().map((e) => e.path).sort()).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it("a held batch stops the run: the remaining batches wait for the next flush", async () => {
+    const base = tmp();
+    const sessionsDir = join(base, "sessions");
+    const hash = "p1";
+    const dir = join(sessionsDir, hash);
+    mkdirSync(dir, { recursive: true });
+    const lines = Array.from({ length: NAMES_BATCH_MAX + 3 }, (_, i) =>
+      JSON.stringify(ev({ detail: { file: `src/f${i}.ts`, diffstat: "+1", inRepo: true } })),
+    );
+    writeFileSync(join(dir, "s1.jsonl"), `${lines.join("\n")}\n`);
+    await markFlushed(sessionsDir, hash);
+    setShareFileNames(hash, true, base);
+    let posts = 0;
+    const res = await syncFileNames({
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async () => { posts++; return { ok: false, stored: 0, rejected: 0 }; },
+    });
+    expect(posts).toBe(1);
+    expect(res.uploaded).toBe(0);
+    expect(res.held).toBe(NAMES_BATCH_MAX);
+  });
+
+  it("an ok:true batch IS recorded, so the next flush sends nothing", async () => {
+    const { base, sessionsDir, hash } = await project(["src/a.ts"]);
+    setShareFileNames(hash, true, base);
+    const opts = {
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async (entries: FileNameEntry[]) => ({ ok: true, stored: entries.length, rejected: 0 }),
+    };
+    const first = await syncFileNames(opts);
+    expect(first).toMatchObject({ uploaded: 1, batches: 1, held: 0 });
+    let posts = 0;
+    await syncFileNames({ ...opts, postNames: async (e) => { posts++; return { ok: true, stored: e.length, rejected: 0 }; } });
+    expect(posts).toBe(0);
+  });
+
+  it("per-entry results: only the entries the server stored are recorded", async () => {
+    const { base, sessionsDir, hash } = await project(["src/a.ts", "src/b.ts"]);
+    setShareFileNames(hash, true, base);
+    const first = await syncFileNames({
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async (entries) => ({
+        ok: true,
+        stored: 1,
+        rejected: 0,
+        results: [
+          { fileHash: entries[0].fileHash, status: "stored" as const },
+          { fileHash: entries[1].fileHash, status: "held" as const, code: "db_error" },
+        ],
+      }),
+    });
+    expect(first).toMatchObject({ uploaded: 1, held: 1 });
+    const sent: FileNameEntry[][] = [];
+    await syncFileNames({
+      sessionsDir,
+      projectHash: hash,
+      home: base,
+      canUpload: true,
+      postNames: async (entries) => { sent.push(entries); return { ok: true, stored: entries.length, rejected: 0 }; },
+    });
+    expect(sent.flat().map((e) => e.path)).toEqual(["src/b.ts"]);
+  });
+
   it("retries a pending opt-out delete, clears the flag state and the local manifest record", async () => {
     const { base, sessionsDir, hash } = await project(["src/a.ts"]);
     setShareFileNames(hash, true, base);
