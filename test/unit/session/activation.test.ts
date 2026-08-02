@@ -17,6 +17,9 @@ import {
   setShareFileNames,
   namesDeleteIsPending,
   setNamesDeletePending,
+  recordNameShare,
+  nameShareHashes,
+  forgetNameShare,
 } from "@/session/activation";
 
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "vd-act-")));
@@ -25,7 +28,7 @@ describe("activation store", () => {
   it("missing file loads as empty (unanswered)", () => {
     const home = tmp();
     const store = loadActivation(home);
-    expect(store).toEqual({ v: 1, projects: {}, dirGrants: [] });
+    expect(store).toEqual({ v: 1, projects: {}, dirGrants: [], nameShares: [] });
     expect(projectStatus(store, "h1")).toBe("unanswered");
   });
 
@@ -193,6 +196,19 @@ describe("per-repo file-name sharing (opt-in manifest)", () => {
     expect(projectStatus(store, "h1")).toBe("active");
     expect(shareFileNamesEnabled(store, "h1")).toBe(true);
     expect(store.projects.h1.surface).toBe("cli-enable");
+  });
+
+  it("records every project hash one repo shared names under, and forgets one at a time", () => {
+    const home = tmp();
+    expect(nameShareHashes(loadActivation(home), "git:abc")).toEqual([]);
+    recordNameShare("h1", "git:abc", home);
+    recordNameShare("h1", "git:abc", home); // idempotent
+    recordNameShare("h2", "git:abc", home); // the same repo, moved on disk
+    recordNameShare("h3", "git:other", home); // a different repo entirely
+    expect(nameShareHashes(loadActivation(home), "git:abc")).toEqual(["h1", "h2"]);
+    forgetNameShare("h1", "git:abc", home);
+    expect(nameShareHashes(loadActivation(home), "git:abc")).toEqual(["h2"]);
+    expect(nameShareHashes(loadActivation(home), "git:other")).toEqual(["h3"]);
   });
 
   it("a pending opt-out delete round-trips and clears", () => {

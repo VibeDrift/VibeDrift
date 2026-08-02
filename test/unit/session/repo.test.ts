@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveRepoRoot, repoIdentity, defaultSessionsDir } from "@/session/repo";
+import { resolveRepoRoot, repoIdentity, repoKey, defaultSessionsDir } from "@/session/repo";
 import { projectHash } from "@/core/baseline";
 
 const tmp = (prefix: string) => realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -35,6 +36,36 @@ describe("repoIdentity", () => {
     const id = repoIdentity(d);
     expect(id.rootDir).toBe(d);
     expect(id.projectHash).toBe(projectHash(d));
+  });
+});
+
+describe("repoKey", () => {
+  it("is the root commit for a git repo, so it survives a move on disk", () => {
+    const a = tmp("vd-key-");
+    execFileSync("git", ["init", "-q"], { cwd: a, stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-c", "user.email=test@example.com",
+        "-c", "user.name=Test",
+        "-c", "commit.gpgsign=false",
+        "-c", "core.hooksPath=/dev/null",
+        "commit", "-q", "--allow-empty", "-m", "init",
+      ],
+      { cwd: a, stdio: "ignore" },
+    );
+    const before = repoKey(a);
+    expect(before).toMatch(/^git:[0-9a-f]{40,64}$/);
+    const moved = join(a, "..", `vd-key-moved-${Date.now()}`);
+    renameSync(a, moved);
+    expect(repoKey(moved)).toBe(before);
+    expect(repoIdentity(moved).projectHash).not.toBe(repoIdentity(a).projectHash);
+    rmSync(moved, { recursive: true, force: true });
+  });
+
+  it("falls back to the canonical path when git cannot answer", () => {
+    const d = tmp("vd-nogit-");
+    expect(repoKey(d)).toBe(`path:${d}`);
   });
 });
 

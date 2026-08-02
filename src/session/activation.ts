@@ -18,6 +18,10 @@
  * Only an explicit `vibedrift enable`/`decline` sets `state`; the ask itself
  * self-limits via `askCount`.
  *
+ * Name shares: which project hashes each repo turned the file-name manifest on
+ * under, keyed on an identity that survives the repo moving on disk, so opting
+ * out can delete every upload it made rather than only the current hash's.
+ *
  * Dir grants (O19): stored canonicalized; `$HOME` and filesystem roots are
  * REFUSED outright — a grant that broad is indistinguishable from the
  * auto-capture-everything design that was explicitly rejected.
@@ -66,13 +70,29 @@ export interface ProjectActivation {
   namesDeletePending?: boolean;
 }
 
+/**
+ * One repo turned file-name sharing ON under one project hash.
+ *
+ * The project hash is derived from the repo's PATH, so a repo that moves gets a
+ * new one and its earlier uploads become unreachable from the new location.
+ * This record keys them on `repoKey` (see session/repo.ts), which survives a
+ * move, so `--names off` can delete every hash this machine uploaded names
+ * under for the repo rather than only the current one.
+ */
+export interface NameShareRecord {
+  repoKey: string;
+  projectHash: string;
+  at: string;
+}
+
 export interface ActivationStore {
   v: 1;
   projects: Record<string, ProjectActivation>;
   dirGrants: Array<{ path: string; at: string }>;
+  nameShares: NameShareRecord[];
 }
 
-const EMPTY: ActivationStore = { v: 1, projects: {}, dirGrants: [] };
+const EMPTY: ActivationStore = { v: 1, projects: {}, dirGrants: [], nameShares: [] };
 
 export function activationPath(home: string = vibedriftHome()): string {
   return join(home, "activation.json");
@@ -87,6 +107,7 @@ export function loadActivation(home: string = vibedriftHome()): ActivationStore 
       v: 1,
       projects: typeof parsed.projects === "object" && parsed.projects !== null ? parsed.projects : {},
       dirGrants: Array.isArray(parsed.dirGrants) ? parsed.dirGrants : [],
+      nameShares: Array.isArray(parsed.nameShares) ? parsed.nameShares : [],
     };
   } catch {
     return structuredClone(EMPTY);
@@ -153,6 +174,33 @@ export function setShareFileNames(projectHash: string, on: boolean, home: string
     if (on) rec.shareFileNames = true;
     else delete rec.shareFileNames;
   }, home);
+}
+
+/** Remember that this repo shared names under this project hash, so a later
+ *  `--names off` can still reach the upload after the repo (and therefore the
+ *  hash) has moved. Idempotent per (repoKey, projectHash). */
+export function recordNameShare(projectHash: string, repoKey: string, home: string = vibedriftHome()): void {
+  const store = loadActivation(home);
+  if (store.nameShares.some((s) => s.repoKey === repoKey && s.projectHash === projectHash)) return;
+  store.nameShares.push({ repoKey, projectHash, at: new Date().toISOString() });
+  saveActivation(store, home);
+}
+
+/** Every project hash this machine shared names under for one repo, newest last.
+ *  The caller adds the CURRENT hash: a repo that opted in before this record
+ *  existed has no entry here. */
+export function nameShareHashes(store: ActivationStore, repoKey: string): string[] {
+  return store.nameShares.filter((s) => s.repoKey === repoKey).map((s) => s.projectHash);
+}
+
+/** Drop one record, once its server-side names are confirmed deleted. A record
+ *  whose deletion FAILED is kept on purpose: it is the retry list. */
+export function forgetNameShare(projectHash: string, repoKey: string, home: string = vibedriftHome()): void {
+  const store = loadActivation(home);
+  const kept = store.nameShares.filter((s) => !(s.repoKey === repoKey && s.projectHash === projectHash));
+  if (kept.length === store.nameShares.length) return;
+  store.nameShares = kept;
+  saveActivation(store, home);
 }
 
 /** Record (or clear) the owed opt-out deletion the next flush retries. */

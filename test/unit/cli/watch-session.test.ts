@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runWatchSession } from "@/cli/commands/watch-session";
@@ -15,6 +16,26 @@ function repoWithAgent(): string {
   const repo = tmp("vd-ws-");
   mkdirSync(join(repo, ".git"));
   mkdirSync(join(repo, ".claude"));
+  return repo;
+}
+
+/** A REAL git repo (one commit), so its identity survives a move on disk —
+ *  which a path-derived project hash does not. */
+function gitRepoWithAgent(): string {
+  const repo = tmp("vd-ws-git-");
+  mkdirSync(join(repo, ".claude"));
+  execFileSync("git", ["init", "-q"], { cwd: repo, stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-c", "user.email=test@example.com",
+      "-c", "user.name=Test",
+      "-c", "commit.gpgsign=false",
+      "-c", "core.hooksPath=/dev/null",
+      "commit", "-q", "--allow-empty", "-m", "init",
+    ],
+    { cwd: repo, stdio: "ignore" },
+  );
   return repo;
 }
 
@@ -249,5 +270,78 @@ describe("runWatchSession — file-name sharing toggle (--names)", () => {
     expect(namesDeleteIsPending(loadActivation(activationHome), hash)).toBe(true);
     const printed = log.mock.calls.flat().map(String).join("\n");
     expect(printed).toMatch(/retried on the next/i);
+    // a deletion that did not happen is never reported as one
+    expect(printed).not.toMatch(/removed from your dashboard/i);
+  });
+
+  it("--names off deletes the names uploaded under a PREVIOUS project hash (repo moved)", async () => {
+    const activationHome = tmp("vd-ws-act-");
+    const sessionsDir = tmp("vd-ws-sess-");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const before = gitRepoWithAgent();
+    const oldHash = hashOf(before);
+    await runWatchSession(before, { names: "on", activationHome, sessionsDir });
+
+    // the repo moves on disk: same repo, brand new project hash
+    const after = join(before, "..", `moved-${Date.now()}`);
+    renameSync(before, after);
+    const newHash = hashOf(after);
+    expect(newHash).not.toBe(oldHash);
+
+    const deleted: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runWatchSession(after, {
+      names: "off",
+      activationHome,
+      sessionsDir,
+      deleteNames: async (projectHash: string) => { deleted.push(projectHash); return { deleted: 2 }; },
+    });
+    expect(deleted).toContain(oldHash);
+    expect(deleted).toContain(newHash);
+    const printed = log.mock.calls.flat().map(String).join("\n");
+    expect(printed).toMatch(/File names are OFF/i);
+    rmSync(after, { recursive: true, force: true });
+  });
+
+  it("--names off reports only what it removed when an earlier upload cannot be deleted", async () => {
+    const activationHome = tmp("vd-ws-act-");
+    const sessionsDir = tmp("vd-ws-sess-");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const before = gitRepoWithAgent();
+    const oldHash = hashOf(before);
+    await runWatchSession(before, { names: "on", activationHome, sessionsDir });
+    const after = join(before, "..", `moved-${Date.now()}-b`);
+    renameSync(before, after);
+    const newHash = hashOf(after);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runWatchSession(after, {
+      names: "off",
+      activationHome,
+      sessionsDir,
+      deleteNames: async (projectHash: string) => {
+        if (projectHash === oldHash) throw new Error("offline");
+        return { deleted: 1 };
+      },
+    });
+    const printed = log.mock.calls.flat().map(String).join("\n");
+    // sharing is off locally, and the copy never claims the removal it failed
+    expect(printed).toMatch(/File names are OFF for this repo; nothing more will be uploaded/i);
+    expect(printed).not.toMatch(/removed from your dashboard/i);
+    expect(printed).toMatch(/could not be removed/i);
+    expect(printed).toMatch(/re-run/i);
+    // the current hash succeeded, so it is not queued; the earlier one is kept
+    expect(namesDeleteIsPending(loadActivation(activationHome), newHash)).toBe(false);
+
+    // re-running retries exactly the upload that is still out there
+    const retried: string[] = [];
+    await runWatchSession(after, {
+      names: "off",
+      activationHome,
+      sessionsDir,
+      deleteNames: async (projectHash: string) => { retried.push(projectHash); return { deleted: 2 }; },
+    });
+    expect(retried).toContain(oldHash);
+    rmSync(after, { recursive: true, force: true });
   });
 });
