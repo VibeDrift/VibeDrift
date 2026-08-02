@@ -7,6 +7,10 @@ import { runWatchSession } from "@/cli/commands/watch-session";
 import { readConfig } from "@/auth/config";
 import { repoIdentity } from "@/session/repo";
 import { loadActivation, shareFileNamesEnabled, namesDeleteIsPending } from "@/session/activation";
+import { appendEvent } from "@/session/ledger";
+import { UploadStateStore } from "@/session/upload-state";
+import { syncFileNames, type FileNameEntry } from "@/session/file-names";
+import type { SessionEvent } from "@/session/types";
 
 function tmp(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -37,6 +41,37 @@ function gitRepoWithAgent(): string {
     { cwd: repo, stdio: "ignore" },
   );
   return repo;
+}
+
+/** A second working copy of the SAME repo (a clone or a worktree): one repo
+ *  identity, two paths, therefore two project hashes. */
+function cloneOf(src: string): string {
+  const dest = join(tmp("vd-ws-clone-"), "clone");
+  execFileSync("git", ["clone", "-q", src, dest], { stdio: "ignore" });
+  mkdirSync(join(dest, ".claude"), { recursive: true });
+  return realpathSync(dest);
+}
+
+/** One flushed edit in a project's ledger: the raw material a names flush
+ *  uploads from. */
+async function flushedEdit(sessionsDir: string, projectHash: string, file: string): Promise<void> {
+  const event: SessionEvent = {
+    v: 1,
+    sid: "s1",
+    aid: `evt-${file}`,
+    ts: new Date().toISOString(),
+    agent: "claude-code",
+    projectHash,
+    channel: "hook",
+    type: "edit",
+    mode: "passive",
+    detail: { file, diffstat: "+1", inRepo: true },
+  };
+  await appendEvent(sessionsDir, projectHash, "s1", event);
+  const store = new UploadStateStore(sessionsDir, projectHash);
+  await store.load();
+  const raw = readFileSync(join(sessionsDir, projectHash, "s1.jsonl"), "utf8");
+  await store.commit(new Map([["s1.jsonl", raw.length]]));
 }
 
 afterEach(() => {
@@ -343,5 +378,47 @@ describe("runWatchSession — file-name sharing toggle (--names)", () => {
     });
     expect(retried).toContain(oldHash);
     rmSync(after, { recursive: true, force: true });
+  });
+
+  it("--names off in one clone disarms the OTHER clone too, so nothing re-uploads", async () => {
+    const activationHome = tmp("vd-ws-act-");
+    const sessionsDir = tmp("vd-ws-sess-");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    // Two working copies of ONE repo (a clone or a git worktree): the same repo
+    // identity, two paths, two project hashes.
+    const cloneA = gitRepoWithAgent();
+    const cloneB = cloneOf(cloneA);
+    const hashA = hashOf(cloneA);
+    const hashB = hashOf(cloneB);
+    expect(hashA).not.toBe(hashB);
+
+    await runWatchSession(cloneA, { names: "on", activationHome, sessionsDir });
+    await runWatchSession(cloneB, { names: "on", activationHome, sessionsDir });
+    await flushedEdit(sessionsDir, hashA, "src/a.ts");
+
+    const deleted: string[] = [];
+    await runWatchSession(cloneB, {
+      names: "off",
+      activationHome,
+      sessionsDir,
+      deleteNames: async (projectHash: string) => { deleted.push(projectHash); return { deleted: 1 }; },
+    });
+    // the opt-out deleted BOTH copies' uploads, so it must disarm both: leaving
+    // clone A opted in would silently re-upload what the user just removed.
+    expect(deleted.sort()).toEqual([hashA, hashB].sort());
+    expect(shareFileNamesEnabled(loadActivation(activationHome), hashB)).toBe(false);
+    expect(shareFileNamesEnabled(loadActivation(activationHome), hashA)).toBe(false);
+
+    // end to end: clone A's next flush uploads nothing at all
+    const sent: FileNameEntry[][] = [];
+    await syncFileNames({
+      sessionsDir,
+      projectHash: hashA,
+      home: activationHome,
+      canUpload: true,
+      postNames: async (entries) => { sent.push(entries); },
+    });
+    expect(sent).toEqual([]);
+    rmSync(cloneB, { recursive: true, force: true });
   });
 });

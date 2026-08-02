@@ -307,12 +307,17 @@ export async function runWatchSession(
  * it opted in under against an identity that survives the repo moving.
  *
  * OFF deletes what was already uploaded and then clears the flag. The delete is
- * scoped to a project hash, and a repo that moved on disk has uploaded under
- * more than one, so every hash this machine recorded for THIS repo is deleted,
- * not just the current one. The flag ends up off locally either way — but the
- * report is strictly what happened: a deletion that did not land is never
- * printed as one, the current hash's failure is queued for the next flush, and
- * an older hash's failure says plainly that it is still out there.
+ * scoped to a project hash, and one repo can have uploaded under more than one
+ * (it moved on disk, or a second clone or git worktree of it hashes differently
+ * while sharing the same repo identity), so every hash this machine recorded for
+ * THIS repo is deleted, not just the current one. The local opt-in is cleared
+ * for every one of those hashes for the same reason: an opt-out that deleted a
+ * second working copy's uploads while leaving that copy ARMED would have it
+ * re-upload them on its next flush, after the user was told sharing was off.
+ * The flag ends up off locally either way — but the report is strictly what
+ * happened: a deletion that did not land is never printed as one, the current
+ * hash's failure is queued for the next flush, and an older hash's failure says
+ * plainly that it is still out there.
  */
 async function toggleFileNames(
   on: boolean,
@@ -348,7 +353,8 @@ async function toggleFileNames(
   }
 
   // Every hash this repo has shared names under: the current one plus anything
-  // recorded before the repo moved (a moved repo hashes to something new).
+  // recorded from another path for the same repo (it moved, or a second clone
+  // or worktree of it opted in and hashes differently).
   const hashes = [...new Set([projectHash, ...nameShareHashes(loadActivation(activationHome), key)])];
   let removed = 0;
   let counted = true;
@@ -369,7 +375,10 @@ async function toggleFileNames(
       else earlierFailed++;
     }
   }
-  setShareFileNames(projectHash, false, activationHome);
+  // Disarm every hash the opt-out covered, not only the current one: another
+  // working copy of this repo would otherwise still be opted in and re-upload
+  // on its next flush the names this command just deleted.
+  for (const hash of hashes) setShareFileNames(hash, false, activationHome);
   if (currentFailed) setNamesDeletePending(projectHash, true, activationHome);
 
   if (!currentFailed && earlierFailed === 0) {
