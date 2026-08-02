@@ -21,11 +21,13 @@
 
 import { refreshEntitlementCache, type EntitlementFetchResult } from "./entitlement.js";
 import { runUploaderOnce } from "./uploader.js";
+import { syncFileNames, type FileNameEntry, type NamesPostAck } from "./file-names.js";
 import type { IngestAck } from "./ingest-ack.js";
 import type { UploadEvent } from "./upload-schema.js";
 
 export interface FlushRunOptions {
-  /** Entitlement-cache dir (the VibeDrift home root). */
+  /** Entitlement-cache dir (the VibeDrift home root) — also where the
+   *  activation store that holds the per-repo file-name opt-in lives. */
   baseDir: string;
   sessionsDir: string;
   projectHash: string;
@@ -33,6 +35,10 @@ export interface FlushRunOptions {
   /** Ask the server for entitlement; must reject on failure. */
   fetchEntitlement: () => Promise<EntitlementFetchResult>;
   post: (events: UploadEvent[]) => Promise<IngestAck | void>;
+  /** Opt-in file-name manifest (off by default, per repo). Both are optional:
+   *  without them the names step is inert. */
+  postNames?: (entries: FileNameEntry[]) => Promise<NamesPostAck | void>;
+  deleteNames?: () => Promise<unknown>;
   budgetMs?: number;
   now?: () => number;
 }
@@ -57,7 +63,12 @@ export async function runFlush(opts: FlushRunOptions): Promise<FlushRunResult> {
 
   // 2. A known-locked account uploads nothing: the server would only 402 it.
   //    A null entitlement means we could not ask, which fails open (upload).
-  if (entitlement && !entitlement.entitled) return { uploaded: false, locked: true };
+  //    An owed `--names off` deletion is still honored: an opt-out must land
+  //    even on an account that can no longer sync.
+  if (entitlement && !entitlement.entitled) {
+    await settleFileNames(opts, false);
+    return { uploaded: false, locked: true };
+  }
 
   const { locked } = await runUploaderOnce({
     sessionsDir: opts.sessionsDir,
@@ -72,8 +83,32 @@ export async function runFlush(opts: FlushRunOptions): Promise<FlushRunResult> {
   //    the hook gate stops capturing on the next event.
   if (locked) {
     await refreshEntitlementCache({ baseDir, now, force: true, fetch: opts.fetchEntitlement });
+    await settleFileNames(opts, false);
     return { uploaded: true, locked: true };
   }
 
+  // 4. Last, and strictly behind the events: the opt-in file-name manifest.
+  //    Offsets are already committed by this point, so a names failure cannot
+  //    block, delay or corrupt the flush — and with the flag off (the default)
+  //    this makes no request at all.
+  await settleFileNames(opts, true);
+
   return { uploaded: true, locked: false };
+}
+
+/** Run the names step without letting it affect the flush in any way. */
+async function settleFileNames(opts: FlushRunOptions, canUpload: boolean): Promise<void> {
+  if (!opts.postNames && !opts.deleteNames) return;
+  try {
+    await syncFileNames({
+      sessionsDir: opts.sessionsDir,
+      projectHash: opts.projectHash,
+      home: opts.baseDir,
+      postNames: opts.postNames,
+      deleteNames: opts.deleteNames,
+      canUpload,
+    });
+  } catch {
+    // syncFileNames already fails open; this is the belt on the braces
+  }
 }

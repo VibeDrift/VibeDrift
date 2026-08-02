@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFlush } from "@/session/flush-run";
 import { appendEvent } from "@/session/ledger";
+import { readFileSync } from "node:fs";
 import { readEntitlementCache, writeEntitlementCache, computeEntitlement } from "@/session/entitlement";
+import { setShareFileNames, setNamesDeletePending, namesDeleteIsPending, loadActivation } from "@/session/activation";
+import type { FileNameEntry } from "@/session/file-names";
 import type { UploadEvent } from "@/session/upload-schema";
 import type { IngestAck } from "@/session/ingest-ack";
 import type { SessionEvent } from "@/session/types";
@@ -19,7 +22,8 @@ const ev = (over: Partial<SessionEvent> = {}): SessionEvent => ({
   aid: `evt-${seq++}`,
   ts: new Date().toISOString(),
   agent: "claude-code",
-  projectHash: "h",
+  // the hook stamps every event with the SAME hash it uses for the ledger dir
+  projectHash: "h1",
   channel: "hook",
   type: "edit",
   mode: "passive",
@@ -171,5 +175,78 @@ describe("runFlush (the native path's per-turn flush)", () => {
     });
     expect(posted).toHaveLength(0);
     expect(out).toMatchObject({ uploaded: true, locked: false });
+  });
+});
+
+describe("runFlush — opt-in file-name manifest", () => {
+  const uploadedOffsets = (sessionsDir: string, hash: string): Record<string, { offset: number }> =>
+    JSON.parse(readFileSync(join(sessionsDir, hash, "upload-state.json"), "utf8")).files;
+
+  it("makes NO names request when the repo never opted in (the default)", async () => {
+    const { base, sessionsDir, hash } = await project();
+    let nameCalls = 0;
+    await runFlush({
+      baseDir: base,
+      sessionsDir,
+      projectHash: hash,
+      now: () => NOW,
+      fetchEntitlement: async () => ({ plan: "pro" }),
+      post: async (e) => fullAck(e),
+      postNames: async () => { nameCalls++; },
+      deleteNames: async () => { nameCalls++; },
+    });
+    expect(nameCalls).toBe(0);
+  });
+
+  it("posts the manifest for the flushed events once the repo opted in", async () => {
+    const { base, sessionsDir, hash } = await project();
+    setShareFileNames(hash, true, base);
+    const sent: FileNameEntry[] = [];
+    await runFlush({
+      baseDir: base,
+      sessionsDir,
+      projectHash: hash,
+      now: () => NOW,
+      fetchEntitlement: async () => ({ plan: "pro" }),
+      post: async (e) => fullAck(e),
+      postNames: async (entries) => { sent.push(...entries); },
+    });
+    expect(sent).toEqual([{ fileHash: expect.stringMatching(/^[0-9a-f]{16}$/), path: "a.ts" }]);
+  });
+
+  it("a names failure never blocks the flush: events still commit their offsets", async () => {
+    const { base, sessionsDir, hash } = await project();
+    setShareFileNames(hash, true, base);
+    const posted: UploadEvent[] = [];
+    const out = await runFlush({
+      baseDir: base,
+      sessionsDir,
+      projectHash: hash,
+      now: () => NOW,
+      fetchEntitlement: async () => ({ plan: "pro" }),
+      post: async (e) => { posted.push(...e); return fullAck(e); },
+      postNames: async () => { throw new Error("names endpoint down"); },
+    });
+    expect(posted).toHaveLength(1);
+    expect(out).toMatchObject({ uploaded: true, locked: false });
+    expect(Object.values(uploadedOffsets(sessionsDir, hash))[0].offset).toBeGreaterThan(0);
+  });
+
+  it("honors a pending opt-out delete even when the account is locked", async () => {
+    const { base, sessionsDir, hash } = await project();
+    setNamesDeletePending(hash, true, base);
+    let deletes = 0;
+    const out = await runFlush({
+      baseDir: base,
+      sessionsDir,
+      projectHash: hash,
+      now: () => NOW,
+      fetchEntitlement: async () => ({ plan: "free", trial_used: 5, trial_limit: 5 }),
+      post: async (e) => fullAck(e),
+      deleteNames: async () => { deletes++; },
+    });
+    expect(out).toMatchObject({ uploaded: false, locked: true });
+    expect(deletes).toBe(1);
+    expect(namesDeleteIsPending(loadActivation(base), hash)).toBe(false);
   });
 });

@@ -47,16 +47,22 @@ async function main(): Promise<void> {
 
   const token = cfg.token;
   const apiUrl = cfg.apiUrl;
-  const { postSessionIngest, fetchSessionEntitlement } = await import("../auth/api.js");
+  const { postSessionIngest, fetchSessionEntitlement, postSessionNames, deleteSessionNames } =
+    await import("../auth/api.js");
   const { vibedriftHome } = await import("../core/vibedrift-home.js");
   const { runFlush } = await import("./flush-run.js");
+  const hash = projectHash;
   await runFlush({
     baseDir: vibedriftHome(),
     sessionsDir,
-    projectHash,
+    projectHash: hash,
     teamIntentOptIn: cfg.sessionsTeamIntentOptIn === true,
     fetchEntitlement: () => fetchSessionEntitlement(token, { apiUrl }),
     post: (events) => postSessionIngest(token, events, { apiUrl }),
+    // Opt-in per repo (default off). runFlush only calls these when this repo's
+    // `--names on` flag is set, or when an opt-out deletion is still owed.
+    postNames: (names) => postSessionNames(token, hash, names, { apiUrl }),
+    deleteNames: () => deleteSessionNames(token, hash, { apiUrl }),
   });
 }
 
