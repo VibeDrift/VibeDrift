@@ -421,6 +421,35 @@ describe("syncFileNames (flush-time upload, opt-in gated)", () => {
     expect(res).toMatchObject({ batches: 1, rejected: 1 });
   });
 
+  it("sends a REJECTED entry exactly once, while a held one keeps retrying", async () => {
+    const { base, sessionsDir, hash } = await project(["src/a.ts", "src/b.ts"]);
+    setShareFileNames(hash, true, base);
+    const sent: string[][] = [];
+    // The server refuses one entry outright and holds the other: a rejection is
+    // settled (we validated before sending, so it will never be accepted), a
+    // hold is not.
+    const postNames = async (entries: FileNameEntry[]) => {
+      sent.push(entries.map((e) => e.path));
+      return {
+        ok: true,
+        stored: 0,
+        rejected: 1,
+        results: entries.map((e) =>
+          e.path === "src/a.ts"
+            ? { fileHash: e.fileHash, status: "rejected" as const, code: "bad_path" }
+            : { fileHash: e.fileHash, status: "held" as const, code: "db_error" },
+        ),
+      };
+    };
+    const opts = { sessionsDir, projectHash: hash, home: base, canUpload: true, postNames };
+    const first = await syncFileNames(opts);
+    await syncFileNames(opts);
+    await syncFileNames(opts);
+    expect(first).toMatchObject({ uploaded: 0, rejected: 1, held: 1 });
+    expect(sent.flat().filter((p) => p === "src/a.ts")).toHaveLength(1);
+    expect(sent.flat().filter((p) => p === "src/b.ts")).toHaveLength(3);
+  });
+
   it("a held batch (ok:false) records nothing, and the next flush re-sends it", async () => {
     const { base, sessionsDir, hash } = await project(["src/a.ts", "src/b.ts"]);
     setShareFileNames(hash, true, base);

@@ -231,7 +231,7 @@ async function main(): Promise<number> {
   // Resolve the edited file to a repo-relative path. A relative file_path from
   // the hook is resolved against the repo root; an edit OUTSIDE the repo is not
   // in this repo's baseline, so we record only its basename (never a machine
-  // path) and skip the inline check.
+  // path), under an out-of-repo marker, and skip the inline check.
   //
   // The answer is STAMPED on the event (`detail.inRepo`) rather than inferred
   // downstream: consumers that promise "nothing outside this repo" — the opt-in

@@ -34,7 +34,10 @@
  * A name counts as uploaded only when the SERVER says it stored it. The endpoint
  * answers HTTP 200 with `ok:false` (entries `held`, code `db_error`) when its
  * write fails, so a 2xx alone is not an acceptance: held entries stay out of the
- * local record and the next flush sends them again.
+ * local record and the next flush sends them again. What the local record tracks
+ * is therefore SETTLED entries, not accepted ones: an entry the server refused
+ * outright is settled too (a rejection will not change on a retry), and
+ * recording it is what keeps it from riding along on every flush forever.
  *
  * Fail-open, always: nothing here throws, and it runs AFTER the event flush has
  * committed its offsets, so a names failure cannot block, delay or corrupt the
@@ -70,7 +73,7 @@ const ENVELOPE_BYTES = 128;
 /** Server path cap, mirrored client-side. */
 export const MAX_REL_PATH_LEN = 300;
 
-const STATE_VERSION = 1 as const;
+const STATE_VERSION = 2 as const;
 const STATE_FILE = "names-state.json";
 
 export interface FileNameEntry {
@@ -197,38 +200,44 @@ export function namesStatePath(sessionsDir: string, projectHash: string): string
   return join(sessionsDir, safeSegment(projectHash), STATE_FILE);
 }
 
-/** Hashes already accepted by the server, so a per-turn flush re-sends nothing.
- *  Fail-open: unreadable state means "send it again", which the server upserts. */
-async function readUploadedHashes(sessionsDir: string, projectHash: string): Promise<Set<string>> {
+/**
+ * Hashes the server has SETTLED — stored, deduplicated onto an existing row, or
+ * refused outright — so a per-turn flush re-sends none of them. A held entry is
+ * never in here: it is the one outcome a retry can still change.
+ *
+ * Fail-open: unreadable state (including a v1 file, which recorded accepted
+ * entries only) means "send it again", which the server upserts.
+ */
+async function readSettledHashes(sessionsDir: string, projectHash: string): Promise<Set<string>> {
   try {
     const parsed = JSON.parse(await readFile(namesStatePath(sessionsDir, projectHash), "utf8")) as {
       v?: number;
-      uploaded?: unknown;
+      settled?: unknown;
     };
-    if (parsed?.v !== STATE_VERSION || !Array.isArray(parsed.uploaded)) return new Set();
-    return new Set(parsed.uploaded.filter(isFileHash));
+    if (parsed?.v !== STATE_VERSION || !Array.isArray(parsed.settled)) return new Set();
+    return new Set(parsed.settled.filter(isFileHash));
   } catch {
     return new Set();
   }
 }
 
-/** Merge newly-accepted hashes into the local record (atomic, never throws). */
-async function recordUploadedHashes(sessionsDir: string, projectHash: string, hashes: string[]): Promise<void> {
+/** Merge newly-settled hashes into the local record (atomic, never throws). */
+async function recordSettledHashes(sessionsDir: string, projectHash: string, hashes: string[]): Promise<void> {
   try {
-    const merged = await readUploadedHashes(sessionsDir, projectHash);
+    const merged = await readSettledHashes(sessionsDir, projectHash);
     for (const h of hashes) merged.add(h);
     const dir = join(sessionsDir, safeSegment(projectHash));
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const path = namesStatePath(sessionsDir, projectHash);
     const tmp = `${path}.tmp.${process.pid}`;
-    await writeFile(tmp, JSON.stringify({ v: STATE_VERSION, uploaded: [...merged] }), { mode: 0o600 });
+    await writeFile(tmp, JSON.stringify({ v: STATE_VERSION, settled: [...merged] }), { mode: 0o600 });
     await rename(tmp, path);
   } catch {
     // fail-open: the next flush re-sends, which the server upserts
   }
 }
 
-/** Forget what was uploaded, so a later opt-in re-uploads from scratch. */
+/** Forget what the server settled, so a later opt-in re-uploads from scratch. */
 export async function clearUploadedNames(sessionsDir: string, projectHash: string): Promise<void> {
   try {
     await rm(namesStatePath(sessionsDir, projectHash), { force: true });
@@ -256,16 +265,20 @@ export interface NamesPostAck {
   results?: Array<{ fileHash?: string | null; status?: string; code?: string }>;
 }
 
-/** Hashes a batch's ack says are actually on the server, or null when the ack
- *  carries no per-entry detail (then the batch is judged as a whole). */
-function persistedHashes(ack: NamesPostAck | void): Set<string> | null {
+/** What a batch's ack says happened per entry, or null when it carries no
+ *  per-entry detail (then the batch is judged as a whole). `stored` is what is
+ *  actually on the server (`duplicate`'s winning entry is); `rejected` is what
+ *  the server refused. Anything else (`held`) is neither, and stays retryable. */
+function perEntryOutcome(ack: NamesPostAck | void): { stored: Set<string>; rejected: Set<string> } | null {
   if (!ack || !Array.isArray(ack.results)) return null;
   const stored = new Set<string>();
+  const rejected = new Set<string>();
   for (const r of ack.results) {
-    if (!r || (r.status !== "stored" && r.status !== "duplicate")) continue;
-    if (isFileHash(r.fileHash)) stored.add(r.fileHash);
+    if (!r || !isFileHash(r.fileHash)) continue;
+    if (r.status === "stored" || r.status === "duplicate") stored.add(r.fileHash);
+    else if (r.status === "rejected") rejected.add(r.fileHash);
   }
-  return stored;
+  return { stored, rejected };
 }
 
 /** Entries this ack reports as accepted-but-unstored. 0 when it says nothing. */
@@ -289,11 +302,12 @@ export interface NamesSyncOptions {
 }
 
 export interface NamesSyncResult {
-  /** Entries the server actually stored (the only ones recorded locally). */
+  /** Entries the server actually stored. */
   uploaded: number;
   /** Requests actually made. */
   batches: number;
-  /** Entries the server itself refused (should be 0: we validate first). */
+  /** Entries the server itself refused (should be 0: we validate first).
+   *  Settled, so they are recorded locally and never sent again. */
   rejected: number;
   /** Entries the server accepted the request for but did NOT store (`ok:false`
    *  or a per-entry `held`). Deliberately left unrecorded: the next flush
@@ -339,7 +353,7 @@ export async function syncFileNames(opts: NamesSyncOptions): Promise<NamesSyncRe
 
     const entries = await collectFileNames(sessionsDir, projectHash);
     if (entries.length === 0) return res;
-    const known = await readUploadedHashes(sessionsDir, projectHash);
+    const known = await readSettledHashes(sessionsDir, projectHash);
     const fresh = entries.filter((e) => !known.has(e.fileHash));
     if (fresh.length === 0) return res;
 
@@ -360,12 +374,20 @@ export async function syncFileNames(opts: NamesSyncOptions): Promise<NamesSyncRe
         res.held += batch.length;
         break; // one attempt per run: the next flush re-sends this batch
       }
-      const persisted = persistedHashes(ack);
-      const stored = persisted ? batch.filter((e) => persisted.has(e.fileHash)) : batch;
+      const outcome = perEntryOutcome(ack);
+      const stored = outcome ? batch.filter((e) => outcome.stored.has(e.fileHash)) : batch;
       res.uploaded += stored.length;
       res.held += heldCount(ack);
-      if (stored.length > 0) {
-        await recordUploadedHashes(sessionsDir, projectHash, stored.map((e) => e.fileHash));
+      // Record everything the server SETTLED, which is more than what it stored:
+      // a rejection is final (we validate before sending, so a server that
+      // refuses this entry will refuse it again), and leaving it out of the
+      // record is what had every later flush carry it again forever. A held
+      // entry is deliberately excluded: that one a retry can still fix.
+      const settled = outcome
+        ? batch.filter((e) => outcome.stored.has(e.fileHash) || outcome.rejected.has(e.fileHash))
+        : batch;
+      if (settled.length > 0) {
+        await recordSettledHashes(sessionsDir, projectHash, settled.map((e) => e.fileHash));
       }
     }
     // Said once, quietly: a held entry is not an error the user can act on, and
