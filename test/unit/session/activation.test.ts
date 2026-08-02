@@ -13,6 +13,10 @@ import {
   resolveGrantPath,
   addDirGrant,
   DirGrantRefusedError,
+  shareFileNamesEnabled,
+  setShareFileNames,
+  namesDeleteIsPending,
+  setNamesDeletePending,
 } from "@/session/activation";
 
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "vd-act-")));
@@ -161,5 +165,42 @@ describe("dir-grant refusals (O19)", () => {
     const link = join(base, "link");
     symlinkSync(real, link);
     expect(resolveGrantPath(link)).toBe(real);
+  });
+});
+
+describe("per-repo file-name sharing (opt-in manifest)", () => {
+  it("is OFF by default, for a missing store and for an activated repo", () => {
+    const home = tmp();
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(false);
+    recordAnswer("h1", "active", "cli-enable", home);
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(false);
+  });
+
+  it("setShareFileNames round-trips per repo and never leaks to another repo", () => {
+    const home = tmp();
+    setShareFileNames("h1", true, home);
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(true);
+    expect(shareFileNamesEnabled(loadActivation(home), "h2")).toBe(false);
+    setShareFileNames("h1", false, home);
+    expect(shareFileNamesEnabled(loadActivation(home), "h1")).toBe(false);
+  });
+
+  it("keeps the activation answer intact when the flag flips", () => {
+    const home = tmp();
+    recordAnswer("h1", "active", "cli-enable", home);
+    setShareFileNames("h1", true, home);
+    const store = loadActivation(home);
+    expect(projectStatus(store, "h1")).toBe("active");
+    expect(shareFileNamesEnabled(store, "h1")).toBe(true);
+    expect(store.projects.h1.surface).toBe("cli-enable");
+  });
+
+  it("a pending opt-out delete round-trips and clears", () => {
+    const home = tmp();
+    expect(namesDeleteIsPending(loadActivation(home), "h1")).toBe(false);
+    setNamesDeletePending("h1", true, home);
+    expect(namesDeleteIsPending(loadActivation(home), "h1")).toBe(true);
+    setNamesDeletePending("h1", false, home);
+    expect(namesDeleteIsPending(loadActivation(home), "h1")).toBe(false);
   });
 });

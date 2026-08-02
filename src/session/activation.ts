@@ -56,6 +56,14 @@ export interface ProjectActivation {
   askCount?: number;
   /** The one-time "run `vibedrift enable`" breadcrumb was already shown. */
   breadcrumbShown?: boolean;
+  /** Opt-in (default OFF): upload this repo's REPO-RELATIVE file paths with the
+   *  derived events, so the dashboard can name files instead of showing a
+   *  pseudonym. Paths only, never file contents. Set by
+   *  `watch-session --names on`, cleared by `--names off`. */
+  shareFileNames?: boolean;
+  /** A `--names off` DELETE that never reached the server. The next flush
+   *  retries it; sharing is already off either way. */
+  namesDeletePending?: boolean;
 }
 
 export interface ActivationStore {
@@ -124,6 +132,48 @@ export function recordAnswer(
   const store = loadActivation(home);
   const prev = store.projects[projectHash] ?? {};
   store.projects[projectHash] = { ...prev, state, at: new Date().toISOString(), surface };
+  saveActivation(store, home);
+}
+
+/** Is the opt-in file-name manifest on for this repo? Strictly `true` counts,
+ *  so a missing store, a missing entry, or any other value reads as OFF. */
+export function shareFileNamesEnabled(store: ActivationStore, projectHash: string): boolean {
+  return store.projects[projectHash]?.shareFileNames === true;
+}
+
+/** Does this repo still owe the server a `--names off` deletion? */
+export function namesDeleteIsPending(store: ActivationStore, projectHash: string): boolean {
+  return store.projects[projectHash]?.namesDeletePending === true;
+}
+
+/** Flip the per-repo file-name opt-in. Off deletes the key rather than storing
+ *  `false`, so the store never grows a record for a repo that opted out. */
+export function setShareFileNames(projectHash: string, on: boolean, home: string = vibedriftHome()): void {
+  patchProject(projectHash, (rec) => {
+    if (on) rec.shareFileNames = true;
+    else delete rec.shareFileNames;
+  }, home);
+}
+
+/** Record (or clear) the owed opt-out deletion the next flush retries. */
+export function setNamesDeletePending(projectHash: string, pending: boolean, home: string = vibedriftHome()): void {
+  patchProject(projectHash, (rec) => {
+    if (pending) rec.namesDeletePending = true;
+    else delete rec.namesDeletePending;
+  }, home);
+}
+
+/** Read-modify-write one project record, preserving every other field (an
+ *  activation answer must survive a names toggle, and vice versa). */
+function patchProject(
+  projectHash: string,
+  mutate: (rec: ProjectActivation) => void,
+  home: string = vibedriftHome(),
+): void {
+  const store = loadActivation(home);
+  const rec = { ...(store.projects[projectHash] ?? {}) };
+  mutate(rec);
+  store.projects[projectHash] = rec;
   saveActivation(store, home);
 }
 
