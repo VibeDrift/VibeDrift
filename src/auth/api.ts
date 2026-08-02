@@ -1,5 +1,6 @@
 import { resolveApiUrl } from "./resolver.js";
 import type { UploadEvent } from "../session/upload-schema.js";
+import type { FileNameEntry } from "../session/file-names.js";
 
 /**
  * Typed HTTP client for the VibeDrift Auth + Account API.
@@ -247,6 +248,63 @@ export async function postSessionIngest(
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ events }),
+    },
+    opts?.timeoutMs ?? 15_000,
+  );
+}
+
+export interface SessionNamesResponse {
+  ok: boolean;
+  /** Entries stored (upserted) by the server. */
+  stored: number;
+  /** Entries the server refused (bad hash or path); the batch still succeeds. */
+  rejected: number;
+}
+
+export interface SessionNamesDeleteResponse {
+  ok: boolean;
+  deleted: number;
+}
+
+/**
+ * Upload the opt-in file-name manifest for ONE project: `fileHash -> repo-relative
+ * path`, so the user's own dashboard can name files instead of showing the
+ * pseudonym. Only invoked when that repo's `--names on` flag is set and hosted
+ * sync is on. Paths only, never file contents. Batches are capped at 500
+ * entries by the caller (see session/file-names.ts). Short timeout: this rides
+ * behind the event flush and must never hold it up.
+ */
+export async function postSessionNames(
+  token: string,
+  projectHash: string,
+  names: FileNameEntry[],
+  opts?: { apiUrl?: string; timeoutMs?: number },
+): Promise<SessionNamesResponse> {
+  const base = await resolveApiUrl(opts?.apiUrl);
+  return jsonFetch<SessionNamesResponse>(
+    `${base}/v1/sessions/names`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ projectHash, names }),
+    },
+    opts?.timeoutMs ?? 15_000,
+  );
+}
+
+/** Delete every uploaded file name for one project — the reversal half of the
+ *  opt-in (`watch-session --names off`). */
+export async function deleteSessionNames(
+  token: string,
+  projectHash: string,
+  opts?: { apiUrl?: string; timeoutMs?: number },
+): Promise<SessionNamesDeleteResponse> {
+  const base = await resolveApiUrl(opts?.apiUrl);
+  return jsonFetch<SessionNamesDeleteResponse>(
+    `${base}/v1/sessions/names?project_hash=${encodeURIComponent(projectHash)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
     },
     opts?.timeoutMs ?? 15_000,
   );
