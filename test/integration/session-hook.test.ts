@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectFileNames } from "@/session/file-names";
@@ -331,13 +331,17 @@ describe("hook entry (integration)", () => {
       "    .then((j) => j.data);",
       "}",
     ].join("\n");
+    writeFileSync(join(repo, "src", "report.ts"), thenBody);
     const flagged = runHook(home, editPayload(thenBody));
     expect(flagged.status).toBe(2);
 
-    // 2) re-edit the SAME file to async/await -> the finding resolves
-    runHook(home, editPayload(
-      'export async function r(){ const x = await fetch("/r"); const j = await x.json(); return j.data; }',
-    ));
+    // 2) re-edit the SAME file to async/await -> the finding resolves. Write the
+    // fixed content to disk first: the re-check reads the file from disk, and a
+    // read failure now skips resolution entirely (#84), so the fix has to be on
+    // disk, exactly as a real Write/Edit tool would leave it.
+    const asyncBody = 'export async function r(){ const x = await fetch("/r"); const j = await x.json(); return j.data; }';
+    writeFileSync(join(repo, "src", "report.ts"), asyncBody);
+    runHook(home, editPayload(asyncBody));
 
     const events = ledgerLines(home, "res-1").map((l) => JSON.parse(l));
     const types = events.map((e) => e.type);
@@ -347,6 +351,56 @@ describe("hook entry (integration)", () => {
     const edits = events.filter((e) => e.type === "edit");
     expect(edits).toHaveLength(2);
     for (const e of edits) expect(e.detail.checked).toBe(true);
+  });
+
+  it("does not resolve a finding when the post-edit file read fails (#84)", () => {
+    const home = tmp("vd-home-");
+    const repo = tmp("vd-repo-");
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "CLAUDE.md"), "- Async: use async/await throughout. No .then() chains.\n");
+    for (const n of ["a", "b", "c"]) {
+      writeFileSync(join(repo, "src", `${n}.ts`), `export async function ${n}(){ return await fetch("/${n}"); }\n`);
+    }
+    expect(
+      spawnSync(TSX, [BUILDER, repo], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home, USERPROFILE: home },
+        timeout: 60_000,
+      }).status,
+    ).toBe(0);
+
+    const reportPath = join(repo, "src", "report.ts");
+    const thenBody = [
+      "export function r() {",
+      '  return fetch("/r")',
+      "    .then((x) => x.json())",
+      "    .then((j) => j.data);",
+      "}",
+    ].join("\n");
+    // 1) flag the .then() chain (file written to disk, like a real Write)
+    writeFileSync(reportPath, thenBody + "\n");
+    expect(
+      runHook(home, {
+        session_id: "readfail-1", cwd: repo, hook_event_name: "PostToolUse", tool_name: "Write",
+        tool_input: { file_path: reportPath, content: thenBody },
+      }).status,
+    ).toBe(2);
+
+    // 2) force the re-check's readFile to throw, then fire a small UNRELATED Edit
+    // hunk. Deleting the file (→ ENOENT) forces the failure on every platform and
+    // user, unlike chmod 000 which root and Windows ignore. Before the fix the
+    // re-check fell back to the hunk and false-resolved the finding; now a read
+    // failure skips resolution entirely (#84).
+    rmSync(reportPath);
+    runHook(home, {
+      session_id: "readfail-1", cwd: repo, hook_event_name: "PostToolUse", tool_name: "Edit",
+      tool_input: { file_path: reportPath, old_string: "export function r()", new_string: "// unrelated\nexport function r()" },
+    });
+
+    const types = ledgerLines(home, "readfail-1").map((l) => JSON.parse(l)).map((e) => e.type);
+    expect(types).toContain("flag");
+    expect(types).not.toContain("resolve");
   });
 
   it("does not re-message (or re-append) an already-open finding on a repeat edit", () => {

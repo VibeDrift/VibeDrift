@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { buildBaseline, type RepoDriftBaseline } from "@/core/baseline";
 import { runEditChecks } from "@/session/check";
 import { readOutcomeState, recheckFile, writeOutcomeState, type OpenFinding } from "@/session/outcomes";
-import { fileConstructs, ANCHOR_MAX_TOKENS } from "@/session/finding-anchor";
+import { fileConstructs, ANCHOR_MAX_TOKENS, tokenContainment, anchorTokens, REDUNDANCY_CONTAINMENT } from "@/session/finding-anchor";
 import { classifyDataAccessLabel } from "@/drift/architectural-contradiction";
 import type { SessionEvent } from "@/session/types";
 
@@ -477,5 +477,110 @@ describe("the anchor names a construct that carried the flagged label", () => {
         : MIXED_ACCESS;
     expect(anchored).toBeDefined();
     expect(classifyDataAccessLabel(anchored!, rel)).toBe(anchor.observed);
+  });
+});
+
+/**
+ * Issue #86: the causal predicate is not the class wrap itself but "the anchored
+ * symbol is no longer findable by name AND at least one token changed." The
+ * re-check ORs raw-token containment with the whole-file duplicate query:
+ * containment catches a wrap plus a one-token edit that the query dilutes away,
+ * the query catches an all-identifier rename that containment misses, and a
+ * genuine removal fails both so it still resolves.
+ */
+describe("issue #86: a disguised clone with a one-token cosmetic edit stays open", () => {
+  async function openDup(sessionId: string): Promise<OpenFinding[]> {
+    const { open } = await raise(sessionId, "src/util.ts", HELPER_BODY);
+    const dup = only(open, "redundancy");
+    expect(dup[0].anchor).toMatchObject({ kind: "function", symbol: "exponentialBackoff" });
+    return dup;
+  }
+
+  it("stays open under an all-identifier rename that containment misses (the OR'd query catches it)", async () => {
+    // skhan's case: an IDE "rename symbol" pass renames every local, so raw-token
+    // containment drops below threshold, but normalized-token similarity (with
+    // #93's signature strip) still scores the clone a duplicate. The OR keeps it
+    // open; containment alone would have resolved it.
+    const renamed = `export class Backoff {
+  exponentialBackoff(turn: number): number {
+    const floorMs = 250;
+    const ceilMs = 30_000;
+    const wobble = Math.random() * 100;
+    return Math.min(ceilMs, floorMs * 2 ** turn) + wobble;
+  }
+}`;
+    expect(recheckFile(baseline, "src/util.ts", renamed, await openDup("s86-rename-all")).resolved).toEqual([]);
+  });
+
+  it("wrap in a class PLUS a renamed local (jitter -> noise) stays open", async () => {
+    const disguised = `export class Backoff {
+  exponentialBackoff(attempt: number): number {
+    const base = 250;
+    const cap = 30_000;
+    const noise = Math.random() * 100;
+    return Math.min(cap, base * 2 ** attempt) + noise;
+  }
+}`;
+    expect(recheckFile(baseline, "src/util.ts", disguised, await openDup("s86-wrap-rename")).resolved).toEqual([]);
+  });
+
+  it("wrap in a class PLUS a changed numeral stays open", async () => {
+    const disguised = `export class Backoff {
+  exponentialBackoff(attempt: number): number {
+    const base = 500;
+    const cap = 30_000;
+    const jitter = Math.random() * 100;
+    return Math.min(cap, base * 2 ** attempt) + jitter;
+  }
+}`;
+    expect(recheckFile(baseline, "src/util.ts", disguised, await openDup("s86-wrap-num")).resolved).toEqual([]);
+  });
+
+  it("rename with NO wrap, plus one renamed local, stays open (the wrap is not the predicate)", async () => {
+    const disguised = `export function computeBackoff(attempt: number): number {
+  const base = 250;
+  const cap = 30_000;
+  const noise = Math.random() * 100;
+  return Math.min(cap, base * 2 ** attempt) + noise;
+}`;
+    expect(recheckFile(baseline, "src/util.ts", disguised, await openDup("s86-rename")).resolved).toEqual([]);
+  });
+
+  it("still resolves when the body is genuinely replaced (containment near zero)", async () => {
+    const dup = await openDup("s86-genuine");
+    const gone = `export function greet(name: string): string {
+  return "hello, " + name.trim();
+}`;
+    expect(recheckFile(baseline, "src/util.ts", gone, dup).resolved.map((f) => f.findingId)).toEqual(
+      dup.map((f) => f.findingId),
+    );
+  });
+});
+
+describe("tokenContainment (raw-token shingle containment)", () => {
+  const body = `{
+  const base = 250;
+  const cap = 30_000;
+  const jitter = Math.random() * 100;
+  return Math.min(cap, base * 2 ** attempt) + jitter;
+}`;
+  const anchor = anchorTokens(body);
+
+  it("is 1.0 for a verbatim occurrence embedded in a larger file", () => {
+    const file = `class Wrapper {\n  method(attempt: number): number ${body}\n}`;
+    expect(tokenContainment(anchor, file)).toBe(1);
+  });
+
+  it("stays above the redundancy threshold after a one-identifier edit", () => {
+    expect(tokenContainment(anchor, body.replace(/jitter/g, "noise"))).toBeGreaterThanOrEqual(REDUNDANCY_CONTAINMENT);
+  });
+
+  it("is zero for unrelated code", () => {
+    expect(tokenContainment(anchor, `function greet(n: string) { return "hi " + n; }`)).toBe(0);
+  });
+
+  it("is zero for an empty or absent anchor (no evidence is not presence)", () => {
+    expect(tokenContainment([], "anything at all")).toBe(0);
+    expect(tokenContainment(undefined, "anything at all")).toBe(0);
   });
 });

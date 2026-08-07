@@ -101,6 +101,45 @@ export function tokensContainedIn(tokens: string[] | undefined, content: string)
   return haystack.includes(` ${tokens.join(" ")} `);
 }
 
+/** Sliding-window size for containment shingles: 5 tokens, matching the
+ *  similarity path's shingling (minhash.ts). A one-token edit misses only the
+ *  windows that span it, so a mid-size function stays well above threshold. Very
+ *  short functions have too few windows for that to hold (a 5-token body is one
+ *  window, and any edit takes it to 0), which is one reason the redundancy check
+ *  ORs in the whole-file query rather than trusting containment alone. */
+const CONTAINMENT_SHINGLE = 5;
+
+/** Presence threshold for the redundancy re-check, measured on issue #86's
+ *  cases: a clone that is wrapped and cosmetically edited by one token lands
+ *  well above this, a genuine removal lands at zero containment, so 0.6
+ *  separates them with margin. */
+export const REDUNDANCY_CONTAINMENT = 0.6;
+
+function tokenShingles(tokens: string[], k = CONTAINMENT_SHINGLE): Set<string> {
+  if (tokens.length <= k) return new Set([tokens.join(" ")]);
+  const out = new Set<string>();
+  for (let i = 0; i + k <= tokens.length; i++) out.add(tokens.slice(i, i + k).join(" "));
+  return out;
+}
+
+/**
+ * What fraction of the anchor's RAW-token shingles are still present in
+ * `content` (0..1)? RAW, not normalized: `normalizeTokens` (minhash) renumbers
+ * identifier slots by first occurrence, so a normalized subsequence embedded in
+ * a larger file renumbers and never matches — a dead end recorded on #86.
+ * Containment over |anchor| (not Jaccard), so a large surrounding file cannot
+ * dilute it, and it survives a wrap plus a cosmetic one-token edit. Zero for an
+ * empty/absent anchor: no evidence is not evidence of presence.
+ */
+export function tokenContainment(tokens: string[] | undefined, content: string): number {
+  if (!tokens || tokens.length === 0) return 0;
+  const anchor = tokenShingles(tokens);
+  const haystack = tokenShingles(tokenizeBody(content));
+  let hit = 0;
+  for (const sh of anchor) if (haystack.has(sh)) hit++;
+  return hit / anchor.size;
+}
+
 export interface FileConstructs {
   /** token hash of every function in the file — uncapped, computed once. */
   hashes: Set<string>;
@@ -161,18 +200,26 @@ export function signalPresent(
       return present === null ? true : present;
     }
     case "redundancy": {
-      // One similarity call over the index the flag path already used, not a
-      // rescan of the file. A file anchor has no single body to re-query, so it
-      // stays open.
+      // Presence is EITHER check, OR'd so the union keeps a finding open
+      // whenever either would. A file anchor has no single construct to test, so
+      // it stays open.
       //
-      // `body` is the anchored function's own body when that function is still
-      // indexed; when it is not, the caller passes the whole file, and a
-      // whole-file query DILUTES a small clone below the duplicate threshold.
-      // That is why the caller checks token containment before it gets here:
-      // this query is trusted to say "gone" only for a construct whose token
-      // sequence is already known to be absent from the file.
+      // (1) Raw-token shingle containment of the anchored construct. This is
+      //     what survives a wrap into a class or object-literal method, which is
+      //     invisible to the query below because extractAllFunctions indexes only
+      //     top-level function/const forms, plus a cosmetic one-token edit (#86).
+      // (2) The whole-file duplicate query. This is what survives an
+      //     all-identifier rename, or a body longer than the anchor token cap,
+      //     where raw-token containment drops but normalized-token similarity
+      //     (with #93's signature strip) still scores the clone a match.
+      //
+      // Neither check alone is one-sided safe. Their OR is: it can only keep more
+      // findings open than either, never clear one that either would have kept.
       if (anchor.kind !== "function") return true;
-      return validateChangeAgainstBaseline(baseline, relFile, body).duplicateOf.length > 0;
+      return (
+        tokenContainment(anchor.tokens, body) >= REDUNDANCY_CONTAINMENT ||
+        validateChangeAgainstBaseline(baseline, relFile, body).duplicateOf.length > 0
+      );
     }
     default:
       return true;

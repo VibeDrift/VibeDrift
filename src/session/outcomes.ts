@@ -133,12 +133,16 @@ export function recheckFile(
           // index while the flagged code sits byte-identical on disk.
           //
           // First ask the question that survives wrapping: is the construct's
-          // own token sequence still somewhere in this file? If it is, the code
-          // moved rather than went away, and the finding stays open no matter
-          // what any pattern predicate says. This matters most for redundancy,
-          // whose predicate is a similarity query: wrapping the clone in a
-          // class adds tokens that pull the score under the duplicate
-          // threshold, so the query goes quiet on code that never changed.
+          // own token sequence still EXACTLY somewhere in this file? If it is,
+          // the code moved rather than went away, and the finding stays open no
+          // matter what any pattern predicate says. This is an exact-sequence
+          // fast path; a clone that was wrapped AND cosmetically edited by even
+          // one token slips past it, so the fall-through presence predicate is
+          // what has to catch that. For redundancy that predicate is raw-token
+          // shingle containment OR'd with the whole-file duplicate query (see
+          // signalPresent): containment catches the wrap plus one-token edit the
+          // query used to dilute away, and the query catches the all-identifier
+          // rename or over-long clone that containment misses (#86).
           // Only a COMPLETE sequence is evidence the construct is unchanged. A
           // capped one holds the first ANCHOR_MAX_TOKENS tokens, so containment
           // proves the prefix survived, not that the flagged pattern did: in a
@@ -146,10 +150,9 @@ export function recheckFile(
           // there would otherwise hold the finding open forever.
           const whole = (anchor.tokens?.length ?? 0) < ANCHOR_MAX_TOKENS;
           if (whole && tokensContainedIn(anchor.tokens, content)) continue;
-          // Not contained: the construct is genuinely not in this file in the
-          // form it was flagged in. Fall back to the presence predicate over
-          // the whole file, so a renamed-and-reshaped construct still has to
-          // have dropped the flagged pattern before anything resolves.
+          // Not contained exactly: fall back to the presence predicate over the
+          // whole file, so a renamed-and-reshaped construct still has to have
+          // dropped the flagged pattern (or its clone) before anything resolves.
           if (!signalPresent(f.category, anchor, content, relFile, baseline)) resolved.push(f);
           continue;
         }

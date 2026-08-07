@@ -322,28 +322,31 @@ async function main(): Promise<number> {
       // Finding-scoped resolution: measure each open finding against its own
       // anchored construct in the file's whole current content rather than the
       // edit hunk, so a finding resolves only when the construct it was raised
-      // against is gone or has stopped carrying the flagged pattern. Normally
-      // that content is read from disk (the post-edit state); when the read
-      // fails we fall back to the edit body, which is the whole file for a
-      // Write but only the hunk for an Edit, so on that fallback the re-check
-      // is best-effort and sees less than the file.
+      // against is gone or has stopped carrying the flagged pattern. That
+      // content is read from disk (the post-edit state); if the read FAILS we
+      // skip resolution entirely and leave the findings open. Falling back to
+      // the edit body would run the re-check against only the hunk for an Edit,
+      // and an unrelated hunk would false-resolve a finding whose flagged code
+      // is untouched on disk (#84). Fail-open, like the rest of this module.
       if (res.baseline) {
-        let currentContent = body;
+        let currentContent: string | undefined;
         try {
           currentContent = await readFile(checkAbsFile, "utf8");
         } catch {
-          // fall back to the edit body (correct for Write, best-effort for Edit)
+          // read failed — leave currentContent undefined so the re-check is skipped
         }
-        const { resolved } = recheckFile(res.baseline, relFile, currentContent, outcomes.open);
-        const resolvedIds = new Set(resolved.map((f) => f.findingId));
-        for (const f of resolved) {
-          await appendEvent(sessionsDir, projectHash, event.sid, {
-            v: event.v, sid: event.sid, aid: newActivityId(), ts: new Date().toISOString(),
-            agent: "claude-code", projectHash, channel: "hook", type: "resolve", mode: "passive",
-            findingId: f.findingId, detail: { file: f.file, category: f.category }, outcome: "resolved",
-          });
+        if (currentContent !== undefined) {
+          const { resolved } = recheckFile(res.baseline, relFile, currentContent, outcomes.open);
+          const resolvedIds = new Set(resolved.map((f) => f.findingId));
+          for (const f of resolved) {
+            await appendEvent(sessionsDir, projectHash, event.sid, {
+              v: event.v, sid: event.sid, aid: newActivityId(), ts: new Date().toISOString(),
+              agent: "claude-code", projectHash, channel: "hook", type: "resolve", mode: "passive",
+              findingId: f.findingId, detail: { file: f.file, category: f.category }, outcome: "resolved",
+            });
+          }
+          outcomes.open = outcomes.open.filter((f) => !resolvedIds.has(f.findingId));
         }
-        outcomes.open = outcomes.open.filter((f) => !resolvedIds.has(f.findingId));
       }
 
       // Dedupe: do not re-append a flag whose file|category is already open, and
