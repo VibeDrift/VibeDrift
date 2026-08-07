@@ -4,6 +4,21 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**Findings stay open until the code is actually gone, and duplicate checks catch functions pasted whole.**
+
+Two accuracy fixes, one to each half of the loop: what Drift Sessions will and will not mark resolved, and what the MCP duplicate tools can see.
+
+- **A disguised clone no longer clears its finding.** The Drift Session re-check falsely resolved a redundancy finding when the flagged clone was moved into a class or renamed and given a one-token cosmetic edit. The re-check now requires positive absence two ways at once — raw-token shingle containment of the anchored clone OR the whole-file duplicate query — and resolves only when both agree the code is gone. Measured on this repository's own functions: the one-token disguises that previously cleared now stay open at 100% (single-token rename) and 99.8% (changed numeral), while genuine removals still resolve. Reported in #86, fixed in #94.
+- **A failed file read no longer resolves findings.** When the re-check could not read the post-edit file it fell back to the edit hunk, so a small unrelated edit could "resolve" a finding whose flagged code was untouched on disk. A read failure now skips resolution entirely and leaves findings open. Reported in #84, fixed in #94.
+- **`validate_change` and `find_similar_function` now catch clones pasted with their signature.** The duplicate index stores function bodies only, so a query that included the declaration line carried tokens the index never had; for short functions the length gate returned a hard 0 and the duplicate was missed outright. The query is now scored both as given and with a detected leading signature stripped, keeping the higher score per index entry. Measured across every function in this repository: an exact self-clone pasted with its signature scored a median 0.752 before (74.7% under the duplicate threshold) and 1.000 after. Both tools' `body` parameter accepts either form and says so. Reported in #81, fixed in #93.
+- **A FIFO in the sessions directory can no longer hang the session-start recap.** The trial recap summed ledger files after checking only their size; a FIFO reports size 0 and a read on it blocks forever. Non-regular files are now skipped and the recap reports itself incomplete instead. Reported in #83, fixed in #97.
+- **Session ledger and host prep.** The session schema now carries a `HostAgent` union instead of a hard-coded literal, the ledger writer's oversize path re-masks all detail fields before truncating so slicing can never expose a secret fragment, and a machine without a supported agent is told so before any login prompt rather than after. Docs now list all eight MCP tools.
+- Internal: duplicated `escapeRegex` and confirm-prompt helpers consolidated (#95), duplicated security-AST helpers consolidated (#96), and the upload-state concurrency docstrings corrected to describe the deliberate, benign race accurately (#85 via #97).
+
+No scoring changes in this release: these fixes touch the session re-check and MCP query paths, not the scoring engine, so composite scores do not move and baselines do not rebuild.
+
 ## 0.19.5 — 2026-08-04
 
 **Stops reporting an ORM that isn't there.**
