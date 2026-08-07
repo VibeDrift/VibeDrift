@@ -72,6 +72,7 @@
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
+import { nameSegments } from "./security-ast-common.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
 import type { CrossFileIndex } from "./security-xfile-index.js";
 import { resolvePyHookBody } from "./security-xfile-index.js";
@@ -621,20 +622,6 @@ function decoratorName(expr: SyntaxNode): string | null {
   if (expr.type === "identifier") return expr.text;
   if (expr.type === "attribute") return expr.childForFieldName("attribute")?.text ?? null;
   return null;
-}
-
-/** Lowercase segments of an identifier, split on underscore/non-alphanumeric AND
- *  CamelCase boundaries (digits stay attached to their run):
- *  "get_author_stats" -> [get, author, stats]; "JWTBearer" -> [jwt, bearer];
- *  "OAuth2PasswordBearer" -> [o, auth2, password, bearer]. Whole-segment matching
- *  makes substring blessing structurally impossible. */
-function nameSegments(name: string): string[] {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((s) => s.length > 0);
 }
 
 /** Two-tier segment auth check for hook handler names (see the constants block):

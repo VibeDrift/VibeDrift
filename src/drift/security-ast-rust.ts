@@ -114,6 +114,7 @@
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
+import { nameSegments, inErroredContext, namedChildrenOf } from "./security-ast-common.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
 
 // Field name for Axum's fluent builder registration (`Router::new().route(...)`).
@@ -271,18 +272,6 @@ const LET_DECL_T = new Set(["let_declaration"]);
 const RETURN_EXPR_T = new Set(["return_expression"]);
 const TRY_EXPR_T = new Set(["try_expression"]);
 
-/** Lowercase segments of an identifier, split on non-alphanumeric AND CamelCase
- *  boundaries. Copied VERBATIM from security-ast-go.ts:603 (whole-segment
- *  matching makes substring blessing structurally impossible). */
-function nameSegments(name: string): string[] {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((s) => s.length > 0);
-}
-
 /** Path/verb text of a Rust string literal. string_literal is a LEAF in the pinned
  *  grammar (slice off the two quote chars). raw_string_literal has an r + variable-#
  *  prefix, so strip r#*"…"#* by regex; a mismatch → null (skip, a miss is safe). Anything
@@ -295,24 +284,6 @@ function rustStringText(node: SyntaxNode): string | null {
     return m ? m[2] : null;
   }
   return null;
-}
-
-/** Non-null named children. */
-function rustNamed(n: SyntaxNode | null | undefined): SyntaxNode[] {
-  return n ? n.namedChildren.filter((c): c is SyntaxNode => c !== null) : [];
-}
-
-/** True when node or any ancestor BELOW source_file carries a parse error (per-construct
- *  surgical skip; there is no whole-file fallback for Rust — see the module header).
- *  Mirror inErroredContext, security-ast-go.ts: Rust error recovery can swallow a later
- *  valid registration into a broken call's arguments. */
-function inErroredContext(node: SyntaxNode): boolean {
-  let cur: SyntaxNode | null = node;
-  while (cur && cur.type !== "source_file") {
-    if (cur.hasError) return true;
-    cur = cur.parent;
-  }
-  return false;
 }
 
 interface RustRoute {
@@ -419,7 +390,7 @@ function asBuilderRoute(call: SyntaxNode): RustRoute | null {
   if (fn?.type !== "field_expression") return null;
   const field = fn.childForFieldName("field");
   if (field?.text !== ROUTE_FIELD) return null;
-  const named = rustNamed(call.childForFieldName("arguments"));
+  const named = namedChildrenOf(call.childForFieldName("arguments"));
   if (named.length !== 2) return null;
   const path = rustStringText(named[0]);
   if (path === null || !path.startsWith("/")) return null; // leading-slash gate
@@ -434,7 +405,7 @@ function asBuilderRoute(call: SyntaxNode): RustRoute | null {
  *  value. A non-string value (a bare identifier / const) is not readable and
  *  is skipped, so an empty result means "no readable method=". */
 function readRouteMacroMethods(tokenTree: SyntaxNode): string[] {
-  const kids = rustNamed(tokenTree);
+  const kids = namedChildrenOf(tokenTree);
   const out: string[] = [];
   for (let i = 0; i < kids.length; i++) {
     if (kids[i].type !== "identifier" || kids[i].text !== "method") continue;
@@ -466,7 +437,7 @@ function attrMacroMethod(macro: string, tokenTree: SyntaxNode | null): string | 
 
 /** Attribute-macro route on the function_item that FOLLOWS the attribute_item sibling. */
 function asAttributeRoute(attrItem: SyntaxNode): RustRoute | null {
-  const attr = rustNamed(attrItem).find((n) => n.type === "attribute");
+  const attr = namedChildrenOf(attrItem).find((n) => n.type === "attribute");
   if (!attr) return null;
   const callee = attr.namedChild(0);
   const macro = callee?.type === "identifier" ? callee.text
@@ -474,7 +445,7 @@ function asAttributeRoute(attrItem: SyntaxNode): RustRoute | null {
   if (!ATTR_ROUTE_METHODS.has(macro) && macro !== ROUTE_MACRO) return null;
   const tokenTree = attr.childForFieldName("arguments") ?? null;
   const pathNode = tokenTree
-    ? rustNamed(tokenTree).find((n) => n.type === "string_literal" || n.type === "raw_string_literal")
+    ? namedChildrenOf(tokenTree).find((n) => n.type === "string_literal" || n.type === "raw_string_literal")
     : null;
   const path = pathNode ? rustStringText(pathNode) : null;
   if (path === null || !path.startsWith("/")) return null;
@@ -836,7 +807,7 @@ function classifyRustLayerArg(
     const fn = arg.childForFieldName("function");
     const calleeName = fn ? rustCalleeName(fn) : null;
     if (calleeName && FROM_FN_CALLEES.has(calleeName)) {
-      const args = rustNamed(arg.childForFieldName("arguments"));
+      const args = namedChildrenOf(arg.childForFieldName("arguments"));
       const handler = args.length ? args[args.length - 1] : null; // from_fn: only arg; with_state: LAST arg
       if (handler?.type === "identifier") {
         const hname = handler.text;
@@ -884,7 +855,7 @@ function coveringLayerArgs(routeCall: SyntaxNode): SyntaxNode[] {
     if (!grand || grand.type !== "call_expression") break;
     if (!(grand.childForFieldName("function")?.equals(parent) ?? false)) break;
     if (LAYER_FIELDS.has(parent.childForFieldName("field")?.text ?? "")) {
-      for (const a of rustNamed(grand.childForFieldName("arguments"))) out.push(a);
+      for (const a of namedChildrenOf(grand.childForFieldName("arguments"))) out.push(a);
     }
     cur = grand; // climb past this chain link (layer collected above, route/other skipped)
   }
@@ -915,7 +886,7 @@ function extractorTypeUnsure(handler: string | null, defs: Map<string, SyntaxNod
   const def = defs.get(handler) ?? null;
   const params = def?.childForFieldName("parameters");
   if (!params) return null;
-  for (const p of rustNamed(params)) {
+  for (const p of namedChildrenOf(params)) {
     if (p.type !== "parameter") continue;
     const tname = rustTypeName(p.childForFieldName("type"));
     if (!tname) continue;

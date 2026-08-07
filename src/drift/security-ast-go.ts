@@ -139,6 +139,7 @@
  */
 
 import type { Tree, SyntaxNode } from "../core/types.js";
+import { nameSegments, inErroredContext, namedChildrenOf } from "./security-ast-common.js";
 import type { RouteInfo, FileMiddleware } from "./security-consistency.js";
 import { resolveGoMiddlewareBody } from "./security-xfile-index.js";
 import type { CrossFileIndex } from "./security-xfile-index.js";
@@ -282,22 +283,6 @@ function goReceiverName(operand: SyntaxNode | null): string | null {
     }
   }
   return null;
-}
-
-/** True when node or any ancestor BELOW source_file carries a parse error.
- *  Probe-verified hazard: error recovery swallows a later, syntactically valid
- *  registration into a broken call's argument_list as a clean-looking nested
- *  call_expression; extracting from that garbage context could attribute the
- *  route to the wrong receiver/scope. The walk stops below source_file so a
- *  file-level error in a SIBLING function does not suppress clean functions
- *  (per-construct surgical skip; the whole-file dispatch gate is separate). */
-function inErroredContext(node: SyntaxNode): boolean {
-  let cur: SyntaxNode | null = node;
-  while (cur && cur.type !== "source_file") {
-    if (cur.hasError) return true;
-    cur = cur.parent;
-  }
-  return false;
 }
 
 /** Identifiers assigned in-file from a router constructor (gin.Default(),
@@ -585,23 +570,6 @@ const CALL_EXPR_T = new Set(["call_expression"]);
 const RETURN_T = new Set(["return_statement"]);
 const IF_T = new Set(["if_statement"]);
 
-/** Non-null named children of a node. */
-function goNamed(n: SyntaxNode | null | undefined): SyntaxNode[] {
-  return n ? n.namedChildren.filter((c): c is SyntaxNode => c !== null) : [];
-}
-
-/** Lowercase segments of an identifier, split on non-alphanumeric AND CamelCase
- *  boundaries. Copied VERBATIM from security-ast-python.ts:628 (whole-segment
- *  matching makes substring blessing structurally impossible). */
-function nameSegments(name: string): string[] {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((s) => s.length > 0);
-}
-
 /** "401"|"403"|"404"|"500"|"other"|null. An int_literal OR the http.StatusXxx
  *  selector; NEVER guesses a bare local const (returns null so the caller treats
  *  it as unreadable/opaque). */
@@ -679,7 +647,7 @@ function goCallCorroborated(call: SyntaxNode): boolean {
   while (stmt.parent && stmt.parent.type !== "block") stmt = stmt.parent;
   const block = stmt.parent;
   if (!block) return false;
-  const sibs = goNamed(block);
+  const sibs = namedChildrenOf(block);
   const idx = sibs.findIndex((s) => s.equals(stmt));
   if (idx < 0) return false;
   for (let i = idx + 1; i < sibs.length; i++) {
@@ -706,7 +674,7 @@ function goCompositeIs401Error(composite: SyntaxNode): boolean {
     else typeText = c.text;
   }
   if (!/HTTPError$/.test(typeText) || !lv) return false;
-  for (const ke of goNamed(lv)) {
+  for (const ke of namedChildrenOf(lv)) {
     if (ke.type !== "keyed_element") continue;
     const key = ke.namedChild(0);
     const valEl = ke.namedChild(1);
@@ -740,8 +708,8 @@ function goCredentialBoundLocals(body: SyntaxNode): Set<string> {
     const left = decl.childForFieldName("left");
     const right = decl.childForFieldName("right");
     if (left?.type !== "expression_list" || right?.type !== "expression_list") continue;
-    const lc = goNamed(left);
-    const rc = goNamed(right);
+    const lc = namedChildrenOf(left);
+    const rc = namedChildrenOf(right);
     for (let i = 0; i < lc.length && i < rc.length; i++) {
       if (lc[i].type === "identifier" && rc[i].type === "call_expression" && goIsCredentialReadCall(rc[i])) {
         bound.add(lc[i].text);
@@ -810,7 +778,7 @@ function scanGoBody(body: SyntaxNode, defs: Map<string, SyntaxNode | null>, hop:
         continue;
       }
       if (field === "Error" && fn.childForFieldName("operand")?.text === "http") {
-        const named = goNamed(args);
+        const named = namedChildrenOf(args);
         if (goRejectStatus(named[named.length - 1] ?? null) === "401" && goCallCorroborated(call)) out.reject401 = true;
         continue;
       }
@@ -896,14 +864,14 @@ export function collectGoFunctionDefs(root: SyntaxNode): Map<string, SyntaxNode 
 export function resolveEffectiveBody(fnNode: SyntaxNode, defs: Map<string, SyntaxNode | null>): SyntaxNode | null {
   const body = fnNode.childForFieldName("body");
   if (!body) return null;
-  const stmts = goNamed(body);
+  const stmts = namedChildrenOf(body);
   if (stmts.length === 1 && stmts[0].type === "return_statement") {
     const exprList = stmts[0].namedChild(0);
     const val = exprList?.type === "expression_list" ? exprList.namedChild(0) : null;
     if (val) {
       if (val.type === "func_literal") return val.childForFieldName("body") ?? body;
       if (val.type === "call_expression") {
-        const cargs = goNamed(val.childForFieldName("arguments"));
+        const cargs = namedChildrenOf(val.childForFieldName("arguments"));
         if (cargs.length === 1 && cargs[0].type === "func_literal") {
           return cargs[0].childForFieldName("body") ?? body;
         }
@@ -983,7 +951,7 @@ function isPureSelectorTarget(arg: SyntaxNode): boolean {
   if (arg.type === "call_expression") {
     const fn = arg.childForFieldName("function");
     if (!fn || fn.type !== "selector_expression" || !isPureSelectorChain(fn)) return false;
-    return goNamed(arg.childForFieldName("arguments")).length <= 1;
+    return namedChildrenOf(arg.childForFieldName("arguments")).length <= 1;
   }
   return false;
 }
@@ -1057,7 +1025,7 @@ function classifyGoMiddlewareArg(
   }
   // Wrap recursion: single-arg call, through a transparent/unnamed outer only.
   if (arg.type === "call_expression" && (name === null || goNameIsTransparentWrap(name))) {
-    const inner = goNamed(arg.childForFieldName("arguments"));
+    const inner = namedChildrenOf(arg.childForFieldName("arguments"));
     if (inner.length === 1) return classifyGoMiddlewareArg(inner[0], defs, depth + 1, importerRel, index);
   }
   return { outcome: "not-auth", name };
@@ -1071,7 +1039,7 @@ function collectWithArgs(operand: SyntaxNode | null): SyntaxNode[] {
   for (let hops = 0; cur && cur.type === "call_expression" && hops < 16; hops++) {
     const fn = cur.childForFieldName("function");
     if (fn?.type !== "selector_expression") break;
-    if (fn.childForFieldName("field")?.text === "With") args.push(...goNamed(cur.childForFieldName("arguments")));
+    if (fn.childForFieldName("field")?.text === "With") args.push(...namedChildrenOf(cur.childForFieldName("arguments")));
     cur = fn.childForFieldName("operand");
   }
   return args;
@@ -1236,7 +1204,7 @@ function collectGoMiddleware(
       if (!gated(receiver)) continue;
       const scope = enclosingScope(call, root);
       if (hasConditionalRegistrationAncestor(call, scope)) continue;
-      const named = goNamed(call.childForFieldName("arguments"));
+      const named = namedChildrenOf(call.childForFieldName("arguments"));
       const { lanes, unsureHook } = lanesFromArgs(named, defs, importerRel, index);
       marks.push({ receiver, scope, row: call.startPosition.row, lanes, unsureHook });
       continue;
@@ -1248,7 +1216,7 @@ function collectGoMiddleware(
     // are a single structural binding and never poison.
     if (CLOSURE_ROUTE_FIELDS.has(field)) {
       if (!gated(receiver)) continue;
-      const lit = goNamed(call.childForFieldName("arguments")).find((n) => n.type === "func_literal");
+      const lit = namedChildrenOf(call.childForFieldName("arguments")).find((n) => n.type === "func_literal");
       if (!lit) continue;
       const param = lit.childForFieldName("parameters")?.descendantsOfType("parameter_declaration")[0];
       const pname = param?.childForFieldName("name");
@@ -1277,7 +1245,7 @@ function collectGoMiddleware(
       if (parent === null) return;
       // On a Group creation call every arg AFTER the path is a middleware
       // candidate INCLUDING the last (no handler position).
-      const inlineArgs = goNamed(valueNode.childForFieldName("arguments")).slice(1);
+      const inlineArgs = namedChildrenOf(valueNode.childForFieldName("arguments")).slice(1);
       const { lanes, unsureHook } = lanesFromArgs(inlineArgs, defs, importerRel, index);
       derivations.push({
         child: nameNode.text, childScope: scope,
@@ -1301,8 +1269,8 @@ function collectGoMiddleware(
     const left = decl.childForFieldName("left");
     const right = decl.childForFieldName("right");
     if (left?.type !== "expression_list" || right?.type !== "expression_list") continue;
-    const lc = goNamed(left);
-    const rc = goNamed(right);
+    const lc = namedChildrenOf(left);
+    const rc = namedChildrenOf(right);
     for (let i = 0; i < lc.length && i < rc.length; i++) recordDecl(lc[i], rc[i]);
   }
   for (const spec of root.descendantsOfType("var_spec")) {
