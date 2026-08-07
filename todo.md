@@ -111,32 +111,17 @@
   benign race. Fix the two docstrings only. Open design question: is watch-session running
   concurrently with the native Stop hooks a supported configuration?
 
-- **Session re-check: two residual resolve defects, both reproduced by an adversarial pass.** Both
-  now have runnable external repros (#84, #86) worth landing as regression tests. Two corrections
-  from that pass: for (a) the class wrap is NOT the causal predicate (rename plus one changed token,
-  no class anywhere, also falsely resolves; the real predicate is "anchor symbol no longer findable
-  by name AND at least one token changed", and what the wrap uniquely adds is that the wrapped form
-  also stops being re-flagged, so only that variant is terminal). For (b), implementing the stated
-  fix will turn `test/integration/session-hook.test.ts` RED, because that test never writes the fixed
-  file to disk and so earns its resolve assertion through the very fallback the fix removes; rewrite
-  it in the same change. Measured fix for (a): raw token shingle containment at ~0.6 cleanly
-  separates must-stay-open from must-resolve (the latter at 0 containment), is O(tokens) not O(n*m),
-  and is one-sided safe. Two dead ends, do not re-derive: reusing the flag path's decomposition in
-  `signalPresent` does not help (the extractor cannot see the class method, so the query collapses
-  back to the whole file), and normalized-token containment does not help either (`normalizeTokens`
-  assigns identifier slots by first occurrence, so a subsequence inside a larger file renumbers).
-  The anchoring work closed the four original false-resolve classes, but these survive and are known:
-  (a) **redundancy, wrap plus one token.** The anchor holds the flagged construct's exact token
-  sequence, so a clone moved verbatim into a class stays open, but changing a single identifier
-  while wrapping breaks containment and falls through to a whole-file duplicate query, which is
-  structurally blind to class and object-literal methods, so a near-verbatim clone resolves. The
-  honest scope of the current guarantee is "survives a byte-for-byte wrap", not "no false resolve".
-  Proper fix is the extractor bullet below, or a similarity test (minhash the anchor tokens against
-  sliding windows) rather than exact containment.
-  (b) **hunk-fallback resolves on less evidence.** When `readFile` throws, `hook-entry.ts` re-checks
-  against the edit body, which for an Edit is only the hunk, so an unrelated small hunk contains
-  neither the symbol nor the tokens nor the pattern and the finding clears. Every other failure path
-  in the module fails open. Fix: skip the re-check entirely on read failure.
+- **Session re-check follow-ups from #94 (shipped: containment OR whole-file query).** The #86/#84
+  false-resolve classes are fixed, but nothing binds the containment arm of the OR: delete it and
+  every shipped test still passes, because #93's signature strip lets the query catch the
+  whole-file wrap fixtures on its own. Needed regression test: a class-wrapped clone plus a few
+  unrelated top-level functions in the re-check content (the strip cannot peel that shape and the
+  query dilutes; only containment holds it open, measured 0.778 against the 0.6 threshold). Also
+  scrub the "skhan's case" comment in `test/unit/session/outcome-anchors.test.ts` (cite #86
+  instead). Correction to the earlier version of this bullet: "containment is one-sided safe" was
+  refuted by execution during the #94 review — containment alone false-resolves all-identifier
+  renames, tiny (single-window) anchors, capped-prefix damage, and repeated-line bodies; only the
+  OR of containment with the query is one-sided safe.
 
 - **Root fix: `extractAllFunctions` does not index class or object-literal methods.** The JS/TS
   patterns in `src/codedna/function-extractor.ts` match only `function name(` and
