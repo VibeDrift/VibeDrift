@@ -9,7 +9,7 @@
  * and it is off the hook's hot path.
  */
 
-import readline from "readline";
+import { askConfirm } from "../prompt.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -107,13 +107,6 @@ export type WatchSessionStatus =
   | "sync_updated"
   | "names_updated"
   | "aborted_unparseable";
-
-async function askConsent(question: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>((res) => rl.question(question, res));
-  rl.close();
-  return /^y(es)?$/i.test(answer.trim());
-}
 
 export async function runWatchSession(
   targetPath: string,
@@ -248,7 +241,7 @@ export async function runWatchSession(
   }
 
   if (!options.yes) {
-    const confirm = options.confirm ?? askConsent;
+    const confirm = options.confirm ?? askConfirm;
     const ok = await confirm(
       [
         "Drift Sessions (preview) will register Claude Code hooks for THIS repo that:",

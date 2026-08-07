@@ -16,7 +16,7 @@
  * supported agent is detected; the baseline stays lazy (first scan builds it).
  */
 
-import readline from "readline";
+import { askConfirm } from "../prompt.js";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
@@ -56,13 +56,6 @@ export type EnableStatus =
   | "aborted_unparseable";
 
 export type DeclineStatus = "declined";
-
-async function askConfirm(question: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>((res) => rl.question(question, res));
-  rl.close();
-  return /^y(es)?$/i.test(answer.trim());
-}
 
 function printDisclosure(ledgerDir: string): void {
   console.log(

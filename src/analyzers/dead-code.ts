@@ -23,6 +23,7 @@
 import type { Analyzer } from "./base.js";
 import type { AnalysisContext, Finding, SourceFile } from "../core/types.js";
 import { buildImportGraph, fileBasename, sourceLookupKey, type FileExport } from "../core/import-graph.js";
+import { escapeRegex } from "../core/regex.js";
 
 const ENTRY_POINT_BASES = new Set([
   "index", "main", "app", "server", "mod", "lib", "init", "__init__",
@@ -305,8 +306,4 @@ function countOccurrences(text: string, word: string): number {
   const regex = new RegExp(`\\b${escapeRegex(word)}\\b`, "g");
   const matches = text.match(regex);
   return matches ? matches.length : 0;
-}
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

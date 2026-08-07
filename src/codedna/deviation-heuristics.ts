@@ -25,6 +25,7 @@ import type { SourceFile } from "../core/types.js";
 import type { PatternDistribution, DeviationJustification, JustificationSignal, ArchPattern } from "./types.js";
 import type { Finding } from "../core/types.js";
 import { DEFAULT_DEVIATION_WEIGHTS } from "../core/config.js";
+import { escapeRegex } from "../core/regex.js";
 
 type Weights = typeof DEFAULT_DEVIATION_WEIGHTS;
 
@@ -96,11 +97,6 @@ function hasAdrMention(allFiles: SourceFile[], devPath: string, deviatingPattern
     if (!/(?:^docs\/|^ADR\.md|^DECISIONS\.md|\/(?:adr|decisions)\/)/i.test(f.relativePath)) return false;
     return mentionRe.test(f.content);
   });
-}
-
-/** Escape regex metacharacters so a literal string can be interpolated into a RegExp. */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function computeSignalScore(
