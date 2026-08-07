@@ -42,6 +42,21 @@ describe("sumLocalLedgerTotals", () => {
     expect(sumLocalLedgerTotals(dir)).toEqual({ flagged: 3, resolved: 1, complete: true });
   });
 
+  it("skips a non-regular .jsonl entry instead of reading it, and stays complete:false", () => {
+    // The real hazard is a FIFO: readFileSync on a writer-less one blocks the
+    // thread forever, and statSync reports size 0 so the byte cap never fires.
+    // Reproducing that as a true regression needs `mkfifo` (unix) in a child
+    // process with an external timeout (see #83). Here a directory named like a
+    // ledger is a portable stand-in for "a .jsonl path that is not a regular
+    // file": the isFile() guard must skip it, the real ledger still sums, and
+    // the run reports incomplete.
+    const dir = tmp();
+    mkdirSync(join(dir, "aaaa"), { recursive: true });
+    writeFileSync(join(dir, "aaaa", "real.jsonl"), flag("DF-1") + "\n");
+    mkdirSync(join(dir, "aaaa", "blocking.jsonl"), { recursive: true });
+    expect(sumLocalLedgerTotals(dir)).toEqual({ flagged: 1, resolved: 0, complete: false });
+  });
+
   it("returns null when the sessions dir does not exist", () => {
     expect(sumLocalLedgerTotals(join(tmp(), "never-written"))).toBeNull();
   });

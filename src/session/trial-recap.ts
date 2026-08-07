@@ -74,7 +74,17 @@ export function sumLocalLedgerTotals(
       const path = join(sessionsDir, project, name);
       let size: number;
       try {
-        size = statSync(path).size;
+        const st = statSync(path);
+        // A non-regular file (FIFO, socket, device) reports a bogus size, and a
+        // readFileSync on a writer-less FIFO blocks the thread forever, which no
+        // in-process timer can interrupt and which defeats every cap below.
+        // statSync follows symlinks, so a symlink to a real ledger still reads as
+        // a regular file; skip anything that is not one.
+        if (!st.isFile()) {
+          complete = false;
+          continue;
+        }
+        size = st.size;
       } catch {
         complete = false;
         continue;

@@ -11,10 +11,18 @@
  * matching how the followers read (whole-file readFile("utf8") + slicing), so
  * they are stable across processes reading the same bytes.
  *
- * Fail-open everywhere: missing/corrupt state resumes from zero (safe — the
- * ingest endpoint is idempotent per activity id and replays report
- * "duplicate"). Writes are atomic (tmp + rename) and MAX-MERGE against the
- * on-disk state, so racing uploaders can only ever move offsets forward.
+ * Fail-open everywhere: missing or corrupt state resumes from zero. That is
+ * safe because the ingest endpoint is idempotent per activity id and replays
+ * report "duplicate". Each write is atomic (tmp + rename) and max-merges
+ * against the on-disk state at read time. The read-merge-write is NOT atomic
+ * across processes, though: two flush children with independent in-memory
+ * snapshots can race, and the later writer's merge window may drop an offset
+ * the other just committed, regressing that file backward. This is deliberate
+ * and harmless. The store is lock-free on purpose (a stranded lockfile from a
+ * SIGKILLed flush child would wedge the hook), and a regressed offset only
+ * re-sends already-acknowledged events, which ingest dedups as "duplicate"
+ * while the watermark re-advances on the next pass. Nothing reaches findings,
+ * scores, or billing.
  */
 
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -91,10 +99,15 @@ export class UploadStateStore {
   }
 
   /**
-   * Merge offsets forward and persist atomically. Re-reads the on-disk state
-   * first and max-merges BOTH ways, so a racing slower uploader can never
-   * rewind a faster one. Never throws — a failed persist just means the next
-   * run re-sends a little, which dedup absorbs.
+   * Merge offsets forward and persist. Each write is atomic (tmp + rename) and
+   * re-reads the on-disk state first to max-merge with a concurrent writer's
+   * progress. That merge only sees what is on disk at read time, so it is NOT a
+   * cross-process monotonicity guarantee: a racing writer that reads before this
+   * write lands but writes after it can overwrite an offset with its own stale
+   * snapshot, regressing a file backward. Deliberately lock-free (see the module
+   * header); a regressed offset is harmless because the re-sent events dedup as
+   * "duplicate" and the watermark re-advances. Never throws: a failed persist
+   * just means the next run re-sends a little, which dedup absorbs.
    */
   async commit(entries: ReadonlyMap<string, number>): Promise<void> {
     let changed = false;
