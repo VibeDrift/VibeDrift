@@ -3,9 +3,9 @@ import {
   startDeviceAuth,
   pollDeviceAuth,
   fetchCredits,
-  isCreditsResponse,
   hasUnspentMonthlyFreeScan,
   VibeDriftApiError,
+  type CreditsResponse,
 } from "../../auth/api.js";
 import { patchConfig, readConfig, getConfigPath } from "../../auth/config.js";
 import { openInBrowser } from "../../auth/browser.js";
@@ -153,13 +153,12 @@ async function handleLoginSuccess(
   }
 }
 
-/** Pure renderer for the post-login deep-scan hint. Returns null on any
- *  shape the structural guard does not recognize so the caller can fall
- *  back to the legacy hint — the credits schema drifted once already, and
- *  the free-tier banner used to fire for Pro accounts because
- *  `has_free_deep_scan` means "can deep scan now", not "has a free credit". */
-export function buildLoginCreditsLines(credits: unknown): string[] | null {
-  if (!isCreditsResponse(credits)) return null;
+/** Pure renderer for the post-login deep-scan hint. Input arrives validated
+ *  (fetchCredits throws on an unknown shape and the caller falls back to
+ *  the legacy hint). The free-tier banner used to fire for Pro accounts
+ *  because `has_free_deep_scan` means "can deep scan now", not "has a free
+ *  credit" — it is gated on an actually-unspent monthly free scan now. */
+export function buildLoginCreditsLines(credits: CreditsResponse): string[] {
   if (credits.unlimited) {
     return [chalk.dim("  Run `vibedrift . --deep` to use AI-powered analysis."), ""];
   }

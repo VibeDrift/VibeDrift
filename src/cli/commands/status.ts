@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { readConfig, getConfigPath } from "../../auth/config.js";
 import { previewToken, resolveToken, describeSource } from "../../auth/resolver.js";
-import { validateToken, fetchCredits, isCreditsResponse, VibeDriftApiError } from "../../auth/api.js";
+import { validateToken, fetchCredits, VibeDriftApiError, type CreditsResponse } from "../../auth/api.js";
 import { getVersion } from "../../core/version.js";
 import { formatTimeSince } from "../../core/time-format.js";
 
@@ -88,12 +88,11 @@ export async function runStatus(): Promise<void> {
   console.log("");
 }
 
-/** Pure renderer for the `Deep scans:` block. Returns [] on any shape the
- *  structural guard does not recognize — the credits schema drifted once
- *  already and interpolating a missing field printed literal "undefined";
- *  no line beats a wrong line. */
-export function buildDeepScanLines(credits: unknown): string[] {
-  if (!isCreditsResponse(credits)) return [];
+/** Pure renderer for the `Deep scans:` block. Input arrives validated —
+ *  fetchCredits throws on any unknown shape (the schema drifted once
+ *  already and interpolating a missing field printed literal "undefined"),
+ *  and the caller's catch skips the block. */
+export function buildDeepScanLines(credits: CreditsResponse): string[] {
   if (credits.unlimited) {
     return [`  Deep scans: ${chalk.bold.green("unlimited")} (${credits.plan})`];
   }
