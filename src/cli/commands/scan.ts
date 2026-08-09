@@ -28,7 +28,7 @@ import { isCacheDisabled, pruneCache } from "../../core/findings-cache.js";
 import { runAnalyzers } from "../../core/run-analyzers.js";
 import { applyIncludeExclude, suggestExclusions } from "../../core/file-filter.js";
 import { resolveToken, resolveApiUrl } from "../../auth/resolver.js";
-import { fetchCredits } from "../../auth/api.js";
+import { fetchCredits, hasUnspentMonthlyFreeScan } from "../../auth/api.js";
 import type { Finding, ScanResult, ScanOptions } from "../../core/types.js";
 import type { CodeDnaResult } from "../../codedna/types.js";
 
@@ -129,7 +129,7 @@ async function resolveAuthAndBanner(
         // never delays the scan from even starting. If credits don't come back
         // in time we simply skip the banner.
         const credits = await fetchCredits(bearerToken, { apiUrl, timeoutMs: 2500 });
-        if (credits.has_free_deep_scan && !credits.unlimited) {
+        if (hasUnspentMonthlyFreeScan(credits)) {
           console.log("");
           console.log(chalk.bgYellow.black.bold("  🎁  1 FREE DEEP SCAN EVERY MONTH  "));
           console.log(chalk.yellow("    Run with --deep to use AI-powered analysis (1 free per month)."));

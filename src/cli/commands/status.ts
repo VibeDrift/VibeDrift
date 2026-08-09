@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { readConfig, getConfigPath } from "../../auth/config.js";
 import { previewToken, resolveToken, describeSource } from "../../auth/resolver.js";
-import { validateToken, fetchCredits, VibeDriftApiError } from "../../auth/api.js";
+import { validateToken, fetchCredits, isCreditsResponse, VibeDriftApiError } from "../../auth/api.js";
 import { getVersion } from "../../core/version.js";
 import { formatTimeSince } from "../../core/time-format.js";
 
@@ -66,22 +66,17 @@ export async function runStatus(): Promise<void> {
     }
   }
 
-  // Credit summary — surfaces the welcome credit and any purchased ones.
+  // Credit summary — period allowance plus top-up credits, same accounting
+  // as `vibedrift usage` and the /v1/analyze gate.
   try {
     const credits = await fetchCredits(resolved.token, { apiUrl: config.apiUrl });
-    console.log("");
-    if (credits.unlimited) {
-      console.log(`  Deep scans: ${chalk.bold.green("unlimited")} (${credits.plan})`);
-    } else if (credits.has_free_deep_scan) {
-      console.log(`  Deep scans: ${chalk.bold.yellow("1 free")} + ${credits.available_purchased} purchased`);
-      console.log(chalk.dim("              Run `vibedrift . --deep` to use your free credit."));
-    } else if (credits.available_total > 0) {
-      console.log(`  Deep scans: ${chalk.bold(credits.available_total)} credit${credits.available_total === 1 ? "" : "s"} available`);
-    } else {
-      console.log(`  Deep scans: ${chalk.dim("0 credits")} — run \`vibedrift upgrade\` for more`);
+    const lines = buildDeepScanLines(credits);
+    if (lines.length > 0) {
+      console.log("");
+      for (const line of lines) console.log(line);
     }
   } catch {
-    // Older API or transient error — silently skip the credits line.
+    // Transient error — silently skip the credits line.
   }
 
   // Last deep scan — drives the "a lot has changed since your last deep scan"
@@ -91,5 +86,28 @@ export async function runStatus(): Promise<void> {
   );
 
   console.log("");
+}
+
+/** Pure renderer for the `Deep scans:` block. Returns [] on any shape the
+ *  structural guard does not recognize — the credits schema drifted once
+ *  already and interpolating a missing field printed literal "undefined";
+ *  no line beats a wrong line. */
+export function buildDeepScanLines(credits: unknown): string[] {
+  if (!isCreditsResponse(credits)) return [];
+  if (credits.unlimited) {
+    return [`  Deep scans: ${chalk.bold.green("unlimited")} (${credits.plan})`];
+  }
+  const remaining = credits.deep_scans_remaining;
+  const used = `${credits.deep_scans_this_month}/${credits.deep_scans_limit} used this period`;
+  if (remaining > 0) {
+    const lines = [`  Deep scans: ${chalk.bold(remaining)} remaining (${used})`];
+    // "free deep scan" copy only while the monthly free scan is actually
+    // unspent — remaining > 0 after it is used means top-up credits.
+    if (credits.plan === "free" && credits.deep_scans_this_month === 0) {
+      lines.push(chalk.dim("              Run `vibedrift . --deep` to use your free deep scan."));
+    }
+    return lines;
+  }
+  return [`  Deep scans: ${chalk.dim("0 remaining")} (${used}) — run \`vibedrift upgrade\` for more`];
 }
 

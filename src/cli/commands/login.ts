@@ -3,6 +3,8 @@ import {
   startDeviceAuth,
   pollDeviceAuth,
   fetchCredits,
+  isCreditsResponse,
+  hasUnspentMonthlyFreeScan,
   VibeDriftApiError,
 } from "../../auth/api.js";
 import { patchConfig, readConfig, getConfigPath } from "../../auth/config.js";
@@ -128,41 +130,20 @@ async function handleLoginSuccess(
   console.log(`  Plan:    ${chalk.bold(result.plan)}`);
   console.log("");
 
-  // Fetch + announce the one-time welcome credit. Non-fatal if the
-  // call fails — older API builds simply won't have this endpoint.
+  // Fetch + announce the deep-scan allowance. Non-fatal if the call fails
+  // or the response shape is unknown — fall back to the legacy plan hint.
+  let creditsLines: string[] | null;
   try {
     const credits = await fetchCredits(result.access_token, {
       apiUrl: options.apiUrl,
     });
-    if (credits.has_free_deep_scan && !credits.unlimited) {
-      console.log(
-        chalk.bgYellow.black.bold("  🎁 1 FREE deep scan every month with your account  "),
-      );
-      console.log("");
-      console.log(
-        chalk.yellow("  Try the full pipeline (Claude analysis, security review,"),
-      );
-      console.log(
-        chalk.yellow("  AI-powered drift detection) on any project — no card needed."),
-      );
-      console.log("");
-      console.log(`    ${chalk.cyan("vibedrift . --deep")}`);
-      console.log("");
-    } else if (credits.unlimited) {
-      console.log(chalk.dim("  Run `vibedrift . --deep` to use AI-powered analysis."));
-      console.log("");
-    } else if (credits.available_total > 0) {
-      console.log(
-        chalk.dim(`  You have ${credits.available_total} deep scan credit${credits.available_total === 1 ? "" : "s"} available.`),
-      );
-      console.log(chalk.dim("  Run `vibedrift . --deep` to use one."));
-      console.log("");
-    } else {
-      console.log(chalk.dim("  Run `vibedrift upgrade` to enable deep AI scans."));
-      console.log("");
-    }
+    creditsLines = buildLoginCreditsLines(credits);
   } catch {
-    // Endpoint missing or transient error — fall back to legacy hint.
+    creditsLines = null;
+  }
+  if (creditsLines) {
+    for (const line of creditsLines) console.log(line);
+  } else {
     if (result.plan === "free") {
       console.log(chalk.dim("  Run `vibedrift upgrade` to enable deep AI scans."));
     } else {
@@ -170,6 +151,39 @@ async function handleLoginSuccess(
     }
     console.log("");
   }
+}
+
+/** Pure renderer for the post-login deep-scan hint. Returns null on any
+ *  shape the structural guard does not recognize so the caller can fall
+ *  back to the legacy hint — the credits schema drifted once already, and
+ *  the free-tier banner used to fire for Pro accounts because
+ *  `has_free_deep_scan` means "can deep scan now", not "has a free credit". */
+export function buildLoginCreditsLines(credits: unknown): string[] | null {
+  if (!isCreditsResponse(credits)) return null;
+  if (credits.unlimited) {
+    return [chalk.dim("  Run `vibedrift . --deep` to use AI-powered analysis."), ""];
+  }
+  if (hasUnspentMonthlyFreeScan(credits)) {
+    return [
+      chalk.bgYellow.black.bold("  🎁 1 FREE deep scan every month with your account  "),
+      "",
+      chalk.yellow("  Try the full pipeline (Claude analysis, security review,"),
+      chalk.yellow("  AI-powered drift detection) on any project — no card needed."),
+      "",
+      `    ${chalk.cyan("vibedrift . --deep")}`,
+      "",
+    ];
+  }
+  if (credits.deep_scans_remaining > 0) {
+    return [
+      chalk.dim(
+        `  You have ${credits.deep_scans_remaining} deep scan${credits.deep_scans_remaining === 1 ? "" : "s"} remaining this period.`,
+      ),
+      chalk.dim("  Run `vibedrift . --deep` to use one."),
+      "",
+    ];
+  }
+  return [chalk.dim("  Run `vibedrift upgrade` to enable deep AI scans."), ""];
 }
 
 function fail(intro: string, err: unknown): never {

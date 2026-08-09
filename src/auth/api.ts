@@ -80,16 +80,53 @@ export interface FeedbackResponse {
   received_at: string;
 }
 
+/** Shape of GET /account/credits as the deployed API actually returns it
+ *  (api CreditsResponse): period allowance plus top-up credits, the same
+ *  accounting the /v1/analyze gate enforces. `deep_scans_limit` and
+ *  `deep_scans_remaining` are -1 when `unlimited` is true. */
 export interface CreditsResponse {
-  plan: "free" | "pro" | "enterprise";
+  plan: string;
   unlimited: boolean;
-  available_total: number;
-  available_welcome: number;
-  available_purchased: number;
-  available_manual: number;
-  welcome_granted: boolean;
-  welcome_consumed: boolean;
+  deep_scans_this_month: number;
+  deep_scans_limit: number;
+  deep_scans_remaining: number;
+  /** True when a deep scan is possible right now (unlimited or remaining > 0) —
+   *  NOT "has an unspent Free-tier credit". */
   has_free_deep_scan: boolean;
+}
+
+/** Structural guard for CreditsResponse. Rendering must go through this:
+ *  the credits schema has changed shape once already, and a 200 with a
+ *  different shape does not throw — interpolating a missing field printed
+ *  literal "undefined" to every signed-in `status` user. Unknown shape ⇒
+ *  the caller hides the line instead of guessing. */
+export function isCreditsResponse(v: unknown): v is CreditsResponse {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.plan === "string" &&
+    typeof o.unlimited === "boolean" &&
+    typeof o.deep_scans_this_month === "number" &&
+    typeof o.deep_scans_limit === "number" &&
+    typeof o.deep_scans_remaining === "number" &&
+    typeof o.has_free_deep_scan === "boolean"
+  );
+}
+
+/** True only while the free plan's monthly deep scan is still unspent — the
+ *  one state where "1 FREE deep scan every month" copy is accurate. Pro
+ *  accounts always return has_free_deep_scan=true while any allowance
+ *  remains, so gating a banner on that flag alone shows free-tier copy to
+ *  paying users; remaining > 0 after the monthly scan is used means top-up
+ *  credits, not a free scan. */
+export function hasUnspentMonthlyFreeScan(credits: unknown): boolean {
+  return (
+    isCreditsResponse(credits) &&
+    !credits.unlimited &&
+    credits.plan === "free" &&
+    credits.deep_scans_this_month === 0 &&
+    credits.has_free_deep_scan
+  );
 }
 
 export class VibeDriftApiError extends Error {
