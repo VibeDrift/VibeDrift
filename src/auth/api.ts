@@ -80,16 +80,79 @@ export interface FeedbackResponse {
   received_at: string;
 }
 
+/** Plan names the API is known to emit. The open string fallback is
+ *  deliberate: a plan name this CLI version has not heard of must stay
+ *  parseable and renderable (via the generic paths), not hide the credits
+ *  line — a closed union validated at runtime would reintroduce the
+ *  schema-drift failure this type exists to prevent. */
+export type CreditsPlan = "free" | "pro" | "enterprise" | "team" | (string & {});
+
+/** Shape of GET /account/credits as the deployed API actually returns it
+ *  (api CreditsResponse): period allowance plus top-up credits, the same
+ *  accounting the /v1/analyze gate enforces. */
 export interface CreditsResponse {
-  plan: "free" | "pro" | "enterprise";
+  /** The plan the server resolved for this account. */
+  plan: CreditsPlan;
+  /** True when the plan has no deep-scan cap at all (server-side
+   *  PLAN_DEEP_SCAN_LIMITS maps it to unlimited, e.g. enterprise). When
+   *  true, `deep_scans_limit` and `deep_scans_remaining` are both -1. */
   unlimited: boolean;
-  available_total: number;
-  available_welcome: number;
-  available_purchased: number;
-  available_manual: number;
-  welcome_granted: boolean;
-  welcome_consumed: boolean;
+  /** Deep-scan units used this period (billing cycle on paid plans,
+   *  calendar month on free; MCP in-loop checks count fractionally). */
+  deep_scans_this_month: number;
+  /** Plan allowance per period (1 free, 12 pro; -1 when unlimited). */
+  deep_scans_limit: number;
+  /** Allowance left this period PLUS unexpired top-up credits
+   *  (-1 when unlimited). */
+  deep_scans_remaining: number;
+  /** True when a deep scan is possible right now (unlimited or remaining > 0) —
+   *  NOT "has an unspent Free-tier credit". */
   has_free_deep_scan: boolean;
+}
+
+/** Structural guard for CreditsResponse. Rendering must go through this:
+ *  the credits schema has changed shape once already, and a 200 with a
+ *  different shape does not throw — interpolating a missing field printed
+ *  literal "undefined" to every signed-in `status` user. Unknown shape ⇒
+ *  the caller hides the line instead of guessing. */
+export function isCreditsResponse(v: unknown): v is CreditsResponse {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.plan === "string" &&
+    typeof o.unlimited === "boolean" &&
+    typeof o.deep_scans_this_month === "number" &&
+    typeof o.deep_scans_limit === "number" &&
+    typeof o.deep_scans_remaining === "number" &&
+    typeof o.has_free_deep_scan === "boolean"
+  );
+}
+
+/** Validate an untrusted /account/credits payload into a typed
+ *  CreditsResponse. Throws VibeDriftApiError on any unknown shape so the
+ *  callers' existing error paths engage (status skips the line, login falls
+ *  back to the plan hint, scan skips the banner) instead of a missing field
+ *  reaching a template as literal "undefined". */
+export function parseCreditsResponse(v: unknown): CreditsResponse {
+  if (!isCreditsResponse(v)) {
+    throw new VibeDriftApiError(200, "unexpected /account/credits response shape");
+  }
+  return v;
+}
+
+/** True only while the free plan's monthly deep scan is still unspent — the
+ *  one state where "1 FREE deep scan every month" copy is accurate. Pro
+ *  accounts always return has_free_deep_scan=true while any allowance
+ *  remains, so gating a banner on that flag alone shows free-tier copy to
+ *  paying users; remaining > 0 after the monthly scan is used means top-up
+ *  credits, not a free scan. */
+export function hasUnspentMonthlyFreeScan(credits: CreditsResponse): boolean {
+  return (
+    !credits.unlimited &&
+    credits.plan === "free" &&
+    credits.deep_scans_this_month === 0 &&
+    credits.has_free_deep_scan
+  );
 }
 
 export class VibeDriftApiError extends Error {
@@ -351,10 +414,13 @@ export async function sendFeedback(args: {
  *  one so a slow API never delays the scan from starting. */
 export async function fetchCredits(token: string, opts?: { apiUrl?: string; timeoutMs?: number }): Promise<CreditsResponse> {
   const base = await resolveApiUrl(opts?.apiUrl);
-  return jsonFetch<CreditsResponse>(`${base}/account/credits`, {
+  const raw = await jsonFetch<unknown>(`${base}/account/credits`, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
   }, opts?.timeoutMs);
+  // Validated, not cast: a 200 with a drifted schema must throw into the
+  // caller's fallback path, never reach a template as undefined fields.
+  return parseCreditsResponse(raw);
 }
 
 /** Create a Stripe Customer Portal session and return the URL to open. */
