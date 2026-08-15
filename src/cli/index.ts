@@ -275,23 +275,33 @@ program
   .option("--status", "report whether hooks are installed")
   .option("--yes", "skip the consent prompt (you have read what it records)")
   .option("--no-watch", "install only; do not follow the live event tape")
-  .option("--sync <state>", "hosted sync (Pro): 'on' opts into derived-only upload, 'off' disables it")
+  .option(
+    "--sync <state>",
+    "hosted sync (Pro): 'on' opts into derived-only upload, 'off' disables it; add --yes/--no-watch to also install",
+  )
   .option(
     "--names <state>",
-    "share this repo's file NAMES with your dashboard: 'on' uploads repo-relative paths (never file contents), 'off' deletes them",
+    "share this repo's file NAMES with your dashboard: 'on' uploads repo-relative paths (never file contents), 'off' deletes them; add --yes/--no-watch to also install",
   )
   .option("--local-only", "force hosted sync off for this run")
   .action(async (path: string, options) => {
     const sync = options.sync === "on" ? "on" : options.sync === "off" ? "off" : undefined;
     const names = options.names === "on" ? "on" : options.names === "off" ? "off" : undefined;
+    // --yes / --no-watch alongside a toggle means "configure and install in
+    // one command"; a bare toggle stays the documented standalone control
+    // (`vibedrift watch-session --sync off`), which neither installs nor
+    // watches.
+    const installRequested = options.yes === true || options.watch === false;
+    const toggleOnly = (sync !== undefined || names !== undefined) && !installRequested;
     await runWatchSession(path, {
       uninstall: options.uninstall,
       status: options.status,
       yes: options.yes,
       sync,
       names,
+      install: installRequested,
       localOnly: options.localOnly === true,
-      watch: options.watch !== false && !options.uninstall && !options.status && !sync && !names,
+      watch: options.watch !== false && !options.uninstall && !options.status && !toggleOnly,
     });
   });
 

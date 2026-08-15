@@ -65,12 +65,21 @@ export interface WatchSessionOptions {
    *  The CLI sets this true by default; omit it (as tests do) to just install. */
   watch?: boolean;
   /** Toggle hosted sync (Phase 5): "on" opts into derived-only upload, "off"
-   *  disables it. A standalone control — sets config and returns. */
+   *  disables it. Composes with `names`, and with the install flow when
+   *  `install` is set; a bare toggle sets config and returns. */
   sync?: "on" | "off";
   /** Toggle the opt-in file-name manifest for THIS repo: "on" shares
    *  repo-relative paths (never contents) so the dashboard can name files,
-   *  "off" deletes what was uploaded and stops future uploads. */
+   *  "off" deletes what was uploaded and stops future uploads. Same
+   *  composition rules as `sync`. */
   names?: "on" | "off";
+  /** Continue into the normal install/watch flow AFTER applying `sync`/`names`.
+   *  The CLI sets this when the invocation carried an install-intent flag
+   *  (--yes or --no-watch), so `--yes --no-watch --sync on --names on`
+   *  configures and installs in one command instead of silently dropping
+   *  everything after the first toggle. Without it, a toggle invocation stays
+   *  the documented standalone control (`vibedrift watch-session --sync off`). */
+  install?: boolean;
   /** Test seam: perform the server-side name deletion for ONE project hash
    *  (default: the API). Called once per hash this repo has uploaded under. */
   deleteNames?: (projectHash: string) => Promise<{ deleted?: number }>;
@@ -130,10 +139,16 @@ export async function runWatchSession(
         : `${chalk.dim("○")} Drift Sessions hooks not installed`,
     );
     console.log(chalk.dim(`  session ledger: ${ledgerDir}`));
+    if (options.sync || options.names) {
+      console.log(chalk.dim("  (--sync/--names not applied with --status; run them without --status)"));
+    }
     return "status";
   }
 
   if (options.uninstall) {
+    if (options.sync || options.names) {
+      console.log(chalk.dim("(--sync/--names not applied with --uninstall; run them without --uninstall)"));
+    }
     const res = await uninstallHooks(rootDir, installOpts);
     if (res.status === "not_installed") {
       console.log("Drift Sessions hooks were not installed; nothing to remove.");
@@ -149,31 +164,16 @@ export async function runWatchSession(
     return "uninstalled";
   }
 
-  // Hosted sync toggle (Phase 5): a standalone control — set the flag and return.
+  // Hosted sync + file-name toggles: configuration controls that COMPOSE —
+  // with each other (both apply, sync first), and with the install/watch flow
+  // below when `install` is set (--yes / --no-watch on the CLI). A bare toggle
+  // invocation applies its state and returns, which is the documented
+  // standalone usage (`vibedrift watch-session --sync off`). Before this
+  // composed, `--sync` won and everything after it was silently dropped: no
+  // hooks, no `--names`, while the sync confirmation read as success.
   if (options.sync) {
-    const on = options.sync === "on";
-    await patchConfig({ sessionsSyncEnabled: on, ...(on ? { sessionsSyncNoticeShown: true } : {}) });
-    if (on) {
-      console.log(`${chalk.green("✓")} Drift Sessions hosted sync is ON.`);
-      console.log(
-        chalk.dim(
-          [
-            "  Only a DERIVED projection leaves this machine — findings, scores, outcomes,",
-            "  and metadata. Your prompts and code never do. File paths ship only as",
-            "  per-repo grouping hashes, never the paths themselves. The agent's decision",
-            "  reasoning + intent label stay local unless a team explicitly opts in.",
-            "  Turn off anytime: vibedrift watch-session --sync off",
-          ].join("\n"),
-        ),
-      );
-    } else {
-      console.log(`${chalk.green("✓")} Drift Sessions hosted sync is OFF — sessions stay entirely on this machine.`);
-    }
-    return "sync_updated";
+    await toggleHostedSync(options.sync === "on");
   }
-
-  // File-name sharing toggle: per repo, default off, fully reversible. Also a
-  // standalone control, so it never installs hooks or starts a watch.
   if (options.names) {
     await toggleFileNames(options.names === "on", {
       projectHash,
@@ -182,7 +182,11 @@ export async function runWatchSession(
       activationHome: options.activationHome ?? vibedriftHome(),
       deleteNames: options.deleteNames,
     });
-    return "names_updated";
+  }
+  if ((options.sync || options.names) && !options.install) {
+    // Both toggles may have applied; `sync` wins the return value by
+    // precedence, mirroring its position in the flow.
+    return options.sync ? "sync_updated" : "names_updated";
   }
 
   // Agent detection comes FIRST: a machine that cannot run sessions at all
@@ -294,6 +298,28 @@ export async function runWatchSession(
     console.log(chalk.dim("  next Claude Code session in this repo will be recorded; run with --status to check."));
   }
   return installed;
+}
+
+/** `--sync on|off`: flip the hosted-sync flag and print the disclosure. The
+ *  ON path also marks the one-time notice as shown, since this IS the notice. */
+async function toggleHostedSync(on: boolean): Promise<void> {
+  await patchConfig({ sessionsSyncEnabled: on, ...(on ? { sessionsSyncNoticeShown: true } : {}) });
+  if (on) {
+    console.log(`${chalk.green("✓")} Drift Sessions hosted sync is ON.`);
+    console.log(
+      chalk.dim(
+        [
+          "  Only a DERIVED projection leaves this machine — findings, scores, outcomes,",
+          "  and metadata. Your prompts and code never do. File paths ship only as",
+          "  per-repo grouping hashes, never the paths themselves. The agent's decision",
+          "  reasoning + intent label stay local unless a team explicitly opts in.",
+          "  Turn off anytime: vibedrift watch-session --sync off",
+        ].join("\n"),
+      ),
+    );
+  } else {
+    console.log(`${chalk.green("✓")} Drift Sessions hosted sync is OFF — sessions stay entirely on this machine.`);
+  }
 }
 
 /**
