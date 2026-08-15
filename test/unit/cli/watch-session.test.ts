@@ -103,6 +103,64 @@ describe("runWatchSession — hosted sync toggle", () => {
       process.env.USERPROFILE = prevProfile;
     }
   });
+
+  it("--sync on --names on applies BOTH toggles and still installs nothing", async () => {
+    const home = tmp("vd-ws-home-");
+    const prevHome = process.env.HOME;
+    const prevProfile = process.env.USERPROFILE;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const repo = repoWithAgent();
+      const sessionsDir = tmp("vd-ws-sess-");
+      const activationHome = tmp("vd-ws-act-");
+      const status = await runWatchSession(repo, { sync: "on", names: "on", activationHome, sessionsDir });
+      // sync wins the return value by precedence; the observable effects are
+      // BOTH applied (before the fix, --names was silently dropped here)
+      expect(status).toBe("sync_updated");
+      expect((await readConfig()).sessionsSyncEnabled).toBe(true);
+      const { projectHash } = repoIdentity(repo);
+      expect(shareFileNamesEnabled(loadActivation(activationHome), projectHash)).toBe(true);
+      // without install intent, a toggle invocation still never installs hooks
+      expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(false);
+    } finally {
+      process.env.HOME = prevHome;
+      process.env.USERPROFILE = prevProfile;
+    }
+  });
+
+  it("install:true continues past the toggles into a real install (one-command flow)", async () => {
+    const home = tmp("vd-ws-home-");
+    const prevHome = process.env.HOME;
+    const prevProfile = process.env.USERPROFILE;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const repo = repoWithAgent();
+      const sessionsDir = tmp("vd-ws-sess-");
+      const activationHome = tmp("vd-ws-act-");
+      // the CLI maps `--yes --no-watch --sync on --names on` to exactly this
+      // call; before the fix it returned "sync_updated" with no hooks written
+      const status = await runWatchSession(repo, {
+        yes: true,
+        install: true,
+        sync: "on",
+        names: "on",
+        activationHome,
+        sessionsDir,
+      });
+      expect(status).toBe("installed");
+      expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(true);
+      expect((await readConfig()).sessionsSyncEnabled).toBe(true);
+      const { projectHash } = repoIdentity(repo);
+      expect(shareFileNamesEnabled(loadActivation(activationHome), projectHash)).toBe(true);
+    } finally {
+      process.env.HOME = prevHome;
+      process.env.USERPROFILE = prevProfile;
+    }
+  });
 });
 
 describe("runWatchSession", () => {

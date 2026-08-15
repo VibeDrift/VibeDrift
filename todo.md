@@ -1,5 +1,55 @@
 # CLI backlog
 
+- **[TUNING] Hook scope-check false positive on working documents.** The experimental
+  "looks unrelated to this task" advisory flagged a `.lavish/*.html` artifact edit during a session
+  whose task WAS building that artifact (2026-08-14, Vibestack workspace). Working-document paths
+  (`.lavish/`, scratch/plan artifacts) probably deserve an allowlist or lower confidence, and the
+  task-inference should weigh the conversation topic, not just source-tree adjacency.
+
+- **[REFACTOR, from PR #98 review] Centralized error codes + handling.** Sami: "start using a
+  centralized class for all VibeDrift exception codes and error handling." Today `VibeDriftApiError`
+  (src/auth/api.ts) carries only status+message; command-level catches are ad-hoc per call site.
+  Shape: one error module with typed codes (auth, entitlement, schema, network, rate-limit), every
+  API call path throwing/classifying through it, commands switching on code instead of string
+  matching. Touches every command — its own focused PR, not a rider.
+
+- **[BUG] dependencies analyzer adds `pkg.name` to the declared-deps set** (`declared.add(pkg.name)`
+  before `detectPhantomDeps`), so "phantom dependencies (declared but unused): <own package name>"
+  fires on ~every JS/TS repo that doesn't self-import (reproduced with controls: tracks the name
+  field verbatim; fires even with no dependency blocks at all). A fabricated "declared" claim —
+  keep the self-name for missing-dep suppression if that was the intent, but exclude it from the
+  phantom set.
+
+- **[BUG] return-shape declared-divergence fires when the dominant pattern MATCHES the declaration**
+  and the message prints the dominant, yielding "Team declared throws on error … but src/analyzers/
+  uses throws on error (2/4 files)". Should not fire when dominant == declared (or should name the
+  deviating minority pattern instead). Seen on 0.19.6 self-scan.
+
+- **[BUG, sessions] Intent anchors from absolute paths never match edits.** A prompt naming
+  `/abs/path/to/repo/src/x.ts` locks an anchor that `fileMatchesAnchors` (exact-or-suffix rule)
+  can never match against repo-relative edit paths → "0/N task files touched" even when the named
+  file was edited, and the scope tier degrades. Normalize prompt-extracted file anchors to
+  repo-relative before locking. Observed live on 0.19.6.
+
+- **[TRIAGE, sessions] `watch-session` "session summary" counters accumulate across all sessions
+  one watch run has seen** (observed 3 → 4 → 7 edits across four consecutive sessions) while the
+  label reads per-session. Decide intended semantics; if per-session, reset the fold per
+  `session_start`; if watch-lifetime, relabel.
+
+- **[POLISH batch, all verified on 0.19.6]** `usage` header "Recent scans (20)" vs hard
+  `slice(0, 10)` (show real row count or "10 of 20"); fix-plan projection rounds to nearest 5
+  ("~100/100" from a real 98.0 — print the recomputed value it already has) and the HTML "fix all"
+  projection can go BELOW the current score on small repos (empty-category `NO_FINDING_PRIOR=0.8`
+  beats the observed prior — floor it at current); MCP `serverInfo.version` hardcoded "0.1.0";
+  unknown subcommand falls through to the scan `[path]` arg (typo matching a real dir silently
+  scans and then blocks on the report server — consider rejecting non-path-looking barewords or
+  did-you-mean); `--fail-on-score` exits 1 with zero explanation (print one line naming score vs
+  threshold); watch-session help tagline "(local-only, consent-gated)" is stale once `--sync on`
+  persists ("local by default, sync opt-in"); scan html path prints no hint that `--format
+  terminal` avoids the blocking report server; declared-conventions extractor ignores negation —
+  AGENTS.md:71 "no `.then()` chains in new code" surfaces ".then() chains" in the scan banner's
+  "Declared conventions" list as if it were the declared style.
+
 - **[DESIGN-READY, GATED] Multi-host native sessions — Phase 0 contract freeze + adapter program.**
   Full narrative in workspace LOGBOOK 2026-08-03. Six hosts verified to have Claude-style hook
   surfaces (Cursor 21 events / Codex 11 stable-default-on / Gemini 11 GA / Copilot 14 / Windsurf-Devin
