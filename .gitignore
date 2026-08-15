@@ -26,8 +26,11 @@ eval/reports/
 # Score-discrimination harness clone cache (cloned upstream repos)
 eval/discrimination/.cache/
 
-# Internal security sub-phase plans (local execution docs, not for the public repo)
-PLAN-security-conformance-*.md
+# Internal working documents (local execution docs and backlogs, not for the public repo)
+PLAN-*.md
+/todo.md
+/.superpowers/
+/.lavish/
 
 # Claude Code local hook installs (vibedrift enable) — never committed
 .claude/settings.local.json

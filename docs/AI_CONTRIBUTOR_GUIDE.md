@@ -331,7 +331,7 @@ Blank issues are disabled (`.github/ISSUE_TEMPLATE/config.yml`). You must use th
 
 ### Before you file
 
-1. Search open issues **and** `todo.md` at the repo root. `todo.md` is tracked and public, it is the live backlog, and nothing links to it from the README, `CONTRIBUTING.md`, `AGENTS.md`, or `.github/`, so you will not be told to read it. Its top items carry `[P0]` markers and `(#N)` issue references, and they are written as executable specs: exact files, reproduced symptom, proposed fix, and the measurement required before shipping. If your issue is already there, a maintainer expects a PR that follows that spec, not a duplicate report.
+1. Search open issues. The maintainers keep their working backlog outside this repo, so open issues are the public record of known work. If an issue already covers your finding, a maintainer expects a PR that follows its spec, not a duplicate report.
 2. Reproduce on the **built** CLI or from source, not from your memory of a run: `npx tsx src/cli/index.ts <path> --local-only --format json`.
 3. Determine which layer you are in. A finding that renders but does not move the score is a hygiene-track finding, not a scoring bug. A finding that does not appear at all may be an extraction blind spot, not a detector bug.
 4. Run the four bars. Do not file until bar 4 has a number.
@@ -447,7 +447,7 @@ monotonicity:   ✗ composite non-monotonic: 0% (83.2) → 10% (85.0)
 responsiveness: ✓ each 25% → ≥3pt drop confirmed
 ```
 
-The composite rises from 83.2 to 85.0 between 0% and 10% injection, so `checkMonotonic` fails and the script exits non-zero. Responsiveness still passes. `todo.md` records this as pre-existing and tracked with the scoring-formula responsiveness work. **Capture a before and after rather than chasing it**, and say in your PR that the 0-to-10 violation was present before your change. This harness writes only to a tmpdir, so it is safe to run repeatedly.
+The composite rises from 83.2 to 85.0 between 0% and 10% injection, so `checkMonotonic` fails and the script exits non-zero. Responsiveness still passes. This is a known pre-existing failure, tracked by the maintainers with the scoring-formula responsiveness work. **Capture a before and after rather than chasing it**, and say in your PR that the 0-to-10 violation was present before your change. This harness writes only to a tmpdir, so it is safe to run repeatedly.
 
 ---
 
@@ -609,6 +609,6 @@ These come from this project's own incident history, and each is anchored in cod
 
 **`src/scoring/dedup.ts` returns a copy even in the no-op path, deliberately.** Callers replace their list in place via `allFindings.length = 0; allFindings.push(...deduped)`, and returning the input reference would empty the array before the re-push, silently dropping every finding and floating the composite to roughly 100. The comment at `dedup.ts:28-32` says so. Preserve it if you refactor.
 
-**Known accepted limitations, not bugs to fix silently.** `upload-state.ts` has a non-atomic read-merge-write under racing uploaders; `todo.md` records the race as benign and prescribes fixing the two over-promising docstrings rather than adding a lock, since a stranded lockfile from a killed flush child is worse. Separately, `DF-<n>` display numbers are per-session sequential and can collide across concurrent same-repo sessions, documented at `src/session/decision.ts:13`, `:62`, and `:90`. Changing either is a design decision, so open an issue first.
+**Known accepted limitations, not bugs to fix silently.** `upload-state.ts` has a non-atomic read-merge-write under racing uploaders; the maintainers track the race as benign, and the prescribed fix is the two over-promising docstrings rather than a lock, since a stranded lockfile from a killed flush child is worse. Separately, `DF-<n>` display numbers are per-session sequential and can collide across concurrent same-repo sessions, documented at `src/session/decision.ts:13`, `:62`, and `:90`. Changing either is a design decision, so open an issue first.
 
 **Never state a capability without reading the code that implements it.** This is the house rule that subsumes most of the rest, and it is why the four bars and the refuter exist. The worst outcome in this project is not a missing feature. It is a user receiving a confident claim that turns out to be false.
