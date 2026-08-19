@@ -28,10 +28,11 @@ import { isBelowSecurityPeerFloor } from "../scoring/engine.js";
 import type { AnalysisContext } from "./types.js";
 import type { DriftFinding, DriftCategory } from "../drift/types.js";
 import type { IntentHint } from "../intent/types.js";
+import { directoryOf } from "../drift/utils.js";
 
 const CACHE_DIR = join(vibedriftHome(), "baseline-cache");
 /** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 4;
+export const BASELINE_VERSION = 5;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;
@@ -43,6 +44,10 @@ export interface CategoryVote {
   /** Files that drift in this category + the pattern each uses instead — lets
    *  check_file_drift report "your file does X, the repo does Y". */
   deviators: Array<{ path: string; detectedPattern: string }>;
+  /** The directory this vote was computed over, when every file it names sits
+   *  in one directory. Set only by votesByDirectory; the repo-wide
+   *  perCategoryVote leaves it undefined. */
+  directory?: string;
   /** True when this is a security_posture vote below MIN_SECURITY_PEERS relevant
    *  routes: too thin to dent the score, so MCP tools surface it as advisory
    *  rather than authoritative. Single source of truth: isBelowSecurityPeerFloor. */
@@ -62,6 +67,10 @@ export interface RepoDriftBaseline {
   rootDir: string;
   ctxFiles: Array<{ path: string; hash: string }>;
   perCategoryVote: Partial<Record<DriftCategory, CategoryVote>>;
+  /** Votes keyed (category, directory). The in-loop checker reads THIS, never
+   *  perCategoryVote, so a file is only ever measured against its own peers.
+   *  See votesByDirectory for why. Optional so a v4 baseline still loads. */
+  perDirectoryVote?: Partial<Record<DriftCategory, Record<string, CategoryVote>>>;
   /** Per-security-sub-convention votes (Auth middleware / Input validation /
    *  Rate limiting), keyed by sub-category label. Kept separate from
    *  perCategoryVote, which collapses all three into one security_posture slot
@@ -147,6 +156,44 @@ export function votesFromFindings(
   return out;
 }
 
+/**
+ * Votes keyed (category, directory).
+ *
+ * `votesFromFindings` keeps exactly one finding per category — the widest
+ * denominator — which discards both the other directories' conventions and the
+ * fact that the survivor was ever directory-scoped at all. The in-loop checker
+ * then measured every edited file against whichever directory happened to win.
+ *
+ * Measured cost, from the recorded session population: 10 of 21 findings, four
+ * of which told Next.js server actions to adopt a React component's return
+ * shape. The actions directory was 10 of 10 on its own convention and emitted
+ * no finding precisely because it is unanimous, so it had no vote of its own
+ * and inherited a rule from code it shares nothing with.
+ *
+ * A finding contributes a vote only when every file it names — dominant and
+ * deviating alike — sits in one directory. Detectors that are not
+ * directory-grouped therefore contribute nothing here, which is correct: they
+ * have no per-directory claim to make.
+ */
+export function votesByDirectory(
+  findings: DriftFinding[],
+): Partial<Record<DriftCategory, Record<string, CategoryVote>>> {
+  const out: Partial<Record<DriftCategory, Record<string, CategoryVote>>> = {};
+  for (const f of findings) {
+    if (f.subCategory === SECURITY_SUPPRESSION_SUBCATEGORY) continue;
+    const paths = [...(f.dominantFiles ?? []), ...f.deviatingFiles.map((d) => d.path)];
+    if (paths.length === 0) continue;
+    const dirs = new Set(paths.map(directoryOf));
+    if (dirs.size !== 1) continue;
+    const dir = [...dirs][0]!;
+    const bucket = (out[f.driftCategory] ??= {});
+    const existing = bucket[dir];
+    if (existing && existing.totalRelevantFiles >= f.totalRelevantFiles) continue;
+    bucket[dir] = { ...toCategoryVote(f), directory: dir };
+  }
+  return out;
+}
+
 /** Build a CategoryVote from a single finding. Shared by votesFromFindings
  *  (keyed by driftCategory) and securitySubVotesFromFindings (keyed by
  *  subCategory) so the vote shape lives in exactly one place. */
@@ -219,6 +266,7 @@ export function assembleBaseline(
     rootDir,
     ctxFiles,
     perCategoryVote: votesFromFindings(driftFindings),
+    perDirectoryVote: votesByDirectory(driftFindings),
     securitySubVotes: securitySubVotesFromFindings(driftFindings),
     intentHints: ctx.intentHints ?? [],
     minhashIndex,

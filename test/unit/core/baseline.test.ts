@@ -10,6 +10,7 @@ import {
   loadBaselineUnchecked,
   computeBaselineKey,
   votesFromFindings,
+  votesByDirectory,
   securitySubVotesFromFindings,
   toCategoryVote,
   BASELINE_VERSION,
@@ -347,5 +348,63 @@ describe("buildBaseline + persistence round-trip", () => {
     expect(Object.keys(assembled.perCategoryVote).sort()).toEqual(
       Object.keys(standalone.perCategoryVote).sort(),
     );
+  });
+});
+
+describe("votesByDirectory", () => {
+  const base = {
+    detector: "return-shape-consistency",
+    driftCategory: "return_shape_consistency" as const,
+    severity: "warning" as const,
+    confidence: 0.8,
+    finding: "",
+    recommendation: "",
+    dominantPattern: "null/undefined sentinels",
+    dominantCount: 11,
+    totalRelevantFiles: 14,
+    consistencyScore: 79,
+    dominantFiles: [] as string[],
+    deviatingFiles: [] as Array<{ path: string; detectedPattern: string; evidence: never[] }>,
+  };
+  const finding = (over: Partial<typeof base>) => ({ ...base, ...over }) as never;
+
+  it("keeps one vote per (category, directory) instead of collapsing to one", () => {
+    const out = votesByDirectory([
+      finding({
+        dominantPattern: "null/undefined sentinels",
+        dominantFiles: ["src/components/CalendarStrip.tsx"],
+        deviatingFiles: [{ path: "src/components/Feed.tsx", detectedPattern: "throws on error", evidence: [] }],
+      }),
+      finding({
+        dominantPattern: "error-object returns",
+        dominantCount: 4,
+        totalRelevantFiles: 5,
+        dominantFiles: ["src/lib/follows.ts"],
+        deviatingFiles: [{ path: "src/lib/other.ts", detectedPattern: "throws on error", evidence: [] }],
+      }),
+    ]);
+    const byDir = out.return_shape_consistency!;
+    expect(Object.keys(byDir).sort()).toEqual(["src/components", "src/lib"]);
+    expect(byDir["src/components"]!.dominantPattern).toBe("null/undefined sentinels");
+    expect(byDir["src/lib"]!.dominantPattern).toBe("error-object returns");
+    expect(byDir["src/lib"]!.directory).toBe("src/lib");
+  });
+
+  it("omits a vote whose files span more than one directory", () => {
+    const out = votesByDirectory([
+      finding({
+        dominantFiles: ["src/a/one.ts"],
+        deviatingFiles: [{ path: "src/b/two.ts", detectedPattern: "throws on error", evidence: [] }],
+      }),
+    ]);
+    expect(out.return_shape_consistency ?? {}).toEqual({});
+  });
+
+  it("keeps the widest denominator when one directory yields two findings", () => {
+    const out = votesByDirectory([
+      finding({ dominantFiles: ["src/lib/a.ts"], totalRelevantFiles: 4, dominantPattern: "narrow" }),
+      finding({ dominantFiles: ["src/lib/b.ts"], totalRelevantFiles: 9, dominantPattern: "wide" }),
+    ]);
+    expect(out.return_shape_consistency!["src/lib"]!.dominantPattern).toBe("wide");
   });
 });

@@ -178,8 +178,13 @@ describe("runEditChecks", () => {
 
   it("reports checked=false when the detector itself errors", async () => {
     // a structurally broken baseline makes detectDrift throw; the fail-open
-    // catch must report the check as NOT run, never as a clean pass
-    const broken = { ...baseline, perCategoryVote: undefined } as unknown as RepoDriftBaseline;
+    // catch must report the check as NOT run, never as a clean pass.
+    // The break has to land INSIDE detectDrift, past the early guards: a
+    // minhashIndex with a readable `length` clears the entry-count check at the
+    // top of runEditChecks, then throws on `.filter` within the detector.
+    // perCategoryVote used to serve here, but the in-loop path now reads
+    // perDirectoryVote, so nulling it no longer throws anywhere.
+    const broken = { ...baseline, minhashIndex: { length: 0 } } as unknown as RepoDriftBaseline;
     const out = await runEditChecks(opts({ sessionId: "s-chk-err", loadBaselineFor: async () => broken }));
     expect(out.flags).toEqual([]);
     expect(out.checked).toBe(false);
