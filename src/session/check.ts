@@ -20,6 +20,7 @@ import { newActivityId, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
 import { isInLoopCheckable } from "../drift/utils.js";
+import { verifyCounterpart } from "./counterpart.js";
 
 export const INLINE_CHECK_MAX_ENTRIES = 2000;
 export const COOLDOWN_MS = 5 * 60_000;
@@ -121,6 +122,16 @@ async function writeState(opts: EditCheckOptions, state: CooldownState): Promise
  *  above any baseline the inline entry gate would accept anyway. */
 const HOOK_BASELINE_MAX_BYTES = 8 * 1024 * 1024;
 
+/** Read a file for counterpart verification. Null on any failure, which the
+ *  verifier treats as fail-open. */
+async function readFileOrNull(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOutcome> {
   const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineUnchecked(rootDir, HOOK_BASELINE_MAX_BYTES));
   const now = opts.now ?? Date.now;
@@ -203,9 +214,24 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     });
   }
 
+  // Verify the counterpart before citing it. The index is built once per
+  // session, so by now the function it names may have moved or been lifted out
+  // entirely — in which case the agent MOVED this code rather than duplicating
+  // it, and "prefer importing it" would point at a file it just emptied.
+  // Measured on a recorded session: this is every duplicate advisory that
+  // session produced. See src/session/counterpart.ts.
   const topDup = [...dupsByLoc.values()].sort((a, b) => b.similarity - a.similarity)[0];
-  if (topDup) {
-    const where = `${topDup.relativePath}:${topDup.line}`;
+  const dupStatus = topDup
+    ? verifyCounterpart({
+        name: topDup.name,
+        relativePath: topDup.relativePath,
+        line: topDup.line,
+        fileContent: await readFileOrNull(join(opts.rootDir, topDup.relativePath)),
+        language: detectLanguage(topDup.relativePath),
+      })
+    : null;
+  if (topDup && dupStatus && dupStatus.status !== "gone") {
+    const where = `${topDup.relativePath}:${dupStatus.line}`;
     const event = mkFlag({
       file: relPath,
       category: "redundancy",

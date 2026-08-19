@@ -310,3 +310,58 @@ describe("runEditChecks file-class gate", () => {
     expect(out.flags.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("runEditChecks duplicate counterpart verification", () => {
+  // Reproduces the recorded shape: the helper the index still lists is
+  // lifted out of its original file, so the "duplicate" is really a move.
+  it("suppresses the advisory when the counterpart was moved out", async () => {
+    const sessionsDir2 = realpathSync(mkdtempSync(join(tmpdir(), "vd-move-")));
+    const repo2 = realpathSync(mkdtempSync(join(tmpdir(), "vd-move-repo-")));
+    mkdirSync(join(repo2, "src"), { recursive: true });
+    writeFileSync(join(repo2, "src", "origin.ts"), `${HELPER_BODY}\n`);
+    writeFileSync(join(repo2, "src", "a.ts"), "export async function a(){ return await fetch('/a'); }\n");
+    writeFileSync(join(repo2, "src", "b.ts"), "export async function b(){ return await fetch('/b'); }\n");
+    const b2 = await buildBaseline(repo2);
+    expect(b2.minhashIndex.some((e) => e.relativePath === "src/origin.ts")).toBe(true);
+
+    // The agent moves the helper: origin.ts no longer defines it, shared.ts does.
+    writeFileSync(join(repo2, "src", "origin.ts"), "export const unrelated = 1;\n");
+
+    const out = await runEditChecks({
+      rootDir: repo2,
+      projectHash: "feedfacefeedfacf",
+      sessionId: "s-move",
+      sessionsDir: sessionsDir2,
+      file: join(repo2, "src", "shared.ts"),
+      body: HELPER_BODY,
+      loadBaselineFor: async () => b2,
+    });
+    expect(out.flags.filter((f) => f.detail.category === "redundancy")).toHaveLength(0);
+    rmSync(repo2, { recursive: true, force: true });
+    rmSync(sessionsDir2, { recursive: true, force: true });
+  }, 60_000);
+
+  it("still flags a genuine copy that leaves the original in place", async () => {
+    const sessionsDir3 = realpathSync(mkdtempSync(join(tmpdir(), "vd-copy-")));
+    const repo3 = realpathSync(mkdtempSync(join(tmpdir(), "vd-copy-repo-")));
+    mkdirSync(join(repo3, "src"), { recursive: true });
+    writeFileSync(join(repo3, "src", "origin.ts"), `${HELPER_BODY}\n`);
+    writeFileSync(join(repo3, "src", "a.ts"), "export async function a(){ return await fetch('/a'); }\n");
+    writeFileSync(join(repo3, "src", "b.ts"), "export async function b(){ return await fetch('/b'); }\n");
+    const b3 = await buildBaseline(repo3);
+
+    // origin.ts keeps the helper — this really is a duplication.
+    const out = await runEditChecks({
+      rootDir: repo3,
+      projectHash: "feedfacefeedfad0",
+      sessionId: "s-copy",
+      sessionsDir: sessionsDir3,
+      file: join(repo3, "src", "shared.ts"),
+      body: HELPER_BODY,
+      loadBaselineFor: async () => b3,
+    });
+    expect(out.flags.filter((f) => f.detail.category === "redundancy").length).toBeGreaterThanOrEqual(1);
+    rmSync(repo3, { recursive: true, force: true });
+    rmSync(sessionsDir3, { recursive: true, force: true });
+  }, 60_000);
+});
