@@ -4,7 +4,7 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
-## [Unreleased]
+## 0.20.0 — 2026-08-19
 
 **The in-loop checks stop telling you your own conventions are wrong, and the function index finally sees the methods it was blind to.**
 
