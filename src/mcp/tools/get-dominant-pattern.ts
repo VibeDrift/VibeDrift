@@ -19,7 +19,7 @@ export const registerGetDominantPattern = {
       {
         title: "Get the repo's dominant pattern",
         description:
-          "Ask what THIS repo's convention is for a dimension (error_handling, imports, exports, async, naming, data_access, logging, auth) before writing new code. Returns the majority pattern, how consistent the repo is, and up to 3 example files to copy. Local; needs a prior `vibedrift scan` to build the baseline.",
+          "Ask what THIS repo's convention is for a dimension (error_handling, imports, exports, async, naming, data_access, logging, auth) before writing new code. Pass `path` (the file you are about to write) — conventions are measured PER DIRECTORY, so without it you get the repo's widest-sampled directory, which may follow a different convention from the one you are editing. Returns the majority pattern, how consistent that directory is, and up to 3 example files to copy. Local; needs a prior `vibedrift scan` to build the baseline.",
         inputSchema,
       },
       async (args) => toToolResult(await run(args)),
