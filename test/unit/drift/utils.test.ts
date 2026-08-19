@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildDirectoryScopedVote,
+  isInLoopCheckable,
   directoryOf,
   buildPatternDistribution,
   findDominantPattern,
@@ -291,5 +292,33 @@ describe("project-scoped helpers remain available", () => {
     const dom = findDominantPattern(dist);
     expect(dom?.dominant).toBe("X");
     expect(dom?.dominantCount).toBe(2);
+  });
+});
+
+describe("isInLoopCheckable", () => {
+  it("rejects the file classes that produced audited false positives", () => {
+    // Each of these was flagged in a real recorded session and was a false
+    // positive: the file class legitimately uses a different convention from
+    // application code.
+    expect(isInLoopCheckable("tests/integration/global-setup.ts")).toBe(false);
+    expect(isInLoopCheckable("scripts/seed-soak.ts")).toBe(false);
+    expect(isInLoopCheckable("scripts/seed-dev.ts")).toBe(false);
+    expect(isInLoopCheckable("src/lib/rate-limit.test.ts")).toBe(false);
+    expect(isInLoopCheckable("src/scratch-probe.ts")).toBe(false);
+  });
+
+  it("still accepts ordinary application source in every supported language", () => {
+    expect(isInLoopCheckable("src/actions/blocks.ts")).toBe(true);
+    expect(isInLoopCheckable("src/lib/follows.ts")).toBe(true);
+    expect(isInLoopCheckable("internal/service/user.go")).toBe(true);
+    expect(isInLoopCheckable("app/models/user.py")).toBe(true);
+    expect(isInLoopCheckable("src/parser/mod.rs")).toBe(true);
+  });
+
+  it("does not reject a path merely for containing a keyword substring", () => {
+    // A source directory named `transcripts/` is application code and must not
+    // be caught by the `scripts` alternative.
+    expect(isInLoopCheckable("src/transcripts/render.ts")).toBe(true);
+    expect(isInLoopCheckable("src/benchmarking/report.ts")).toBe(true);
   });
 });

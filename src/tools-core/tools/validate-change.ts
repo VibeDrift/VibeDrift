@@ -13,7 +13,7 @@ import { z } from "zod";
 import { relative, resolve } from "node:path";
 import type { DriftCategory } from "../../drift/types.js";
 import { SECURITY_SUBCATEGORIES } from "../../drift/types.js";
-import type { RepoDriftBaseline } from "../../core/baseline.js";
+import type { RepoDriftBaseline, CategoryVote } from "../../core/baseline.js";
 import type { IntentHint } from "../../intent/types.js";
 import { getBaseline } from "../../mcp/baseline-provider.js";
 import { classifyRouteAuth } from "../../drift/route-auth-classify.js";
@@ -25,6 +25,7 @@ import { noBaselineData, type Status } from "../result.js";
 import { deepAnalyze, bodyToPayloads, inferLanguage, degradeMessage, type DeepResult } from "../../mcp/deep-client.js";
 import { buildCandidatePayloads } from "../../mcp/candidate-feeder.js";
 import { deepDuplicatesViaIndex } from "../../mcp/deep-index.js";
+import { directoryOf } from "../../drift/utils.js";
 
 const DUPLICATE_THRESHOLD = 0.8; // a CHANGE introducing a near-clone — stricter than discovery
 const MAX_MATCHES = 20;
@@ -134,16 +135,47 @@ const DIM_CHECKS: DimensionCheck[] = [
   },
 ];
 
-/** The dominant to validate against for a dimension: the detector vote when it
- *  established one IN THIS dimension's vocabulary, ELSE the team's declared
- *  convention (highest-confidence intent hint). The declared fallback is what
- *  catches the FIRST deviation in a fully-consistent dimension (no finding, so
- *  no vote, but the rule is binding). Note architectural_consistency is a
- *  COMPOSITE category — its stored vote may be a DI label, not data-access — so
- *  the vote is only honored when it's actually a data-access label; otherwise
- *  the declared ORM/repository rule stands in. */
-function effectiveDominant(baseline: RepoDriftBaseline, check: DimensionCheck): EffectiveDominant | null {
-  const vote = baseline.perCategoryVote[check.dimension];
+/** The vote for the edited file's OWN directory, or undefined.
+ *
+ *  All three DIM_CHECKS dimensions are directory-grouped by their detectors
+ *  (return-shape via buildDirectoryGroups, async and architectural via
+ *  buildDirectoryScopedVote), so a directory is the only scope in which a
+ *  "dominant pattern" means anything here. The repo-wide perCategoryVote is
+ *  deliberately NOT consulted: it holds whichever single directory had the
+ *  widest denominator, and applying that to every file is what made this check
+ *  tell Next.js server actions to adopt a React component's return shape. */
+function dirVoteFor(
+  baseline: RepoDriftBaseline,
+  dimension: DimensionCheck["dimension"],
+  relTarget: string,
+): CategoryVote | undefined {
+  return baseline.perDirectoryVote?.[dimension]?.[directoryOf(relTarget)];
+}
+
+/** The dominant to validate against for a dimension.
+ *
+ *  Resolution order, precision-first:
+ *    1. The vote for the edited file's OWN directory — the only vote that can
+ *       be said to describe this file's peers.
+ *    2. The team's declared convention (highest-confidence intent hint), which
+ *       is project-wide by construction and therefore always in scope. This is
+ *       what catches the FIRST deviation in a fully-consistent dimension.
+ *    3. Nothing.
+ *
+ *  A directory with no vote is a directory whose convention could not be
+ *  established: either it is unanimous, so there is nothing to deviate from, or
+ *  it is below the dominance threshold, so no convention exists. Both mean
+ *  silence, not borrowing another directory's rule.
+ *
+ *  architectural_consistency remains a COMPOSITE category — its stored vote may
+ *  be a DI label, not data-access — so a vote is only honored when it is
+ *  actually in this dimension's vocabulary. */
+function effectiveDominant(
+  baseline: RepoDriftBaseline,
+  check: DimensionCheck,
+  relTarget: string,
+): EffectiveDominant | null {
+  const vote = dirVoteFor(baseline, check.dimension, relTarget);
   if (vote && check.labels.has(vote.dominantPattern)) {
     return { display: vote.dominantPattern, source: "vote", refFiles: vote.dominantFiles };
   }
@@ -171,7 +203,7 @@ export function validateChange(
   // The classifier returns the dimension's DISPLAY label, matching what the
   // vote stores, so the comparison is apples-to-apples.
   for (const check of DIM_CHECKS) {
-    const dom = effectiveDominant(baseline, check);
+    const dom = effectiveDominant(baseline, check, relTarget);
     if (!dom) continue;
     const mine = check.classify(body, relTarget);
     if (!mine || mine === dom.display) continue;
@@ -197,7 +229,7 @@ export function validateChange(
   const duplicateOf = findSimilarToBody(body, index, { threshold: DUPLICATE_THRESHOLD, cap: MAX_MATCHES });
 
   const referenceFiles = conflicts.length
-    ? (baseline.perCategoryVote[conflicts[0].dimension]?.dominantFiles ?? []).slice(0, 3)
+    ? (dirVoteFor(baseline, conflicts[0].dimension, relTarget)?.dominantFiles ?? []).slice(0, 3)
     : [];
 
   // Low confidence when the dimension we judged is itself only weakly dominant
@@ -205,8 +237,8 @@ export function validateChange(
   // tipping the balance. A declared-rule fallback (no vote) is binding, so it
   // stays high. Honest hedge per the deferred delta-vote.
   const judgedVote = conflicts.length
-    ? baseline.perCategoryVote[conflicts[0].dimension]
-    : baseline.perCategoryVote.async_patterns;
+    ? dirVoteFor(baseline, conflicts[0].dimension, relTarget)
+    : dirVoteFor(baseline, "async_patterns", relTarget);
   const confidence: "high" | "low" = judgedVote && judgedVote.consistencyScore < THIN_MARGIN ? "low" : "high";
 
   return {

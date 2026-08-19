@@ -35,12 +35,24 @@ export function detectDomainCategory(name: string, body: string): string {
 }
 
 // Tokenize body for comparison (strip comments, normalize strings)
+//
+// ORDER IS LOAD-BEARING: string literals are neutralized BEFORE comments.
+// A `//` inside a literal — `'https://example.invalid'` — would otherwise be
+// read as a comment start, deleting the closing quote and desynchronizing
+// quote pairing for the remainder of the body. Measured on the audited session
+// population: that leaked 45 distinct English words out of test-name literals
+// into one stored anchor, and swallowed 43% of another file's tokens.
+//
+// Block comments are stripped before line comments for the same reason in the
+// other direction: a `//` inside a block comment must not terminate scanning
+// early.
 export function tokenizeBody(body: string): string[] {
-  let cleaned = body.replace(/\/\/.*$/gm, "").replace(/#.*$/gm, "");
+  let cleaned = body
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
   cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
-  cleaned = cleaned.replace(/"(?:[^"\\]|\\.)*"/g, '""');
-  cleaned = cleaned.replace(/'(?:[^'\\]|\\.)*'/g, "''");
-  cleaned = cleaned.replace(/`(?:[^`\\]|\\.)*`/g, "``");
+  cleaned = cleaned.replace(/\/\/.*$/gm, "").replace(/#.*$/gm, "");
   return cleaned.match(/[a-zA-Z_]\w*|[0-9]+|[{}()[\];,.:=<>!+\-*/%&|^~?]/g) ?? [];
 }
 
@@ -84,6 +96,8 @@ function extractBody(content: string, startAfterBrace: number, language: string)
 
 interface FnPattern {
   re: RegExp;
+  /** Verify the captured params are a real parameter list (method shorthand only). */
+  realParamList?: boolean;
   /**
    * true  → the regex match already ends at the start of the body, so the
    *         body begins at `match.index + match[0].length` (Go/Rust end at
@@ -192,23 +206,157 @@ function findBodyOpenBrace(content: string, fromIndex: number, isArrow: boolean)
 
 function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
   if (language === "go") {
-    return [{ re: /func\s+(?:\([^)]*\)\s+)?(\w+)\s*\(([^)]*)\)\s*(?:[^{]*)?\{/g, bodyAfterMatch: true, isArrow: false }];
+    // `(?:\[[^\]]*\])?` admits generic type parameters, which sit between the
+    // name and the parameter list: `func Map[T any, U any](in []T) []U {`.
+    return [
+      {
+        re: /func\s+(?:\([^)]*\)\s+)?(\w+)\s*(?:\[[^\]]*\])?\s*\(([^)]*)\)\s*(?:[^{]*)?\{/g,
+        bodyAfterMatch: true,
+        isArrow: false,
+      },
+    ];
   }
   if (language === "javascript" || language === "typescript") {
     return [
       // Match up to the parameter `)`; findBodyOpenBrace locates the body brace
       // past any return-type annotation (which may contain `{`, `<>`, `=>`).
-      { re: /(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/g, bodyAfterMatch: false, isArrow: false },
-      { re: /(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?(?:<[^>]*>\s*)?\(([^)]*)\)/g, bodyAfterMatch: false, isArrow: true },
+      // `\*?` admits generator declarations (`function* walk()`).
+      {
+        re: /(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/g,
+        bodyAfterMatch: false,
+        isArrow: false,
+      },
+      // `let`/`var` alongside `const`: an arrow bound to any of them is a
+      // function, and only `const` was indexed before.
+      {
+        re: /(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:<[^>]*>\s*)?\(([^)]*)\)/g,
+        bodyAfterMatch: false,
+        isArrow: true,
+      },
+      // Method shorthand: class methods, object-literal methods, generators,
+      // getters and setters. None of these were indexed before, which is why a
+      // class-heavy file contributed far fewer entries than it has functions.
+      //
+      // Three guards keep this from over-matching, in order of importance:
+      //  1. `^[ \t]*` anchors to a line start, so a mid-line call expression
+      //     can never match.
+      //  2. The negative lookahead excludes the keywords that share the shape
+      //     `name (args) { ... }` — if, for, while, switch, catch, and the
+      //     declaration forms already covered by the patterns above. It also
+      //     excludes `constructor`, which is a real function but a pathological
+      //     one to index: constructors are structurally forced to resemble each
+      //     other, so they flood duplicate detection without carrying signal.
+      //     Measured on ionic-framework, indexing them produced 80 of 214
+      //     duplicate findings on its own. They were never indexed before this
+      //     pattern existed and stay unindexed.
+      //  3. The body brace must follow the parameter list directly, separated
+      //     only by whitespace or a TS return-type annotation containing
+      //     neither `;`, `{`, nor a NEWLINE. This rejects `describe("x", () => {`,
+      //     whose block belongs to the arrow rather than to `describe`, and
+      //     interface or type-literal members, which have no body at all.
+      //     The newline exclusion is load-bearing for semicolon-free TypeScript
+      //     (prettier `semi: false`): without it the scan runs past a bodiless
+      //     declaration to the first `{` anywhere below, indexing a garbage body
+      //     of comments and other declarations. A return type spans one line in
+      //     practice, and a method whose brace sits on the NEXT line still
+      //     matches because the trailing `\s*` may cross newlines.
+      {
+        re: /^[ \t]*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*\*?\s*(?!(?:if|for|while|switch|catch|do|else|return|typeof|new|function|const|let|var|class|interface|type|import|export|await|yield|constructor)\b)(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^;{\n]*?)?\s*\{/gm,
+        bodyAfterMatch: true,
+        isArrow: false,
+        realParamList: true,
+      },
     ];
   }
   if (language === "python") {
     return [{ re: /def\s+(\w+)\s*\(([^)]*)\)\s*(?:->[^:]*)?:/g, bodyAfterMatch: true, isArrow: false }];
   }
   if (language === "rust") {
-    return [{ re: /(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?:->[^{]*)?\{/g, bodyAfterMatch: true, isArrow: false }];
+    // Everything between the parameter list and the body brace is signature: a
+    // return type, a `where` clause, or both across several lines. `->` used to
+    // do that spanning, so a `where` clause with no return type had nothing to
+    // consume it. `[^{]*` is greedy-free of braces and therefore stops at the
+    // first `{`, which is the body in both shapes.
+    return [
+      {
+        re: /(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*[^{]*\{/g,
+        bodyAfterMatch: true,
+        isArrow: false,
+      },
+    ];
   }
   return [];
+}
+
+/**
+ * A body whose only statement is a `throw` — a not-implemented stub.
+ *
+ * Stubs carry no reusable logic but are byte-identical everywhere they appear,
+ * so indexing them manufactures duplicate findings and tells a developer to
+ * "extract" something that does nothing. Measured on one provider-client
+ * codebase, `throw new Error("Method not implemented.")` appeared as three
+ * different method names across nine files and dominated a 7.1-point composite
+ * drop.
+ *
+ * Deliberately narrow: a throw that follows any other statement, or sits behind
+ * a guard, is real logic and stays indexed.
+ */
+function isStubBody(tokens: string[]): boolean {
+  if (tokens[0] !== "throw") return false;
+  // The captured body carries the closing brace(s), so trim trailing `}` and
+  // `;` before deciding. What remains after the throw's terminating `;` must be
+  // nothing: any further statement means the throw is part of real control flow.
+  let end = tokens.length;
+  while (end > 0 && (tokens[end - 1] === "}" || tokens[end - 1] === ";")) end--;
+  return !tokens.slice(1, end).includes(";");
+}
+
+/**
+ * Whether a method-shorthand match's parameter list is really a parameter list.
+ *
+ * The pattern captures parameters with `[^)]*`, which stops at the FIRST `)`.
+ * For a call expression taking a callback — `test('name', function (assert) {` —
+ * that first `)` is the CALLBACK's parameter close, so the body-brace guard sees
+ * the callback's own brace and the match succeeds, indexing an entry named after
+ * the CALLEE. Measured on a callback-heavy repo, this inflated the function index
+ * from 2190 to 5114 entries, every one of them a phantom named `test`, `it`,
+ * `describe` or a DSL registration helper.
+ *
+ * That is worse than a normal false positive: function count is the DENOMINATOR
+ * the duplicate scorer divides by, so the inflation moved the composite in the
+ * OPTIMISTIC direction while the honest duplicate fraction had gone up.
+ *
+ * Rejecting any match whose captured params contain `(` would also discard
+ * genuine methods with function-typed parameters (`mapAll(fn: (x: number) => number)`).
+ * So when the capture is unbalanced we walk the real parens: find the true
+ * matching close, then require the body brace to follow it, allowing a
+ * single-line return-type annotation. A callback call fails that test because its
+ * matching close sits after the callback body, followed by `)` or `;`.
+ */
+function hasRealParamList(content: string, matchStart: number, matched: string): boolean {
+  const openRel = matched.indexOf("(");
+  if (openRel < 0) return false;
+  const openIdx = matchStart + openRel;
+  let depth = 0;
+  let i = openIdx;
+  for (; i < content.length; i++) {
+    const c = content[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  if (depth !== 0) return false;
+  // Skip whitespace, then an optional one-line return-type annotation, then the
+  // body brace must be next.
+  let j = i + 1;
+  while (j < content.length && (content[j] === " " || content[j] === "\t" || content[j] === "\n" || content[j] === "\r")) j++;
+  if (content[j] === ":") {
+    while (j < content.length && content[j] !== "{" && content[j] !== ";" && content[j] !== "\n") j++;
+  }
+  while (j < content.length && (content[j] === " " || content[j] === "\t" || content[j] === "\n" || content[j] === "\r")) j++;
+  return content[j] === "{";
 }
 
 // Extract all functions from a single source file
@@ -218,12 +366,13 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
 
   const patterns = getLanguagePatterns(file.language);
 
-  for (const { re, bodyAfterMatch, isArrow } of patterns) {
+  for (const { re, bodyAfterMatch, isArrow, realParamList } of patterns) {
     const regex = new RegExp(re.source, re.flags);
     let match;
     while ((match = regex.exec(file.content)) !== null) {
       const name = match[1];
       const paramsStr = match[2];
+      if (realParamList && paramsStr.includes("(") && !hasRealParamList(file.content, match.index, match[0])) continue;
 
       let startIndex: number;
       if (bodyAfterMatch) {
@@ -242,6 +391,7 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
       const declarationCode = (file.content.split("\n")[line - 1] ?? "").trim();
       const tokens = tokenizeBody(body);
       if (tokens.length < 5) continue;
+      if (isStubBody(tokens)) continue;
 
       functions.push({
         name,

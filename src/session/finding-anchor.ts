@@ -215,7 +215,13 @@ export function signalPresent(
       //
       // Neither check alone is one-sided safe. Their OR is: it can only keep more
       // findings open than either, never clear one that either would have kept.
-      if (anchor.kind !== "function") return true;
+      //
+      // A file-kind anchor used to return `true` unconditionally here, which
+      // made such a finding unresolvable by ANY edit — verified against an
+      // empty file, a one-line file, a comment-only file, whitespace and
+      // unrelated code, all of which reported "still present". It has no single
+      // construct to name, but it does carry the flagged token sequence, so
+      // containment is still meaningful and still one-sided safe.
       return (
         tokenContainment(anchor.tokens, body) >= REDUNDANCY_CONTAINMENT ||
         validateChangeAgainstBaseline(baseline, relFile, body).duplicateOf.length > 0

@@ -19,6 +19,7 @@
  */
 
 import type { SavedScan, FindingDigest } from "../core/history.js";
+import { compareByCodeUnit } from "../core/baseline.js";
 
 export interface DiffResult {
   findingsDiff: FindingDelta;
@@ -72,12 +73,12 @@ function diffBy(
 
   // Sort for deterministic output: resolved by analyzerId, new by
   // severity (error → warning → info) then analyzerId.
-  resolved.sort((a, b) => a.analyzerId.localeCompare(b.analyzerId));
+  resolved.sort((a, b) => compareByCodeUnit(a.analyzerId, b.analyzerId));
   const sevRank: Record<FindingDigest["severity"], number> = { error: 0, warning: 1, info: 2 };
   added.sort(
-    (a, b) => sevRank[a.severity] - sevRank[b.severity] || a.analyzerId.localeCompare(b.analyzerId),
+    (a, b) => sevRank[a.severity] - sevRank[b.severity] || compareByCodeUnit(a.analyzerId, b.analyzerId),
   );
-  persistent.sort((a, b) => a.analyzerId.localeCompare(b.analyzerId));
+  persistent.sort((a, b) => compareByCodeUnit(a.analyzerId, b.analyzerId));
 
   return { resolved, new: added, persistent };
 }

@@ -12,6 +12,7 @@ import { SECURITY_SUBCATEGORIES } from "../../drift/types.js";
 import type { RepoDriftBaseline } from "../../core/baseline.js";
 import { getBaseline } from "../../mcp/baseline-provider.js";
 import { noBaselineData, type Status } from "../result.js";
+import { directoryOf } from "../../drift/utils.js";
 
 const DIM = {
   error_handling: "return_shape_consistency",
@@ -36,6 +37,12 @@ const SECURITY_SUB_DIM: Partial<Record<DominantDimension, string>> = {
 export const inputSchema = {
   rootDir: z.string().describe("Absolute path to the repository root"),
   dimension: z.enum(DIMENSIONS as [DominantDimension, ...DominantDimension[]]),
+  path: z
+    .string()
+    .optional()
+    .describe(
+      "Repo-relative path of the file you are about to write. Strongly recommended: conventions are measured per directory, so without it you get the repo's widest-sampled directory, which may not be the one you are editing.",
+    ),
 };
 
 export interface DominantPatternProjection {
@@ -45,24 +52,48 @@ export interface DominantPatternProjection {
   examples: string[];
 }
 
-/** Pure projection of a baseline vote into the caller-facing shape. */
+/** Pure projection of a baseline vote into the caller-facing shape.
+ *
+ *  `relPath` scopes the answer to the caller's own directory, which is the only
+ *  scope in which "the dominant pattern" means anything: conventions are voted
+ *  per directory by the detectors. Without it the answer is the repo's
+ *  widest-sampled directory, which is what let a React component's return shape
+ *  be reported as the convention for a directory of server actions.
+ *
+ *  When a path IS given and its directory has no vote, the honest answer is
+ *  "no convention established here", not another directory's rule. */
 export function dominantPatternFor(
   baseline: RepoDriftBaseline,
   dimension: DominantDimension,
+  relPath?: string,
 ): DominantPatternProjection {
   const subKey = SECURITY_SUB_DIM[dimension];
-  const vote = subKey ? baseline.securitySubVotes?.[subKey] : baseline.perCategoryVote[DIM[dimension]];
+  const scoped = relPath !== undefined && !subKey;
+  const dir = relPath === undefined ? undefined : directoryOf(relPath);
+  const vote = subKey
+    ? baseline.securitySubVotes?.[subKey]
+    : scoped
+      ? baseline.perDirectoryVote?.[DIM[dimension]]?.[dir!]
+      : baseline.perCategoryVote[DIM[dimension]];
   if (!vote) {
     return {
       dimension,
       dominantPattern: "consistent",
-      consistency: baseline.ctxFiles.length ? "100% — no deviations detected" : "no files analyzed",
+      consistency: scoped
+        ? `no convention established in ${dir}/ — nothing to match`
+        : baseline.ctxFiles.length
+          ? "100% — no deviations detected"
+          : "no files analyzed",
       examples: [],
     };
   }
   const pct = Math.round(vote.consistencyScore);
   const unit = SECURITY_SUB_DIM[dimension] ? "routes" : "files";
-  const base = `${vote.dominantCount} of ${vote.totalRelevantFiles} ${unit} (${pct}%)`;
+  // Name the directory a vote was measured over so its scope is never read as
+  // repo-wide. A vote with no directory came from a detector that does not
+  // group by directory, and is genuinely repo-wide.
+  const where = vote.directory ? ` in ${vote.directory}/` : "";
+  const base = `${vote.dominantCount} of ${vote.totalRelevantFiles} ${unit}${where} (${pct}%)`;
   const consistency = vote.belowPeerFloor
     ? `${base} - thin sample (below the reliable-sample floor), treat as advisory`
     : base;
@@ -82,9 +113,11 @@ export interface DominantPatternOut extends DominantPatternProjection {
 export async function run({
   rootDir,
   dimension,
+  path,
 }: {
   rootDir: string;
   dimension: DominantDimension;
+  path?: string;
 }): Promise<DominantPatternOut & { dominantPattern: string | null }> {
   const { baseline, status } = await getBaseline(rootDir);
   if (!baseline) {
@@ -92,5 +125,5 @@ export async function run({
       dominantPattern: null;
     };
   }
-  return { status, ...dominantPatternFor(baseline, dimension) };
+  return { status, ...dominantPatternFor(baseline, dimension, path) };
 }

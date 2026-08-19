@@ -18,6 +18,21 @@ import { buildSignature } from "../../../../src/codedna/minhash.js";
 import { buildBaseline, writeBaseline, type RepoDriftBaseline } from "../../../../src/core/baseline.js";
 import { __clearBaselineCache } from "../../../../src/mcp/baseline-provider.js";
 
+/** Mirror a category vote map into the directory the tests validate against.
+ *  validateChange now reads perDirectoryVote, scoped to the edited file's own
+ *  directory, so a fixture vote must live in that directory to bind. Every
+ *  target below is a bare filename, whose directoryOf() is ".". */
+function asDirVotes(
+  perCategoryVote: RepoDriftBaseline["perCategoryVote"],
+  dir = ".",
+): RepoDriftBaseline["perDirectoryVote"] {
+  const out: NonNullable<RepoDriftBaseline["perDirectoryVote"]> = {};
+  for (const [cat, vote] of Object.entries(perCategoryVote)) {
+    if (vote) out[cat as keyof typeof out] = { [dir]: { ...vote, directory: dir } };
+  }
+  return out;
+}
+
 const THEN_BODY = ["function f(){", "  return a()", "    .then(x => x)", "    .then(y => y);", "}"].join("\n");
 const AWAIT_BODY = ["async function g(){", "  const a = await p();", "  const b = await q();", "  return a + b;", "}"].join("\n");
 
@@ -39,6 +54,21 @@ function baseline(asyncDom: string | null, index: Array<{ path: string; name: st
           },
         }
       : {},
+    perDirectoryVote: asDirVotes(
+      asyncDom
+        ? {
+            async_patterns: {
+              driftCategory: "async_patterns",
+              dominantPattern: asyncDom,
+              dominantCount: 8,
+              totalRelevantFiles: 10,
+              consistencyScore: 80,
+              dominantFiles: ["ref.ts"],
+              deviators: [],
+            },
+          }
+        : {},
+    ),
     intentHints: [],
     minhashIndex: index.map((e) => {
       const s = buildSignature(e.body);
@@ -158,7 +188,16 @@ describe("validateChange — return-shape + data-access single-body classifiers"
     perCategoryVote: RepoDriftBaseline["perCategoryVote"],
     intentHints: RepoDriftBaseline["intentHints"] = [],
   ): RepoDriftBaseline {
-    return { key: "k", rootDir: "/r", ctxFiles: [{ path: "x.ts", hash: "h" }], perCategoryVote, intentHints, minhashIndex: [], builtAt: 0 };
+    return {
+      key: "k",
+      rootDir: "/r",
+      ctxFiles: [{ path: "x.ts", hash: "h" }],
+      perCategoryVote,
+      perDirectoryVote: asDirVotes(perCategoryVote),
+      intentHints,
+      minhashIndex: [],
+      builtAt: 0,
+    };
   }
   const SENTINEL_VOTE: RepoDriftBaseline["perCategoryVote"] = {
     return_shape_consistency: {
@@ -319,5 +358,55 @@ describe("validate_change (integration)", () => {
     (deepAnalyze as ReturnType<typeof vi.fn>).mockClear();
     await run({ rootDir: repo, targetPath: join(repo, "feature.ts"), body: AWAIT_BODY });
     expect(deepAnalyze).not.toHaveBeenCalled();
+  });
+});
+
+describe("validateChange directory scoping", () => {
+  // The measured failure: the repo's only return-shape
+  // finding came from src/components/, and every other directory was then
+  // judged against it. src/actions/ is 10/10 on the opposite convention.
+  const COMPONENTS = {
+    driftCategory: "return_shape_consistency" as const,
+    dominantPattern: "null/undefined sentinels",
+    dominantCount: 11,
+    totalRelevantFiles: 14,
+    consistencyScore: 79,
+    dominantFiles: ["src/components/CalendarStrip.tsx"],
+    deviators: [],
+    directory: "src/components",
+  };
+  const THROWING = "export function f(){ if (!a) { throw new Error('x'); } throw new Error('y'); }";
+
+  function baselineWithDirVote(): RepoDriftBaseline {
+    return {
+      key: "k",
+      rootDir: "/r",
+      ctxFiles: [{ path: "x.ts", hash: "h" }],
+      perCategoryVote: { return_shape_consistency: COMPONENTS },
+      perDirectoryVote: { return_shape_consistency: { "src/components": COMPONENTS } },
+      intentHints: [],
+      minhashIndex: [],
+      builtAt: 0,
+    };
+  }
+
+  it("does not judge a file against another directory's convention", () => {
+    const r = validateChange(baselineWithDirVote(), "src/actions/blocks.ts", THROWING);
+    expect(r.conflicts.filter((c) => c.dimension === "return_shape_consistency")).toHaveLength(0);
+  });
+
+  it("still flags a file that deviates from its OWN directory", () => {
+    const r = validateChange(baselineWithDirVote(), "src/components/Thing.tsx", THROWING);
+    expect(r.conflicts.some((c) => c.dimension === "return_shape_consistency")).toBe(true);
+  });
+
+  it("stays silent when the edited file's directory has no vote", () => {
+    const r = validateChange(baselineWithDirVote(), "src/lib/follows.ts", THROWING);
+    expect(r.conflicts.filter((c) => c.dimension === "return_shape_consistency")).toHaveLength(0);
+  });
+
+  it("cites a reference file from the file's own directory, not another's", () => {
+    const r = validateChange(baselineWithDirVote(), "src/components/Thing.tsx", THROWING);
+    expect(r.referenceFiles.every((f) => f.startsWith("src/components/"))).toBe(true);
   });
 });

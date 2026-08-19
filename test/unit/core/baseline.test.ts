@@ -10,6 +10,8 @@ import {
   loadBaselineUnchecked,
   computeBaselineKey,
   votesFromFindings,
+  votesByDirectory,
+  compareByCodeUnit,
   securitySubVotesFromFindings,
   toCategoryVote,
   BASELINE_VERSION,
@@ -347,5 +349,91 @@ describe("buildBaseline + persistence round-trip", () => {
     expect(Object.keys(assembled.perCategoryVote).sort()).toEqual(
       Object.keys(standalone.perCategoryVote).sort(),
     );
+  });
+});
+
+describe("votesByDirectory", () => {
+  const base = {
+    detector: "return-shape-consistency",
+    driftCategory: "return_shape_consistency" as const,
+    severity: "warning" as const,
+    confidence: 0.8,
+    finding: "",
+    recommendation: "",
+    dominantPattern: "null/undefined sentinels",
+    dominantCount: 11,
+    totalRelevantFiles: 14,
+    consistencyScore: 79,
+    dominantFiles: [] as string[],
+    deviatingFiles: [] as Array<{ path: string; detectedPattern: string; evidence: never[] }>,
+  };
+  const finding = (over: Partial<typeof base>) => ({ ...base, ...over }) as never;
+
+  it("keeps one vote per (category, directory) instead of collapsing to one", () => {
+    const out = votesByDirectory([
+      finding({
+        dominantPattern: "null/undefined sentinels",
+        dominantFiles: ["src/components/CalendarStrip.tsx"],
+        deviatingFiles: [{ path: "src/components/Feed.tsx", detectedPattern: "throws on error", evidence: [] }],
+      }),
+      finding({
+        dominantPattern: "error-object returns",
+        dominantCount: 4,
+        totalRelevantFiles: 5,
+        dominantFiles: ["src/lib/follows.ts"],
+        deviatingFiles: [{ path: "src/lib/other.ts", detectedPattern: "throws on error", evidence: [] }],
+      }),
+    ]);
+    const byDir = out.return_shape_consistency!;
+    expect(Object.keys(byDir).sort()).toEqual(["src/components", "src/lib"]);
+    expect(byDir["src/components"]!.dominantPattern).toBe("null/undefined sentinels");
+    expect(byDir["src/lib"]!.dominantPattern).toBe("error-object returns");
+    expect(byDir["src/lib"]!.directory).toBe("src/lib");
+  });
+
+  it("omits a vote whose files span more than one directory", () => {
+    const out = votesByDirectory([
+      finding({
+        dominantFiles: ["src/a/one.ts"],
+        deviatingFiles: [{ path: "src/b/two.ts", detectedPattern: "throws on error", evidence: [] }],
+      }),
+    ]);
+    expect(out.return_shape_consistency ?? {}).toEqual({});
+  });
+
+  it("keeps the widest denominator when one directory yields two findings", () => {
+    const out = votesByDirectory([
+      finding({ dominantFiles: ["src/lib/a.ts"], totalRelevantFiles: 4, dominantPattern: "narrow" }),
+      finding({ dominantFiles: ["src/lib/b.ts"], totalRelevantFiles: 9, dominantPattern: "wide" }),
+    ]);
+    expect(out.return_shape_consistency!["src/lib"]!.dominantPattern).toBe("wide");
+  });
+});
+
+describe("computeBaselineKey determinism", () => {
+  // localeCompare is locale-dependent, so two machines with different locales
+  // could compute different keys for identical inputs and silently split the
+  // baseline cache. Code-unit order is the same everywhere.
+  const files = [
+    { path: "a-b.ts", hash: "1" },
+    { path: "aB.ts", hash: "2" },
+    { path: "Ab.ts", hash: "3" },
+    { path: "_z.ts", hash: "4" },
+  ];
+
+  it("is independent of input order", () => {
+    const key = computeBaselineKey(files);
+    expect(computeBaselineKey([...files].reverse())).toBe(key);
+    expect(computeBaselineKey([files[2], files[0], files[3], files[1]])).toBe(key);
+  });
+
+  it("uses code-unit ordering, which diverges from every locale collation", () => {
+    // This is the pair that binds: locale collation sorts case-insensitively,
+    // so "a" precedes "B". By code unit "B" (0x42) precedes "a" (0x61). If the
+    // comparator ever goes back to localeCompare, this flips.
+    expect(compareByCodeUnit("B", "a")).toBeLessThan(0);
+    expect("B".localeCompare("a")).toBeGreaterThan(0);
+    expect(compareByCodeUnit("a", "a")).toBe(0);
+    expect(compareByCodeUnit("a-b.ts", "aB.ts")).toBeLessThan(0);
   });
 });

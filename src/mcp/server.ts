@@ -27,7 +27,7 @@ export const SERVER_INSTRUCTIONS = `VibeDrift detects drift in AI-generated code
 
 These in-loop tools are LOCAL and FREE — call them while writing code:
 - init: one-time setup — write .vibedrift/config.json + .vibedriftignore so scans skip fixtures/generated code (call once on a fresh repo).
-- get_dominant_pattern: the codebase's dominant pattern for a category (so new code matches it).
+- get_dominant_pattern: the codebase's dominant pattern for a category (so new code matches it). Pass the 'path' argument — conventions are per-directory, and the repo-wide answer may not be your directory's.
 - get_intent_hints: team-declared conventions from CLAUDE.md / AGENTS.md / .cursorrules.
 - check_file_drift: whether a file diverges from the dominant patterns.
 - find_similar_function: existing near-duplicates of a function you're about to write (avoid re-implementing).

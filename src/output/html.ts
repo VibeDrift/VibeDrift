@@ -7,6 +7,7 @@ import { getAnalyzerKind, DRIFT_DISPLAY_CATEGORIES } from "../scoring/categories
 import { applicableCategoryCount, compositeScopeNote } from "./terminal.js";
 import { formatCount } from "./format.js";
 import { hasFloorTrip } from "./floor-badge.js";
+import { compareByCodeUnit } from "../core/baseline.js";
 
 const SCORING_CATEGORY_LABELS: Record<string, string> = {
   architecturalConsistency: "Architectural",
@@ -555,7 +556,7 @@ function buildDriftConcentration(result: ScanResult, detailedUrl: string): strin
   rows.sort((a, b) => {
     const delta = (a.score - a.weight * 5) - (b.score - b.weight * 5);
     if (delta !== 0) return delta;
-    return a.file.localeCompare(b.file);
+    return compareByCodeUnit(a.file, b.file);
   });
 
   const shown = rows.slice(0, 5);

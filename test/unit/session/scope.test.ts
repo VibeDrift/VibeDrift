@@ -89,3 +89,35 @@ describe("checkScope", () => {
     expect(again.flag).toBeNull();
   });
 });
+
+describe("checkScope repo boundary", () => {
+  async function lock(dir: string) {
+    await processPrompt(dir, HASH, "s1", "add webhook handling to routes/billing.ts using `handleStripeWebhook`");
+  }
+
+  // 15 of the 64 scope flags in the recorded population fired on paths like
+  // ../main.rs and ../MEMORY.md. A path outside the repo root can never match
+  // a repo-relative intent anchor, so it flags by construction.
+  const outside = ["../main.rs", "../build.rs", "../MEMORY.md", "/etc/hosts"];
+
+  for (const rel of outside) {
+    it(`never flags ${rel}`, async () => {
+      const dir = tmp();
+      await lock(dir);
+      await checkScope(dir, HASH, "s1", rel, "fn main() {}");
+      const r = await checkScope(dir, HASH, "s1", rel, "fn main() {}");
+      expect(r.flag).toBeNull();
+      expect(r.fyi).toBeNull();
+    });
+  }
+
+  it("does not let out-of-repo edits push an in-repo edit over the threshold", async () => {
+    const dir = tmp();
+    await lock(dir);
+    // One out-of-repo edit must not count toward unrelatedEdits, so the single
+    // in-repo unrelated edit that follows stays below the 2nd-edit threshold.
+    await checkScope(dir, HASH, "s1", "../main.rs", "fn main() {}");
+    const r = await checkScope(dir, HASH, "s1", "ui/theme.ts", "const palette = { red: 1 };");
+    expect(r.flag).toBeNull();
+  });
+});

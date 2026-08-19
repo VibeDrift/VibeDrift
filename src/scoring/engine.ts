@@ -87,12 +87,32 @@ import {
  *        nested go.mod files or multi-segment module paths move; every other
  *        repo is byte identical, and the bundled calibration corpus is
  *        unchanged.
+ *   v15: function-index and duplicate-normalization corrections. (1) The JS/TS
+ *        extractor now indexes class methods, object-literal methods, let/var
+ *        arrow bindings, generators, accessors and `export default function`,
+ *        all of which were invisible before, so a class-heavy file contributes
+ *        the functions it actually has. Constructors stay OUT: they are
+ *        structurally forced to resemble one another, so indexing them floods
+ *        duplicate detection without carrying signal (measured: 80 of 214
+ *        duplicate findings on one component library). (2) Go generic functions and Rust `fn`
+ *        declarations with a `where` clause and no return type are matched.
+ *        (3) Duplicate normalization keeps property-chain MEMBERS literal while
+ *        still renaming the chain head, so queries against different tables or
+ *        columns stop normalizing identically; rename-insensitivity is
+ *        unchanged. (4) Body tokenization neutralizes string literals before
+ *        comments, so a `//` inside a literal no longer desynchronizes quote
+ *        pairing and leaks prose into the token stream. Duplicate counts fall
+ *        where collisions were removed and rise where the extractor now sees
+ *        methods it was blind to; measured on four real repos the index grew
+ *        1 to 34% and duplicate pairs moved -8% to +27%. Repos with no class
+ *        or object-literal methods, no property-chain data references and no
+ *        `//` inside literals are byte identical.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v14";
+export const SCORING_VERSION = "v15";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
