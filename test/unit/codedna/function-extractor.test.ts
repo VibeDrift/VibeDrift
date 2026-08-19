@@ -334,6 +334,20 @@ describe("JS/TS extraction coverage", () => {
     expect(n).not.toContain("it");
   });
 
+  it("does not index class constructors", () => {
+    // Constructors are structurally forced to resemble one another — a DI
+    // constructor is the same shape in every class — so indexing them floods
+    // duplicate detection. Measured on ionic-framework: `constructor` alone
+    // produced 80 of 214 duplicate findings and most of a 10-point composite
+    // drop. They were not indexed before the method-shorthand pattern existed,
+    // and they stay unindexed.
+    const n = names(
+      `class Widget {\n  constructor(private readonly store: Store) {\n    this.ready = false;\n    this.store = store;\n  }\n  render() {\n    const v = this.store.get();\n    return v ?? null;\n  }\n}`,
+    );
+    expect(n).not.toContain("constructor");
+    expect(n).toContain("render");
+  });
+
   it("does not index a catch clause as a function", () => {
     const n = names(
       `function real() {\n  try {\n    risky();\n  } catch (err) {\n    report(err);\n  }\n  return 1;\n}`,

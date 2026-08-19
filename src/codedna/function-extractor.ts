@@ -240,7 +240,13 @@ function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
       //     can never match.
       //  2. The negative lookahead excludes the keywords that share the shape
       //     `name (args) { ... }` — if, for, while, switch, catch, and the
-      //     declaration forms already covered by the patterns above.
+      //     declaration forms already covered by the patterns above. It also
+      //     excludes `constructor`, which is a real function but a pathological
+      //     one to index: constructors are structurally forced to resemble each
+      //     other, so they flood duplicate detection without carrying signal.
+      //     Measured on ionic-framework, indexing them produced 80 of 214
+      //     duplicate findings on its own. They were never indexed before this
+      //     pattern existed and stay unindexed.
       //  3. The body brace must follow the parameter list directly, separated
       //     only by whitespace or a TS return-type annotation containing
       //     neither `;` nor `{`. This is what rejects `describe("x", () => {`,
@@ -248,7 +254,7 @@ function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
       //     interface or type-literal members, which end in `;` and have no
       //     body at all.
       {
-        re: /^[ \t]*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*\*?\s*(?!(?:if|for|while|switch|catch|do|else|return|typeof|new|function|const|let|var|class|interface|type|import|export|await|yield)\b)(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^;{]*?)?\s*\{/gm,
+        re: /^[ \t]*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*\*?\s*(?!(?:if|for|while|switch|catch|do|else|return|typeof|new|function|const|let|var|class|interface|type|import|export|await|yield|constructor)\b)(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^;{]*?)?\s*\{/gm,
         bodyAfterMatch: true,
         isArrow: false,
       },
