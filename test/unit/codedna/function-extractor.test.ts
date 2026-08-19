@@ -387,6 +387,51 @@ describe("JS/TS extraction coverage", () => {
     expect(n).toContain("doWork");
   });
 
+  it("does not index a call expression taking a function-keyword callback", () => {
+    // The dangerous sibling of the arrow case. `([^)]*)` stops at the FIRST `)`,
+    // which for `test('name', function (assert) {` is the CALLBACK's parameter
+    // close, so the brace guard saw the callback's body and matched, indexing an
+    // entry named after the CALLEE. Measured on a date library: this inflated the
+    // index 2190 -> 5114, and because the duplicate scorer divides by function
+    // count it moved the composite +9.5 in the OPTIMISTIC direction.
+    const n = names(
+      `test('format using constants', function (assert) {\n  const m = moment();\n  assert.equal(m.format('LTS'), 'x');\n});`,
+    );
+    expect(n).not.toContain("test");
+    expect(n).toEqual([]);
+  });
+
+  it("does not index mocha-style registration helpers", () => {
+    const n = names(
+      `describe('suite', function () {\n  it('works', function (done) {\n    const r = go();\n    done(r);\n  });\n});`,
+    );
+    expect(n).not.toContain("describe");
+    expect(n).not.toContain("it");
+  });
+
+  it("skips any function whose parameter list contains parentheses (known, pre-existing)", () => {
+    // Both JS/TS patterns capture params with `[^)]*`, so a function-typed or
+    // defaulted parameter containing `(` stops the capture early and the match
+    // fails. This predates the callback guard and is unchanged by it; it is
+    // recorded here so the limitation is visible rather than folklore.
+    //
+    // The direction is deliberate: the extractor errs toward missing a real
+    // function rather than inventing a phantom one. Function count is the
+    // denominator the duplicate scorer divides by, so a phantom inflates scores
+    // optimistically while a miss does not.
+    const method = names(
+      `class Collection {\n  mapAll(fn: (x: number) => number, seed: number) {\n    const out = this.items.map(fn);\n    return out.concat(seed);\n  }\n}`,
+    );
+    expect(method).not.toContain("mapAll");
+
+    // A plain parameter list is indexed normally, confirming the cause is the
+    // parenthesis and not the method form itself.
+    const plain = names(
+      `class Collection {\n  mapAll(seed: number, factor: number) {\n    const out = this.items.map(String);\n    return out.concat(seed, factor);\n  }\n}`,
+    );
+    expect(plain).toContain("mapAll");
+  });
+
   it("does not index a catch clause as a function", () => {
     const n = names(
       `function real() {\n  try {\n    risky();\n  } catch (err) {\n    report(err);\n  }\n  return 1;\n}`,

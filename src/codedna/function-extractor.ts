@@ -96,6 +96,8 @@ function extractBody(content: string, startAfterBrace: number, language: string)
 
 interface FnPattern {
   re: RegExp;
+  /** Verify the captured params are a real parameter list (method shorthand only). */
+  realParamList?: boolean;
   /**
    * true  → the regex match already ends at the start of the body, so the
    *         body begins at `match.index + match[0].length` (Go/Rust end at
@@ -262,6 +264,7 @@ function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
         re: /^[ \t]*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*\*?\s*(?!(?:if|for|while|switch|catch|do|else|return|typeof|new|function|const|let|var|class|interface|type|import|export|await|yield|constructor)\b)(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^;{\n]*?)?\s*\{/gm,
         bodyAfterMatch: true,
         isArrow: false,
+        realParamList: true,
       },
     ];
   }
@@ -308,6 +311,54 @@ function isStubBody(tokens: string[]): boolean {
   return !tokens.slice(1, end).includes(";");
 }
 
+/**
+ * Whether a method-shorthand match's parameter list is really a parameter list.
+ *
+ * The pattern captures parameters with `[^)]*`, which stops at the FIRST `)`.
+ * For a call expression taking a callback — `test('name', function (assert) {` —
+ * that first `)` is the CALLBACK's parameter close, so the body-brace guard sees
+ * the callback's own brace and the match succeeds, indexing an entry named after
+ * the CALLEE. Measured on a callback-heavy repo, this inflated the function index
+ * from 2190 to 5114 entries, every one of them a phantom named `test`, `it`,
+ * `describe` or a DSL registration helper.
+ *
+ * That is worse than a normal false positive: function count is the DENOMINATOR
+ * the duplicate scorer divides by, so the inflation moved the composite in the
+ * OPTIMISTIC direction while the honest duplicate fraction had gone up.
+ *
+ * Rejecting any match whose captured params contain `(` would also discard
+ * genuine methods with function-typed parameters (`mapAll(fn: (x: number) => number)`).
+ * So when the capture is unbalanced we walk the real parens: find the true
+ * matching close, then require the body brace to follow it, allowing a
+ * single-line return-type annotation. A callback call fails that test because its
+ * matching close sits after the callback body, followed by `)` or `;`.
+ */
+function hasRealParamList(content: string, matchStart: number, matched: string): boolean {
+  const openRel = matched.indexOf("(");
+  if (openRel < 0) return false;
+  const openIdx = matchStart + openRel;
+  let depth = 0;
+  let i = openIdx;
+  for (; i < content.length; i++) {
+    const c = content[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  if (depth !== 0) return false;
+  // Skip whitespace, then an optional one-line return-type annotation, then the
+  // body brace must be next.
+  let j = i + 1;
+  while (j < content.length && (content[j] === " " || content[j] === "\t" || content[j] === "\n" || content[j] === "\r")) j++;
+  if (content[j] === ":") {
+    while (j < content.length && content[j] !== "{" && content[j] !== ";" && content[j] !== "\n") j++;
+  }
+  while (j < content.length && (content[j] === " " || content[j] === "\t" || content[j] === "\n" || content[j] === "\r")) j++;
+  return content[j] === "{";
+}
+
 // Extract all functions from a single source file
 export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] {
   const functions: ExtractedFunction[] = [];
@@ -315,12 +366,13 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
 
   const patterns = getLanguagePatterns(file.language);
 
-  for (const { re, bodyAfterMatch, isArrow } of patterns) {
+  for (const { re, bodyAfterMatch, isArrow, realParamList } of patterns) {
     const regex = new RegExp(re.source, re.flags);
     let match;
     while ((match = regex.exec(file.content)) !== null) {
       const name = match[1];
       const paramsStr = match[2];
+      if (realParamList && paramsStr.includes("(") && !hasRealParamList(file.content, match.index, match[0])) continue;
 
       let startIndex: number;
       if (bodyAfterMatch) {
