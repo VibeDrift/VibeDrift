@@ -280,6 +280,29 @@ function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
   return [];
 }
 
+/**
+ * A body whose only statement is a `throw` — a not-implemented stub.
+ *
+ * Stubs carry no reusable logic but are byte-identical everywhere they appear,
+ * so indexing them manufactures duplicate findings and tells a developer to
+ * "extract" something that does nothing. Measured on one provider-client
+ * codebase, `throw new Error("Method not implemented.")` appeared as three
+ * different method names across nine files and dominated a 7.1-point composite
+ * drop.
+ *
+ * Deliberately narrow: a throw that follows any other statement, or sits behind
+ * a guard, is real logic and stays indexed.
+ */
+function isStubBody(tokens: string[]): boolean {
+  if (tokens[0] !== "throw") return false;
+  // The captured body carries the closing brace(s), so trim trailing `}` and
+  // `;` before deciding. What remains after the throw's terminating `;` must be
+  // nothing: any further statement means the throw is part of real control flow.
+  let end = tokens.length;
+  while (end > 0 && (tokens[end - 1] === "}" || tokens[end - 1] === ";")) end--;
+  return !tokens.slice(1, end).includes(";");
+}
+
 // Extract all functions from a single source file
 export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] {
   const functions: ExtractedFunction[] = [];
@@ -311,6 +334,7 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
       const declarationCode = (file.content.split("\n")[line - 1] ?? "").trim();
       const tokens = tokenizeBody(body);
       if (tokens.length < 5) continue;
+      if (isStubBody(tokens)) continue;
 
       functions.push({
         name,

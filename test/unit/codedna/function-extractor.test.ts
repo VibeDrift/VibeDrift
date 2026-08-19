@@ -348,6 +348,26 @@ describe("JS/TS extraction coverage", () => {
     expect(n).toContain("render");
   });
 
+  it("does not index not-implemented stubs", () => {
+    // A body whose only statement is a throw carries no reusable logic, but it
+    // is byte-identical everywhere it appears, so indexing stubs manufactures
+    // duplicate findings. Measured on NextChat: usage(), speech() and models()
+    // are all `throw new Error("Method not implemented.")` across nine provider
+    // clients, and dominated a 7.1-point composite drop.
+    const n = names(
+      `class Client {\n  speech(options: SpeechOptions): Promise<ArrayBuffer> {\n    throw new Error("Method not implemented.");\n  }\n  extractMessage(res: any) {\n    const parsed = normalize(res);\n    return parsed?.content?.text ?? "";\n  }\n}`,
+    );
+    expect(n).not.toContain("speech");
+    expect(n).toContain("extractMessage");
+  });
+
+  it("still indexes a throw that is part of real logic", () => {
+    const n = names(
+      `function guard(url: string) {\n  const parsed = parse(url);\n  if (!parsed) throw new Error("bad url");\n  return parsed.host;\n}`,
+    );
+    expect(n).toContain("guard");
+  });
+
   it("does not index a catch clause as a function", () => {
     const n = names(
       `function real() {\n  try {\n    risky();\n  } catch (err) {\n    report(err);\n  }\n  return 1;\n}`,
