@@ -341,3 +341,72 @@ describe("JS/TS extraction coverage", () => {
     expect(n).toEqual(["real"]);
   });
 });
+
+describe("Go, Rust and Python extraction coverage", () => {
+  const names = (content: string, language: SupportedLanguage, rel: string) =>
+    extractFunctionsFromFile(mkFile(content, language, rel)).map((f) => f.name);
+
+  it("indexes a Go generic function", () => {
+    expect(
+      names(
+        `func Map[T any, U any](in []T, f func(T) U) []U {\n\tout := make([]U, 0)\n\tfor _, v := range in {\n\t\tout = append(out, f(v))\n\t}\n\treturn out\n}`,
+        "go",
+        "a.go",
+      ),
+    ).toContain("Map");
+  });
+
+  it("indexes a Go method with a receiver", () => {
+    expect(
+      names(
+        `func (s *Server) Handle(w http.ResponseWriter) {\n\tlog.Print("x")\n\ts.count++\n\treturn\n}`,
+        "go",
+        "a.go",
+      ),
+    ).toContain("Handle");
+  });
+
+  it("indexes a Rust fn with a where clause", () => {
+    expect(
+      names(
+        `fn convert<T>(v: T) -> String\nwhere\n    T: Display,\n{\n    let s = v.to_string();\n    s.trim().to_owned()\n}`,
+        "rust",
+        "a.rs",
+      ),
+    ).toContain("convert");
+  });
+
+  it("indexes a Rust fn with a where clause and NO return type", () => {
+    // The `->` was doing the work of spanning the signature, so a where clause
+    // with no return type left nothing to consume it.
+    expect(
+      names(
+        `fn register<T>(v: T)\nwhere\n    T: Into<String>,\n{\n    let s = v.into();\n    store(s);\n}`,
+        "rust",
+        "a.rs",
+      ),
+    ).toContain("register");
+  });
+
+  it("indexes a plain Rust fn with a return type", () => {
+    expect(
+      names(`pub fn add(a: u32, b: u32) -> u32 {\n    let total = a + b;\n    total\n}`, "rust", "a.rs"),
+    ).toContain("add");
+  });
+
+  it("indexes a Python method inside a class", () => {
+    expect(
+      names(
+        `class Repo:\n    def find_user(self, uid):\n        row = db.get(uid)\n        return row or None\n`,
+        "python",
+        "a.py",
+      ),
+    ).toContain("find_user");
+  });
+
+  it("indexes an async Python function", () => {
+    expect(
+      names(`async def fetch_all(ids):\n    rows = await gather(ids)\n    return [r for r in rows if r]\n`, "python", "a.py"),
+    ).toContain("fetch_all");
+  });
+});

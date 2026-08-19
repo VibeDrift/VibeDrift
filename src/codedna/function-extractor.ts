@@ -204,7 +204,15 @@ function findBodyOpenBrace(content: string, fromIndex: number, isArrow: boolean)
 
 function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
   if (language === "go") {
-    return [{ re: /func\s+(?:\([^)]*\)\s+)?(\w+)\s*\(([^)]*)\)\s*(?:[^{]*)?\{/g, bodyAfterMatch: true, isArrow: false }];
+    // `(?:\[[^\]]*\])?` admits generic type parameters, which sit between the
+    // name and the parameter list: `func Map[T any, U any](in []T) []U {`.
+    return [
+      {
+        re: /func\s+(?:\([^)]*\)\s+)?(\w+)\s*(?:\[[^\]]*\])?\s*\(([^)]*)\)\s*(?:[^{]*)?\{/g,
+        bodyAfterMatch: true,
+        isArrow: false,
+      },
+    ];
   }
   if (language === "javascript" || language === "typescript") {
     return [
@@ -250,7 +258,18 @@ function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
     return [{ re: /def\s+(\w+)\s*\(([^)]*)\)\s*(?:->[^:]*)?:/g, bodyAfterMatch: true, isArrow: false }];
   }
   if (language === "rust") {
-    return [{ re: /(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?:->[^{]*)?\{/g, bodyAfterMatch: true, isArrow: false }];
+    // Everything between the parameter list and the body brace is signature: a
+    // return type, a `where` clause, or both across several lines. `->` used to
+    // do that spanning, so a `where` clause with no return type had nothing to
+    // consume it. `[^{]*` is greedy-free of braces and therefore stops at the
+    // first `{`, which is the body in both shapes.
+    return [
+      {
+        re: /(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*[^{]*\{/g,
+        bodyAfterMatch: true,
+        isArrow: false,
+      },
+    ];
   }
   return [];
 }
