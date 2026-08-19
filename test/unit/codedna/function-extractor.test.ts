@@ -368,6 +368,25 @@ describe("JS/TS extraction coverage", () => {
     expect(n).toContain("guard");
   });
 
+  it("does not index interface members written without semicolons", () => {
+    // prettier's `semi: false` is common, and without a terminating `;` the
+    // return-type scan used to run past the declaration to the first `{` it
+    // could find — often a real method many lines below — indexing a garbage
+    // body made of comments and other declarations. Measured on TypeORM, whose
+    // driver interfaces are written this way.
+    const n = names(
+      `export interface Driver {\n  connect(): Promise<void>\n\n  /** Performs connection. */\n  afterConnect(): Promise<void>\n}\n\nexport class Real {\n  doWork(n: number) {\n    const x = n * 2\n    return x + 1\n  }\n}`,
+    );
+    expect(n).not.toContain("connect");
+    expect(n).not.toContain("afterConnect");
+    expect(n).toEqual(["doWork"]);
+  });
+
+  it("still indexes a method whose body brace is on the next line", () => {
+    const n = names(`class C {\n  doWork(n: number): number\n  {\n    const x = n * 2;\n    return x + 1;\n  }\n}`);
+    expect(n).toContain("doWork");
+  });
+
   it("does not index a catch clause as a function", () => {
     const n = names(
       `function real() {\n  try {\n    risky();\n  } catch (err) {\n    report(err);\n  }\n  return 1;\n}`,

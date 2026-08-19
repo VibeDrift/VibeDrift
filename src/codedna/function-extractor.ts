@@ -249,12 +249,17 @@ function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
       //     pattern existed and stay unindexed.
       //  3. The body brace must follow the parameter list directly, separated
       //     only by whitespace or a TS return-type annotation containing
-      //     neither `;` nor `{`. This is what rejects `describe("x", () => {`,
+      //     neither `;`, `{`, nor a NEWLINE. This rejects `describe("x", () => {`,
       //     whose block belongs to the arrow rather than to `describe`, and
-      //     interface or type-literal members, which end in `;` and have no
-      //     body at all.
+      //     interface or type-literal members, which have no body at all.
+      //     The newline exclusion is load-bearing for semicolon-free TypeScript
+      //     (prettier `semi: false`): without it the scan runs past a bodiless
+      //     declaration to the first `{` anywhere below, indexing a garbage body
+      //     of comments and other declarations. A return type spans one line in
+      //     practice, and a method whose brace sits on the NEXT line still
+      //     matches because the trailing `\s*` may cross newlines.
       {
-        re: /^[ \t]*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*\*?\s*(?!(?:if|for|while|switch|catch|do|else|return|typeof|new|function|const|let|var|class|interface|type|import|export|await|yield|constructor)\b)(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^;{]*?)?\s*\{/gm,
+        re: /^[ \t]*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*\*?\s*(?!(?:if|for|while|switch|catch|do|else|return|typeof|new|function|const|let|var|class|interface|type|import|export|await|yield|constructor)\b)(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^;{\n]*?)?\s*\{/gm,
         bodyAfterMatch: true,
         isArrow: false,
       },
