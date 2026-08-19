@@ -210,8 +210,40 @@ function getLanguagePatterns(language: SupportedLanguage): FnPattern[] {
     return [
       // Match up to the parameter `)`; findBodyOpenBrace locates the body brace
       // past any return-type annotation (which may contain `{`, `<>`, `=>`).
-      { re: /(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/g, bodyAfterMatch: false, isArrow: false },
-      { re: /(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?(?:<[^>]*>\s*)?\(([^)]*)\)/g, bodyAfterMatch: false, isArrow: true },
+      // `\*?` admits generator declarations (`function* walk()`).
+      {
+        re: /(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/g,
+        bodyAfterMatch: false,
+        isArrow: false,
+      },
+      // `let`/`var` alongside `const`: an arrow bound to any of them is a
+      // function, and only `const` was indexed before.
+      {
+        re: /(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:<[^>]*>\s*)?\(([^)]*)\)/g,
+        bodyAfterMatch: false,
+        isArrow: true,
+      },
+      // Method shorthand: class methods, object-literal methods, generators,
+      // getters and setters. None of these were indexed before, which is why a
+      // class-heavy file contributed far fewer entries than it has functions.
+      //
+      // Three guards keep this from over-matching, in order of importance:
+      //  1. `^[ \t]*` anchors to a line start, so a mid-line call expression
+      //     can never match.
+      //  2. The negative lookahead excludes the keywords that share the shape
+      //     `name (args) { ... }` — if, for, while, switch, catch, and the
+      //     declaration forms already covered by the patterns above.
+      //  3. The body brace must follow the parameter list directly, separated
+      //     only by whitespace or a TS return-type annotation containing
+      //     neither `;` nor `{`. This is what rejects `describe("x", () => {`,
+      //     whose block belongs to the arrow rather than to `describe`, and
+      //     interface or type-literal members, which end in `;` and have no
+      //     body at all.
+      {
+        re: /^[ \t]*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*\*?\s*(?!(?:if|for|while|switch|catch|do|else|return|typeof|new|function|const|let|var|class|interface|type|import|export|await|yield)\b)(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::[^;{]*?)?\s*\{/gm,
+        bodyAfterMatch: true,
+        isArrow: false,
+      },
     ];
   }
   if (language === "python") {

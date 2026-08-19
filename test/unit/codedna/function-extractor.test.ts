@@ -262,3 +262,82 @@ describe("tokenizeBody comment and literal ordering", () => {
     expect(toks).toContain("b");
   });
 });
+
+describe("JS/TS extraction coverage", () => {
+  const names = (content: string, language: SupportedLanguage = "typescript") =>
+    extractFunctionsFromFile(mkFile(content, language)).map((f) => f.name);
+
+  it("indexes class methods", () => {
+    expect(
+      names(`class Repo {\n  async findUser(id: string) {\n    const row = await db.get(id);\n    return row ?? null;\n  }\n}`),
+    ).toContain("findUser");
+  });
+
+  it("indexes object-literal methods", () => {
+    expect(
+      names(`const api = {\n  fetchUser(id: string) {\n    const row = lookup(id);\n    return row ?? null;\n  },\n};`),
+    ).toContain("fetchUser");
+  });
+
+  it("indexes let and var arrow bindings", () => {
+    expect(
+      names(`let handle = (e: Event) => {\n  const t = e.target;\n  return t ?? null;\n};`),
+    ).toContain("handle");
+  });
+
+  it("indexes generators and accessors", () => {
+    const n = names(
+      `class C {\n  *walk() {\n    const a = 1;\n    yield a;\n  }\n  get total() {\n    const n = this.items.length;\n    return n * 2;\n  }\n}`,
+    );
+    expect(n).toContain("walk");
+    expect(n).toContain("total");
+  });
+
+  it("indexes an exported default function", () => {
+    expect(
+      names(`export default function handler(req: Req) {\n  const id = req.query.id;\n  return id ?? null;\n}`),
+    ).toContain("handler");
+  });
+
+  // ---- over-matching guards. These must pass BEFORE and AFTER the widening. ----
+
+  it("does not index an interface member as a function", () => {
+    // The exact shape that made a duplicate advisory cite a non-function.
+    expect(names(`interface Opts {\n  onSave(body: string): void;\n  onCancel(): void;\n}`)).toHaveLength(0);
+  });
+
+  it("does not index a type-literal member as a function", () => {
+    expect(names(`type Handlers = {\n  onSave(body: string): void;\n  onCancel(): void;\n};`)).toHaveLength(0);
+  });
+
+  it("does not index control-flow keywords as functions", () => {
+    const n = names(
+      `function real() {\n  if (a) { doThing(); }\n  for (const x of xs) { use(x); }\n  while (y) { tick(); }\n  switch (z) { default: break; }\n  return 1;\n}`,
+    );
+    expect(n).toEqual(["real"]);
+  });
+
+  it("does not index a bare call expression as a function", () => {
+    const n = names(`function real() {\n  const a = compute(1, 2);\n  register(a);\n  return a;\n}`);
+    expect(n).toEqual(["real"]);
+  });
+
+  it("does not index a test-runner call whose argument is an arrow", () => {
+    // The dangerous over-match for a method-shorthand pattern: `describe("x", () => {`
+    // has the shape name(args) followed by a block, but the block belongs to the
+    // arrow, not to `describe`. Indexing these would flood the index from every
+    // test file in a repo.
+    const n = names(
+      `describe("suite", () => {\n  it("works", async () => {\n    const r = await go();\n    expect(r).toBe(1);\n  });\n});`,
+    );
+    expect(n).not.toContain("describe");
+    expect(n).not.toContain("it");
+  });
+
+  it("does not index a catch clause as a function", () => {
+    const n = names(
+      `function real() {\n  try {\n    risky();\n  } catch (err) {\n    report(err);\n  }\n  return 1;\n}`,
+    );
+    expect(n).toEqual(["real"]);
+  });
+});

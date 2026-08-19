@@ -111,9 +111,15 @@ ${HELPER_BODY}`;
   }`;
     const { open } = await raise("s-sql", "src/data/sessions.ts", method);
     const arch = only(open, "architectural_consistency");
-    // A class method is not an extractable function, so the anchor is the whole
-    // edited body and presence is asked over the whole file.
-    expect(arch[0].anchor).toMatchObject({ kind: "file", observed: "raw SQL queries" });
+    // The extractor now indexes class methods, so this anchors to the method
+    // itself rather than falling back to the whole edited body. That is the
+    // stronger anchor: presence is asked about `purgeSessions`, not about
+    // whatever else the file happens to contain.
+    expect(arch[0].anchor).toMatchObject({
+      kind: "function",
+      symbol: "purgeSessions",
+      observed: "raw SQL queries",
+    });
 
     const whole = `export class SessionStore {
   async findSession(id: string) {
