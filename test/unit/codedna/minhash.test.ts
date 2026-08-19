@@ -9,6 +9,7 @@ import {
   buildSignature,
   DEFAULT_PERMUTATIONS,
 } from "../../../src/codedna/minhash.js";
+import { tokenizeBody } from "../../../src/codedna/function-extractor.js";
 
 // True Jaccard similarity between two sets of shingle strings.
 function trueJaccard(a: string[], b: string[]): number {
@@ -238,5 +239,49 @@ describe("MinHash + LSH", () => {
       expect(sig.signature.length).toBe(DEFAULT_PERMUTATIONS);
       expect(sig.tokens.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("normalizeTokens data references", () => {
+  const norm = (src: string) => normalizeTokens(tokenizeBody(src)).join(" ");
+
+  it("distinguishes queries against different tables", () => {
+    // The measured collision: an identifier chain was kept literal only when it
+    // ended in `(`, so `schema.reports` (a property access) had both halves
+    // erased and every Drizzle query with the same call skeleton collided.
+    const a = norm(`return db.select().from(schema.reports).where(eq(schema.reports.postId, postId));`);
+    const b = norm(`return db.select().from(schema.notifications).where(eq(schema.notifications.userId, userId));`);
+    expect(a).not.toBe(b);
+  });
+
+  it("distinguishes different columns on the same table", () => {
+    const a = norm(`return db.select().from(schema.reports).where(eq(schema.reports.postId, v));`);
+    const b = norm(`return db.select().from(schema.reports).where(eq(schema.reports.authorId, v));`);
+    expect(a).not.toBe(b);
+  });
+
+  it("still collapses differing local variable names", () => {
+    const a = norm(`const rows = await db.select(); return rows.length;`);
+    const b = norm(`const items = await db.select(); return items.length;`);
+    expect(a).toBe(b);
+  });
+
+  it("still collapses differing parameter-derived locals", () => {
+    const a = norm(`let acc = 0; for (const n of xs) { acc = acc + n; } return acc;`);
+    const b = norm(`let total = 0; for (const v of xs) { total = total + v; } return total;`);
+    expect(a).toBe(b);
+  });
+
+  it("keeps call targets literal, as before", () => {
+    expect(norm(`db.query(sql);`)).toContain("query");
+  });
+
+  it("keeps a constructor name literal, as before", () => {
+    expect(norm(`const r = new UserRepo(); return r;`)).toContain("UserRepo");
+  });
+
+  it("two genuinely identical bodies still match", () => {
+    const src = `return db.select().from(schema.reports).where(eq(schema.reports.postId, postId));`;
+    expect(norm(src)).toBe(norm(src));
   });
 });

@@ -128,9 +128,19 @@ export function normalizeTokens(tokens: string[]): string[] {
       for (let k = i; k <= j; k++) result.push(tokens[k]);
       i = j + 1;
     } else {
+      // A property chain has two halves with different meanings. The HEAD is a
+      // name — a local, a parameter, an import alias — and is arbitrary, so it
+      // is renamed. The MEMBERS are a path into a structure and identify what
+      // the code touches, so they are kept literal.
+      //
+      // Erasing the members made `schema.reports` and `schema.notifications`
+      // normalize identically, so every query sharing a call skeleton collided
+      // regardless of which table or column it read. Renaming the head is what
+      // keeps `input.data` and `payload.data` matching, which is the same logic
+      // written with different parameter names.
       let k = i;
       while (k <= j) {
-        if (isIdentifier(tokens[k])) result.push(renameId(tokens[k]));
+        if (k === i && isIdentifier(tokens[k])) result.push(renameId(tokens[k]));
         else result.push(tokens[k]);
         k++;
       }
