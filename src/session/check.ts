@@ -19,6 +19,7 @@ import type { FindingAnchor } from "./finding-anchor.js";
 import { newActivityId, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
+import { isInLoopCheckable } from "../drift/utils.js";
 
 export const INLINE_CHECK_MAX_ENTRIES = 2000;
 export const COOLDOWN_MS = 5 * 60_000;
@@ -145,7 +146,13 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   // docs must not flag. The gate and the flag path exit together — stamping
   // checked=false while still flagging would orphan flags outside the
   // density denominator.
-  if (detectLanguage(relPath) === null) {
+  //
+  // isInLoopCheckable extends the same contract to test setup, seeds, scripts,
+  // examples and scratch files. An agent writes those to different conventions
+  // on purpose, so judging them against application conventions is measurably
+  // wrong: 8 of 21 findings in the recorded population landed on such files and
+  // every one was a false positive.
+  if (detectLanguage(relPath) === null || !isInLoopCheckable(relPath)) {
     return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
   }
 

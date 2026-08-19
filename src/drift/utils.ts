@@ -130,6 +130,32 @@ export function isAnalyzableSource(path: string): boolean {
   return true;
 }
 
+/**
+ * Files an in-loop session check may judge.
+ *
+ * Stricter than `isAnalyzableSource`, which exists to keep the batch detectors'
+ * denominators honest. This predicate additionally excludes the file classes an
+ * agent legitimately writes to different conventions from application code:
+ * database seeds, soak and bench scripts, examples, and scratch files.
+ *
+ * Motivation is measured, not assumed. Across the recorded session population,
+ * 8 of 21 findings landed on such files and every one was a false positive. Two
+ * of them carry doc comments explaining why they throw, and were flagged for
+ * throwing: a Vitest `globalSetup` that must abort the run rather than return a
+ * sentinel, and a seed script whose throw is the guard that stops it truncating
+ * a non-development database.
+ *
+ * Each pattern is anchored to a path-segment boundary so a source directory
+ * named `transcripts/` or `benchmarking/` stays checkable.
+ */
+export function isInLoopCheckable(path: string): boolean {
+  if (!isAnalyzableSource(path)) return false;
+  if (/(?:^|\/)(?:scripts?|examples?|benchmarks?|bench)\//i.test(path)) return false;
+  if (/(?:^|\/)(?:seed|soak|scratch)[-.\w]*\.\w+$/i.test(path)) return false;
+  if (/(?:^|\/)scratch[-\w]*\//i.test(path)) return false;
+  return true;
+}
+
 // ─── Shannon entropy gate ────────────────────────────────────────────
 
 export interface EntropyGateResult {

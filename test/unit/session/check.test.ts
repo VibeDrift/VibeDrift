@@ -277,3 +277,31 @@ describe("non-code edits are a skip class (P1 contract)", () => {
     expect(out.flags).toEqual([]);
   });
 });
+
+describe("runEditChecks file-class gate", () => {
+  // THEN_BODY reliably flags against this repo's declared async/await rule, so
+  // any silence below is the file-class gate and not a weak fixture.
+  const nonAppPaths = [
+    join("scripts", "seed-dev.ts"),
+    join("tests", "integration", "global-setup.ts"),
+    join("src", "rate-limit.test.ts"),
+    join("src", "scratch-probe.ts"),
+  ];
+
+  for (const rel of nonAppPaths) {
+    it(`reports checked=false and emits no flags for ${rel}`, async () => {
+      const out = await runEditChecks(
+        opts({ sessionId: `s-gate-${rel.replace(/[^a-z0-9]/gi, "-")}`, file: join(repo, rel) }),
+      );
+      expect(out.checked).toBe(false);
+      expect(out.flags).toHaveLength(0);
+      expect(out.fyi).toBeNull();
+    });
+  }
+
+  it("still checks ordinary application source", async () => {
+    const out = await runEditChecks(opts({ sessionId: "s-gate-app", file: join(repo, "src", "app.ts") }));
+    expect(out.checked).toBe(true);
+    expect(out.flags.length).toBeGreaterThanOrEqual(1);
+  });
+});
