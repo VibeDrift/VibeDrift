@@ -34,4 +34,3 @@ PLAN-*.md
 
 # Claude Code local hook installs (vibedrift enable) — never committed
 .claude/settings.local.json
-.measure/
