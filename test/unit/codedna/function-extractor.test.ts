@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   extractFunctionsFromFile,
   extractAllFunctions,
+  tokenizeBody,
 } from "../../../src/codedna/function-extractor.js";
 import {
   computeSemanticFingerprints,
@@ -215,5 +216,49 @@ export function readTitleFromTrackRecord(rec: any): { value: string; source: str
     // Different bodies → no exact-duplicate group. Before the fix both bodies
     // collapsed to `{ value: string; source: string }` → one false group.
     expect(groups.length).toBe(0);
+  });
+});
+
+describe("tokenizeBody comment and literal ordering", () => {
+  // `//` was stripped before string literals, so a `//` inside a literal
+  // deleted the closing quote and desynchronized quote pairing for the rest of
+  // the body. Measured on the audited population: it leaked 45 distinct English
+  // words out of test-name literals into one stored anchor and swallowed 43% of
+  // another file's tokens.
+  it("does not treat a URL inside a single-quoted string as a line comment", () => {
+    const toks = tokenizeBody(`const u = 'https://example.invalid'; const after = 1;`);
+    expect(toks).toContain("after");
+    expect(toks).not.toContain("example");
+    expect(toks).not.toContain("invalid");
+  });
+
+  it("does not treat a URL inside a template literal as a line comment", () => {
+    const toks = tokenizeBody("const p = `https://picsum.photos/x`; const tail = 9;");
+    expect(toks).toContain("tail");
+    expect(toks).not.toContain("picsum");
+  });
+
+  it("does not treat a URL inside a double-quoted string as a line comment", () => {
+    const toks = tokenizeBody(`const u = "https://example.invalid"; const tail = 2;`);
+    expect(toks).toContain("tail");
+    expect(toks).not.toContain("invalid");
+  });
+
+  it("still strips a genuine line comment", () => {
+    const toks = tokenizeBody(`const a = 1; // secretName\nconst b = 2;`);
+    expect(toks).not.toContain("secretName");
+    expect(toks).toContain("b");
+  });
+
+  it("still strips a block comment", () => {
+    const toks = tokenizeBody(`const a = 1; /* hiddenName */ const b = 2;`);
+    expect(toks).not.toContain("hiddenName");
+    expect(toks).toContain("b");
+  });
+
+  it("still strips a python hash comment", () => {
+    const toks = tokenizeBody(`a = 1  # pythonSecret\nb = 2`);
+    expect(toks).not.toContain("pythonSecret");
+    expect(toks).toContain("b");
   });
 });

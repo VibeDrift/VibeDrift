@@ -35,12 +35,24 @@ export function detectDomainCategory(name: string, body: string): string {
 }
 
 // Tokenize body for comparison (strip comments, normalize strings)
+//
+// ORDER IS LOAD-BEARING: string literals are neutralized BEFORE comments.
+// A `//` inside a literal — `'https://example.invalid'` — would otherwise be
+// read as a comment start, deleting the closing quote and desynchronizing
+// quote pairing for the remainder of the body. Measured on the audited session
+// population: that leaked 45 distinct English words out of test-name literals
+// into one stored anchor, and swallowed 43% of another file's tokens.
+//
+// Block comments are stripped before line comments for the same reason in the
+// other direction: a `//` inside a block comment must not terminate scanning
+// early.
 export function tokenizeBody(body: string): string[] {
-  let cleaned = body.replace(/\/\/.*$/gm, "").replace(/#.*$/gm, "");
+  let cleaned = body
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
   cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
-  cleaned = cleaned.replace(/"(?:[^"\\]|\\.)*"/g, '""');
-  cleaned = cleaned.replace(/'(?:[^'\\]|\\.)*'/g, "''");
-  cleaned = cleaned.replace(/`(?:[^`\\]|\\.)*`/g, "``");
+  cleaned = cleaned.replace(/\/\/.*$/gm, "").replace(/#.*$/gm, "");
   return cleaned.match(/[a-zA-Z_]\w*|[0-9]+|[{}()[\];,.:=<>!+\-*/%&|^~?]/g) ?? [];
 }
 
