@@ -91,7 +91,10 @@ import {
  *        extractor now indexes class methods, object-literal methods, let/var
  *        arrow bindings, generators, accessors and `export default function`,
  *        all of which were invisible before, so a class-heavy file contributes
- *        the functions it actually has. (2) Go generic functions and Rust `fn`
+ *        the functions it actually has. Constructors stay OUT: they are
+ *        structurally forced to resemble one another, so indexing them floods
+ *        duplicate detection without carrying signal (measured: 80 of 214
+ *        duplicate findings on one component library). (2) Go generic functions and Rust `fn`
  *        declarations with a `where` clause and no return type are matched.
  *        (3) Duplicate normalization keeps property-chain MEMBERS literal while
  *        still renaming the chain head, so queries against different tables or
