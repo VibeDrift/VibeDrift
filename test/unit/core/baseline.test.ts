@@ -11,6 +11,7 @@ import {
   computeBaselineKey,
   votesFromFindings,
   votesByDirectory,
+  compareByCodeUnit,
   securitySubVotesFromFindings,
   toCategoryVote,
   BASELINE_VERSION,
@@ -406,5 +407,33 @@ describe("votesByDirectory", () => {
       finding({ dominantFiles: ["src/lib/b.ts"], totalRelevantFiles: 9, dominantPattern: "wide" }),
     ]);
     expect(out.return_shape_consistency!["src/lib"]!.dominantPattern).toBe("wide");
+  });
+});
+
+describe("computeBaselineKey determinism", () => {
+  // localeCompare is locale-dependent, so two machines with different locales
+  // could compute different keys for identical inputs and silently split the
+  // baseline cache. Code-unit order is the same everywhere.
+  const files = [
+    { path: "a-b.ts", hash: "1" },
+    { path: "aB.ts", hash: "2" },
+    { path: "Ab.ts", hash: "3" },
+    { path: "_z.ts", hash: "4" },
+  ];
+
+  it("is independent of input order", () => {
+    const key = computeBaselineKey(files);
+    expect(computeBaselineKey([...files].reverse())).toBe(key);
+    expect(computeBaselineKey([files[2], files[0], files[3], files[1]])).toBe(key);
+  });
+
+  it("uses code-unit ordering, which diverges from every locale collation", () => {
+    // This is the pair that binds: locale collation sorts case-insensitively,
+    // so "a" precedes "B". By code unit "B" (0x42) precedes "a" (0x61). If the
+    // comparator ever goes back to localeCompare, this flips.
+    expect(compareByCodeUnit("B", "a")).toBeLessThan(0);
+    expect("B".localeCompare("a")).toBeGreaterThan(0);
+    expect(compareByCodeUnit("a", "a")).toBe(0);
+    expect(compareByCodeUnit("a-b.ts", "aB.ts")).toBeLessThan(0);
   });
 });

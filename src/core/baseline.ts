@@ -118,9 +118,22 @@ export function projectHash(rootDir: string): string {
  * order-independent; prefixed with BASELINE_VERSION so a logic bump invalidates
  * every cached baseline at once.
  */
+/**
+ * Code-unit string comparison.
+ *
+ * `localeCompare` is locale-dependent: it collates case-insensitively in most
+ * locales, so "a" sorts before "B" there but after it by code unit. Anything
+ * that feeds a cache key or user-visible ordering must not depend on the host's
+ * locale, or the same inputs produce different output on different machines.
+ * That is the determinism rule this codebase runs on.
+ */
+export function compareByCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function computeBaselineKey(files: Array<{ path: string; hash: string }>): string {
   const merkle = [...files]
-    .sort((a, b) => a.path.localeCompare(b.path))
+    .sort((a, b) => compareByCodeUnit(a.path, b.path))
     .map((f) => `${f.path}:${f.hash}`)
     .join("\n");
   return createHash("sha256").update(`${BASELINE_VERSION}\n${merkle}`).digest("hex");
