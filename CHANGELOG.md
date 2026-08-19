@@ -4,6 +4,61 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**The in-loop checks stop telling you your own conventions are wrong, and the function index finally sees the methods it was blind to.**
+
+An audit of real Drift Sessions found that most in-loop advisories were wrong, and the causes were structural rather than a matter of tuning. A convention vote measured over one directory was applied to the whole repository, so a directory of Next.js server actions could be told to adopt the error-handling shape of a directory of React components. The in-loop path never applied the exclusion list every batch detector uses, so test setup files, database seeds and throwaway scripts were judged against application conventions. Underneath both, the JS/TS function extractor indexed only top-level `function` and `const` forms, so class methods and object-literal methods were invisible to duplicate detection entirely.
+
+### Fixed — in-loop precision
+
+- **Conventions are judged per directory, not repository-wide.** The baseline kept one vote per category, the one with the widest denominator, discarding both the other directories' conventions and the fact that the survivor was ever directory-scoped. All three in-loop dimensions are grouped by directory by their detectors, so a directory is the only scope in which a dominant pattern means anything. A directory with no established convention now produces silence rather than borrowing another's rule. `get_dominant_pattern` takes an optional `path` and answers from that file's own directory; without it, previous behavior is unchanged.
+- **Tests, seeds, scripts and scratch files are no longer judged against application conventions.** The batch detectors already excluded them; the in-loop path did not, and its only gate was whether the language could be parsed. Two files in the audited population documented in their own comments why they throw, and were flagged for throwing.
+- **A moved function is no longer reported as a duplicate.** The index is built once per session, so by the time an advisory fires the function it names may have been lifted out. The counterpart is now verified against the file as it stands, and the advisory is suppressed when the original is gone, because that is a move rather than a duplication.
+- **Findings anchored to a file can now be resolved.** A redundancy finding whose anchor was not a single function reported "still present" for every possible file content, including an empty file, so no edit could ever clear it.
+- **The scope check ignores paths outside the repository.** A relative path escaping the repository root cannot match a repository-relative anchor, so it flagged on every edit by construction, and it also inflated the counter that decides when to flag.
+
+### Changed — function index and duplicate similarity
+
+- **Class methods, object-literal methods, `let`/`var` arrow bindings, generators, accessors and `export default function` are now indexed** for JavaScript and TypeScript. A class-heavy file previously contributed a small fraction of the functions it has.
+- **Go generic functions and Rust `fn` declarations with a `where` clause** are now matched. Python needed no change.
+- **Duplicate similarity keeps data paths distinct.** An identifier chain was kept literal only when it ended in a call, so a property access like `schema.reports` had both halves erased and every query sharing a call skeleton normalized identically regardless of which table it touched. A chain's members are now kept literal while its head is still renamed, so two implementations that differ only in variable names still match.
+- **Body tokenization neutralizes string literals before comments.** A `//` inside a literal was deleting the closing quote and desynchronizing quote pairing for the rest of the body.
+- **Ordering is locale-independent.** The baseline cache key and two report orderings sorted with `localeCompare`, so identical inputs could produce different output on machines with different locales.
+
+### Fixed — four constructs that manufactured duplicate findings
+
+Each is a construct whose similarity is forced by the language or by a framework, so it is byte-identical everywhere it appears and carries no signal. Each was found by validating against a corpus of real repositories rather than by unit tests, because each shows up only as a distribution effect.
+
+- **Class constructors** are not indexed. A dependency-injection constructor is the same shape in every class; on one component library they produced 80 of 214 duplicate findings on their own.
+- **Not-implemented stubs** are not indexed. A body whose only statement is a throw carries no reusable logic, and telling someone to extract it is wrong advice.
+- **Bodiless interface members written without semicolons** are not indexed. Without a terminator the return-type scan ran past the declaration to the first brace anywhere below, capturing comments and other declarations as a body.
+- **Call expressions taking a `function (...)` callback** are not indexed. The parameter capture stopped at the callback's own parameter close, so a test registration such as `test('name', function (assert) {` was indexed as a function named after the callee. This one mattered most: function count is the denominator the duplicate scorer divides by, so the phantom entries moved composites in the optimistic direction. On one date library the index inflated from 2190 entries to 5114, and the composite reported an improvement of 10.6 points while that repository's real duplicate fraction had risen. It now reports no change.
+
+### Scoring
+
+**Composite scores move in this release and baselines rebuild.** `SCORING_VERSION` advances to v15 and `BASELINE_VERSION` to 5, so the first scan after upgrading rebuilds the baseline and stored scores are re-aligned. There is nothing to do.
+
+Measured by scanning a shuffled, unbiased sample of 160 open-source repositories across all five supported languages with this release and the previous one:
+
+| Language | repos | median | mean | range |
+|---|---|---|---|---|
+| Go | 27 | +0.00 | +0.00 | -1.5 to +0.3 |
+| JavaScript | 35 | +0.00 | -0.03 | -4.9 to +6.1 |
+| Python | 28 | +0.00 | -0.11 | -3.2 to +0.2 |
+| Rust | 38 | +0.00 | +0.10 | -0.2 to +0.6 |
+| TypeScript | 32 | +0.00 | -0.66 | -10.2 to +4.6 |
+| **All** | **160** | **+0.00** | **-0.13** | -10.2 to +6.1 |
+
+68 of 160 repositories (42%) scored identically before and after. 55 improved and 37 worsened.
+
+The median repository is unchanged in every language. Go and Rust are close to inert, which is the expected shape because the gaps closed here were mostly in JavaScript and TypeScript. Movement concentrates in class-heavy and object-literal-heavy codebases, which are exactly the ones whose methods were previously invisible. Every repository moving three or more points was inspected by reading the duplicated function bodies rather than inferring from names, and that inspection is what produced the four exclusions above.
+
+### Known limitations
+
+- A function whose parameter list contains parentheses, such as a callback-typed or defaulted parameter, is not matched by either JS/TS pattern. This predates this release and is unchanged by it. The direction is deliberate: missing a real function is safer than inventing a phantom one, because the phantom inflates the denominator and flatters the score.
+- Trivial boilerplate that is genuinely duplicated, such as a one-line accessor repeated across a dozen sibling files, is still reported. A minimum body size for duplicate findings would suppress it; measured on one ORM it halves finding count while recovering under two composite points, so it is a noise lever rather than a scoring one and is not applied here.
+
 ## 0.19.6 — 2026-08-07
 
 **Findings stay open until the code is actually gone, and duplicate checks catch functions pasted whole.**
