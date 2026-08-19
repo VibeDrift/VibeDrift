@@ -62,6 +62,16 @@ export async function checkScope(
   relFile: string,
   body: string,
 ): Promise<ScopeResult> {
+  // A path outside the repo root can never match a repo-relative intent anchor,
+  // so it would flag on every edit by construction. Measured on the recorded
+  // session population: 15 of 64 scope flags (23% of all scope volume) were
+  // such paths, every one of them noise.
+  //
+  // This returns BEFORE readIntentState so an out-of-repo edit also cannot
+  // increment `unrelatedEdits` — otherwise it would push a later, legitimate
+  // in-repo edit over the second-edit threshold.
+  if (relFile.startsWith("../") || relFile.startsWith("/")) return { flag: null, fyi: null };
+
   const state = await readIntentState(sessionsDir, projectHash, sessionId);
   if (!state.locked) return { flag: null, fyi: null };
   if (editRelatesToAnchors(relFile, body, state.anchors)) return { flag: null, fyi: null };
