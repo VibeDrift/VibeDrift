@@ -323,6 +323,10 @@ export function driftFindingToFinding(d: DriftFinding): Finding {
     // they have no real dominance ratio, so we omit driftSignal and let the engine
     // size-normalize them through its count-based density branch instead of reading
     // a fabricated consistencyScore as a deviation rate.
+    // A count-based DUPLICATE detector still carries volume: `dupGroupSize`
+    // routes it to the engine's duplicate-fraction branch instead of the
+    // generic count branch, whose divisor is finding count (issue #102).
+    ...(d.dupGroupSize !== undefined ? { dupGroupSize: d.dupGroupSize } : {}),
     ...(d.countBased
       ? {}
       : {

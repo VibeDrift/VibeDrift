@@ -4,6 +4,33 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed
+
+- **Duplicate volume now affects the Redundancy score.** `drift-semantic_duplication`
+  was emitted as count-based but never carried `dupGroupSize`, so the scoring
+  engine's duplicate-fraction branch was unreachable for it and it fell through
+  to the generic count branch, whose divisor is the number of *findings*. Because
+  its findings are rolled up per directory, one near-duplicate pair and twenty in
+  the same directory produced an identical score. The detector now reports the
+  redundant copies each directory holds, so twenty duplicates register as twenty.
+  Reported in #102.
+
+  Two properties the fix has to preserve, both pinned by tests: it counts
+  redundant *copies* rather than pairs, because a cluster of m mutually-duplicate
+  functions is m(m-1)/2 pairs but only m-1 redundant copies; and a cluster
+  spanning two directories is counted once rather than in both, by attributing
+  each copy to the directory that actually holds it.
+
+### Scoring
+
+**Composite scores move in this release and baselines rebuild.** `SCORING_VERSION`
+advances to v16. Repos with several near-duplicate functions in one directory
+score lower, which is the defect being corrected. Repos whose duplicate
+directories hold a single pair each are unchanged, as are repos with no
+near-duplicates.
+
 ## 0.20.0 — 2026-08-19
 
 **The in-loop checks stop telling you your own conventions are wrong, and the function index finally sees the methods it was blind to.**

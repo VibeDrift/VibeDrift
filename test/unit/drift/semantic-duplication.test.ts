@@ -106,3 +106,67 @@ describe("semantic-duplication detector", () => {
     }
   });
 });
+
+describe("semantic-duplication dupGroupSize (issue #102)", () => {
+  // Bodies that MinHash treats as duplicates: identical structure, differing
+  // only in a string literal (tokenize collapses literals to STR).
+  const clone = (name: string, marker: string) => `export function ${name}(input: string, acc: number): string {
+  const s0 = stageAlpha(acc, input);
+  const s1 = stageBravo(acc, s0);
+  const s2 = stageCharlie(acc, s1);
+  const label = "${marker}";
+  return finish(s2, label);
+}`;
+
+  it("carries redundant-copy count so duplicate VOLUME reaches the scoring engine", () => {
+    // Three mutually-duplicate functions in one directory = 1 original + 2 copies.
+    const ctx = mkCtx([
+      file("src/svc/a.ts", clone("alpha", "m-a")),
+      file("src/svc/b.ts", clone("bravo", "m-b")),
+      file("src/svc/c.ts", clone("charlie", "m-c")),
+    ]);
+    const findings = semanticDuplication.detect(ctx);
+    expect(findings.length).toBeGreaterThan(0);
+
+    // The engine's duplicate-fraction branch is gated on dupGroupSize > 1
+    // (src/scoring/engine.ts). Without it the detector falls through to the
+    // count branch, where findings.length is the DIRECTORY count and duplicate
+    // volume is discarded.
+    const total = findings.reduce((n, f) => n + ((f.dupGroupSize ?? 0) > 1 ? f.dupGroupSize! - 1 : 0), 0);
+    expect(total).toBe(2);
+
+    // and it must survive the conversion into a scoring Finding
+    const converted = findings.map((f) => driftFindingToFinding(f));
+    expect(converted.some((f) => (f.dupGroupSize ?? 0) > 1)).toBe(true);
+  });
+
+  it("scales with duplicate volume rather than with directory count", () => {
+    const two = semanticDuplication.detect(
+      mkCtx([file("src/svc/a.ts", clone("alpha", "m-a")), file("src/svc/b.ts", clone("bravo", "m-b"))]),
+    );
+    const four = semanticDuplication.detect(
+      mkCtx([
+        file("src/svc/a.ts", clone("alpha", "m-a")),
+        file("src/svc/b.ts", clone("bravo", "m-b")),
+        file("src/svc/c.ts", clone("charlie", "m-c")),
+        file("src/svc/d.ts", clone("delta", "m-d")),
+      ]),
+    );
+    const copies = (fs: ReturnType<typeof semanticDuplication.detect>) =>
+      fs.reduce((n, f) => n + Math.max(0, (f.dupGroupSize ?? 1) - 1), 0);
+    expect(copies(two)).toBe(1);
+    expect(copies(four)).toBe(3);
+  });
+
+  it("does not double-count a cluster that spans two directories", () => {
+    // One pair, two directories. The detector emits a finding for EACH
+    // directory, so a naive sum would report two redundant copies for one
+    // duplicated function. Exactly one copy is redundant.
+    const findings = semanticDuplication.detect(
+      mkCtx([file("src/one/a.ts", clone("alpha", "m-a")), file("src/two/b.ts", clone("bravo", "m-b"))]),
+    );
+    expect(findings.length).toBe(2);
+    const total = findings.reduce((n, f) => n + Math.max(0, (f.dupGroupSize ?? 1) - 1), 0);
+    expect(total).toBe(1);
+  });
+});

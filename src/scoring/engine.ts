@@ -107,12 +107,23 @@ import {
  *        1 to 34% and duplicate pairs moved -8% to +27%. Repos with no class
  *        or object-literal methods, no property-chain data references and no
  *        `//` inside literals are byte identical.
+ *   v16: duplicate VOLUME reaches the score. `drift-semantic_duplication` was
+ *        emitted as count-based but carried no `dupGroupSize`, so the engine's
+ *        duplicate-fraction branch was unreachable for it and it fell through to
+ *        the generic count branch, whose divisor is the number of FINDINGS.
+ *        Findings are rolled up per directory, so one near-duplicate pair and
+ *        twenty in the same directory scored identically. The detector now
+ *        carries redundant copies per directory, attributing each cluster's
+ *        copies to the directory that holds them so a cluster spanning two
+ *        directories is not counted twice. Repos with several near-duplicates in
+ *        one directory score lower; repos whose duplicate directories hold a
+ *        single pair each are unchanged. Reported in #102.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v15";
+export const SCORING_VERSION = "v16";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
