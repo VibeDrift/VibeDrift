@@ -152,6 +152,15 @@ export interface DriftFinding {
    * carried for the report bars, but it does not drive the composite.
    */
   countBased?: boolean;
+  /**
+   * For duplicate detectors: 1 + the number of REDUNDANT copies this finding
+   * accounts for (so `dupGroupSize - 1` is the redundancy it contributes).
+   * Carried into `Finding` so the scoring engine's duplicate-fraction branch
+   * can see duplicate VOLUME; without it a count-based duplicate detector
+   * falls through to the generic count branch, where the divisor is the
+   * number of findings and volume is discarded. See issue #102.
+   */
+  dupGroupSize?: number;
   deviatingFiles: DeviatingFile[];
   /**
    * Up to 3 files that exemplify the dominant pattern — used by fix-prompt

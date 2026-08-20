@@ -160,6 +160,42 @@ export const semanticDuplication: DriftDetector = {
     }
     const sizeOf = (f: ExtractedFunction): number => clusterSize.get(find(fnKey(f))) ?? 1;
 
+    // Redundant copies per directory (issue #102).
+    //
+    // The scoring engine's duplicate-fraction branch reads `dupGroupSize - 1` as
+    // the number of REDUNDANT copies and sums it across a detector's findings.
+    // Two properties have to hold for that sum to mean anything:
+    //
+    //   1. It must count copies, not pairs. A cluster of m mutually-duplicate
+    //      functions is m(m-1)/2 pairs but only m-1 redundant copies — one
+    //      member is the original. Counting pairs would overstate quadratically.
+    //   2. It must not double-count. A pair spanning two directories emits a
+    //      finding in BOTH (see byDir below), so attributing a cluster's copies
+    //      to every directory it touches would inflate the sum.
+    //
+    // Both hold if we pick one canonical member per cluster and attribute every
+    // OTHER member to the directory that actually holds it. Summed over
+    // directories that is exactly (m-1) per cluster, once. The canonical member
+    // is the lowest fnKey so the choice is deterministic — same input, same
+    // attribution, which the repo requires of anything reaching a score.
+    const clusterMembers = new Map<string, string[]>();
+    for (const node of parent.keys()) {
+      const root = find(node);
+      const list = clusterMembers.get(root);
+      if (list) list.push(node);
+      else clusterMembers.set(root, [node]);
+    }
+    const redundantByDir = new Map<string, number>();
+    for (const members of clusterMembers.values()) {
+      if (members.length < 2) continue;
+      // fnKey is `${file}:${name}`; sort by code unit, never localeCompare.
+      const sorted = [...members].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      for (const member of sorted.slice(1)) {
+        const dir = directoryOf(member.slice(0, member.lastIndexOf(":")));
+        redundantByDir.set(dir, (redundantByDir.get(dir) ?? 0) + 1);
+      }
+    }
+
     // Group pairs by directory — the directory that owns the higher-numbered
     // duplicate is where we attribute the drift.
     const byDir = new Map<string, DuplicatePair[]>();
@@ -234,6 +270,10 @@ export const semanticDuplication: DriftDetector = {
         severity,
         confidence: 0.85,
         countBased: true,
+        // 1 + redundant copies held by THIS directory. Findings whose directory
+        // holds only cluster originals carry 1 and contribute no damage, which
+        // is correct: the redundancy belongs to whoever holds the copies.
+        dupGroupSize: (redundantByDir.get(dir) ?? 0) + 1,
         finding: `${dir}/: ${dirPairs.length} pair(s) of semantically duplicate functions detected (MinHash + LCS verified)`,
         dominantPattern: "unique function bodies",
         dominantCount: 0,
