@@ -32,7 +32,7 @@ import { directoryOf } from "../drift/utils.js";
 
 const CACHE_DIR = join(vibedriftHome(), "baseline-cache");
 /** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 5;
+export const BASELINE_VERSION = 6;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;
