@@ -66,7 +66,7 @@ export const importsAnalyzer: Analyzer = {
   requiresAST: false,
   applicableLanguages: ["javascript", "typescript"],
   // Bumped when detection changes — invalidates the S1 findings cache.
-  version: 2,
+  version: 3,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -117,6 +117,11 @@ export const importsAnalyzer: Analyzer = {
         analyzerId: "imports",
         severity: "warning",
         confidence: 0.85,
+        // The minority side is the deviating population. Without this the
+        // engine's count branch divides by the number of FINDINGS, and this
+        // detector emits exactly one, so 3 stray CJS files and 800 score the
+        // same (issue #104).
+        itemCount: minorityFiles.length,
         message: `Mixed ESM/CommonJS across project: ${esmFiles.length} ESM files, ${cjsFiles.length} CJS files`,
         locations: minorityFiles.slice(0, 10).map((f) => ({ file: f })),
         tags: ["imports", "project-inconsistency"],
