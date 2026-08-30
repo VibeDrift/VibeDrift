@@ -77,8 +77,14 @@ echo "==> npm version $BUMP"
 npm version "$BUMP" --no-git-tag-version >/dev/null
 VERSION="$(node -p "require('./package.json').version")"
 TAG="v$VERSION"
-restore_bump() { git checkout -- package.json package-lock.json 2>/dev/null || true; }
+restore_bump() { git checkout -- package.json package-lock.json .claude-plugin/plugin.json 2>/dev/null || true; }
 trap 'restore_bump' ERR
+
+# 3b. Keep the Claude Code plugin manifest's version in lockstep with the
+#     package.json bump above (CI's --check would otherwise catch this later,
+#     but fail here instead so the release stops before anything is tagged).
+echo "==> syncing .claude-plugin/plugin.json version"
+node scripts/sync-plugin-version.mjs
 
 # 4. Promote `## [Unreleased]` -> `## X.Y.Z — <date>`. Written with awk, not
 #    `sed -i`, which is not portable between GNU and BSD/macOS.
@@ -105,7 +111,7 @@ NOTES="$NOTES
 # 6. One commit carrying both the bump and the promoted heading, then the tag,
 #    so the tagged tree never says "[Unreleased]" for shipped work.
 echo "==> commit + tag $TAG"
-git add package.json package-lock.json CHANGELOG.md
+git add package.json package-lock.json CHANGELOG.md .claude-plugin/plugin.json
 git commit -q -m "release: $TAG"
 git tag -a "$TAG" -m "release: $TAG"
 trap - ERR

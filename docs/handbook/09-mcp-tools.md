@@ -4,6 +4,13 @@ A batch scan reports drift after the code exists. By the time `vibedrift scan` f
 
 MCP (Model Context Protocol) is the standard by which coding agents like Claude Code call external tools. VibeDrift's server speaks it over stdio: `vibedrift mcp` (or `node dist/mcp/server.js`) starts a server named `vibedrift` that registers eight tools. All logging goes to stderr, because stdout is the JSON-RPC channel; a stray `console.log` would corrupt the protocol stream.
 
+## Getting the server wired in: manual, or the Claude Code plugin
+
+Every tool in this chapter answers the same way regardless of how the stdio connection got made. Two paths reach it:
+
+- **Manual.** `claude mcp add vibedrift -- npx -y @vibedrift/cli mcp`, or the equivalent `mcpServers` JSON block, for any MCP client. This is the only path for anything that is not Claude Code.
+- **The Claude Code plugin.** `.claude-plugin/plugin.json` declares the same `vibedrift mcp` command under `mcpServers`, so installing the plugin (`/plugin install vibedrift@vibedrift`) registers the server without a manual `claude mcp add`. The plugin also ships two skills: the existing `skills/vibedrift` in-loop drift check, and `skills/setup`, a run-once `/vibedrift:setup` command that calls the `init` tool below to configure excludes, runs a baseline scan, injects a `CLAUDE.md` context block, and offers Drift Sessions through a native consent prompt. Nothing about the tool contracts, the baseline, or the never-throw status contract changes between the two paths; the plugin only changes how the stdio connection gets made.
+
 ## Two layers: tools-core and the MCP adapter
 
 The tools are implemented twice-decoupled:
