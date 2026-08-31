@@ -51,7 +51,7 @@ npx @vibedrift/cli
 /plugin install vibedrift@vibedrift
 ```
 
-The plugin bundles the [MCP server](#the-mcp-server-your-agent-asks) and two skills, and wires the MCP server in for you, no `claude mcp add` needed. The community-marketplace listing is pending, so that's the install path today; once it lands, a plain `claude plugins install vibedrift` will also work, but it does not yet.
+The plugin bundles the [MCP server](#the-mcp-server-your-agent-asks) — wired in for you, no `claude mcp add` needed — plus the in-loop drift-check skill and the `/vibedrift:setup` command below. The community-marketplace listing is pending, so that's the install path today; once it lands, a plain `claude plugins install vibedrift` will also work, but it does not yet.
 
 Already have `claude mcp add vibedrift` set up from before? Run `claude mcp remove vibedrift` after installing the plugin, so you are not left with two copies of the server wired in.
 

@@ -10,7 +10,7 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ### Added — Claude Code plugin
 
-- **`.claude-plugin/plugin.json` bundles the MCP server and two skills.** Installing the plugin registers `vibedrift mcp` automatically, the same server `claude mcp add` wires in by hand, plus the existing `skills/vibedrift` drift check and the new `skills/setup`. `.claude-plugin/marketplace.json` makes this repository installable as a self-marketplace.
+- **`.claude-plugin/plugin.json` bundles the MCP server and the skills.** Installing the plugin registers `vibedrift mcp` automatically, the same server `claude mcp add` wires in by hand, plus the existing `skills/vibedrift` drift check and the new `skills/setup`. `.claude-plugin/marketplace.json` makes this repository installable as a self-marketplace.
 - **`/vibedrift:setup`, a new skill, run once per repo.** It detects whether the repo has already been set up, configures excludes through the MCP `init` tool, runs a baseline scan and injects a context block into `CLAUDE.md`, and offers Drift Sessions through a native Claude Code consent prompt.
 - **Install path today:**
   ```
