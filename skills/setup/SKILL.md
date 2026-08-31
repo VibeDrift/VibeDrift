@@ -7,9 +7,18 @@ disable-model-invocation: true
 # VibeDrift setup
 
 Run once per repo. Four steps: excludes, baseline + context, Drift Sessions,
-wrap-up. Everything here is local; the only network calls are the account check
-behind `--write-context` and, if the user enables Drift Sessions, the entitlement
-refresh.
+wrap-up. Almost all of it is local. The exceptions, so you can answer honestly
+if the user asks:
+
+- `npx -y @vibedrift/cli` fetches the package from the npm registry.
+- The step 3 scan sends an anonymous beacon (language, file count, LOC, score;
+  no paths, no code) unless the user opted out with `vibedrift telemetry
+  disable` or `VIBEDRIFT_TELEMETRY_DISABLED=1`.
+- If the user is logged in, that same scan also uploads its findings to
+  `/v1/scans/log`, and findings keep `locations[].snippet`, which is a real
+  line of source. The telemetry opt out does not stop this. Only
+  `--local-only`, or staying logged out, does.
+- Enabling Drift Sessions refreshes entitlement from the server.
 
 **Rules for this skill:**
 
