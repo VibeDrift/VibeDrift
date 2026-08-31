@@ -18,7 +18,8 @@ if the user asks:
   `/v1/scans/log`, and findings keep `locations[].snippet`, which is a real
   line of source. The telemetry opt out does not stop this. Only
   `--local-only`, or staying logged out, does.
-- Enabling Drift Sessions refreshes entitlement from the server.
+- Drift Sessions, once enabled, refresh entitlement from the server when a
+  session starts (the `enable` call itself is local).
 
 **Rules for this skill:**
 
@@ -31,7 +32,14 @@ if the user asks:
 
 ## 1. Survey first — never assume
 
-Check all five, then present one short summary. Do not act on anything yet.
+First determine the repo root: run `git rev-parse --show-toplevel` once and use
+that absolute path as `rootDir` for **every** `init` and `enable` call and as the
+explicit path argument to the step 3 scan — do not pass `.` or re-derive it per
+step (in a monorepo subdirectory, mixing cwd-relative and derived roots splits
+the config across different directories). If this is not a git repository, use
+the project's top-level directory, and skip the "Commit" half of step 5.
+
+Then check all five, and present one short summary. Do not act on anything yet.
 
 1. `.vibedrift/config.json` — does it exist? (repo already initialized)
 2. `.vibedriftignore` — does it exist, and what is in it?
@@ -39,12 +47,16 @@ Check all five, then present one short summary. Do not act on anything yet.
    `<!-- vibedrift:context:start` ? That is the managed context block.
 4. `.claude/settings.local.json` — does any hook command contain `#vibedrift-hook`?
    That means Drift Sessions is already installed here.
-5. Run `claude mcp list`. If a **user-level** `vibedrift` server is registered
-   (from the older `claude mcp add vibedrift -- npx -y @vibedrift/cli mcp`), tell
-   the user to run `claude mcp remove vibedrift` — the plugin already bundles the
-   server, and two copies means duplicate tools in every session.
+5. Run `claude mcp list` (skip this check if the `claude` CLI is not on PATH or
+   the command errors). If it lists a second `vibedrift` server besides the
+   plugin's (from the older `claude mcp add vibedrift -- npx -y @vibedrift/cli mcp`),
+   tell the user to run `claude mcp remove vibedrift` — the plugin already
+   bundles the server, and two copies means duplicate tools in every session.
 
-Summarize as "already done / still to do", then move to the first undone step.
+Summarize as "already done / still to do", then run only the undone steps: skip
+step 3 if the managed block already exists (offer a re-run only if the user wants
+it refreshed), and skip step 4's offer if the `#vibedrift-hook` entries are
+already installed.
 
 ## 2. Excludes
 
@@ -75,14 +87,20 @@ Recommend yes — this is what puts the repo's dominant patterns in front of eve
 future session.
 
 ```bash
-npx -y @vibedrift/cli . --format terminal --write-context --inject-context
+npx -y @vibedrift/cli <repo-root> --format terminal --write-context --inject-context
 ```
+
+(`<repo-root>` is the absolute path from step 1 — the same one passed to `init`.)
 
 - `--write-context` writes `.vibedrift/context.md`, `fix-plan.md`,
   `fix-prompts.md`, and `patterns.json`. **It requires a free account.** If the
-  command exits with "requires a free account", tell the user to run
-  `vibedrift login` (30 seconds, free), or re-run with `--inject-context` alone —
-  the CLAUDE.md injection is not gated.
+  command exits with "requires a free account", the default is to re-run with
+  `--inject-context` alone — the CLAUDE.md injection is not gated and nothing is
+  uploaded. If the user wants the full context files, they can run
+  `vibedrift login` (30 seconds, free) — but say at that moment, before they
+  log in, that a signed-in scan also uploads its findings, including real
+  source-line snippets, to the dashboard (the header's third bullet), and that
+  adding `--local-only` keeps a signed-in scan fully offline.
 - `--inject-context` upserts a managed block into `CLAUDE.md`, between
   `<!-- vibedrift:context:start ... -->` and `<!-- vibedrift:context:end -->`.
   It targets `CLAUDE.md` only, not `AGENTS.md`. It is idempotent: re-running
