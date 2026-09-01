@@ -18,6 +18,22 @@ function dup(
   };
 }
 
+/**
+ * An ML duplicate finding exactly as `filterByConfidence` builds it
+ * (src/ml-client/confidence.ts): file locations only, NO line numbers — the
+ * cloud service reports `file::function` ids, not sites.
+ */
+function mlDup(files: string[], message = `ML-detected semantic duplicate: ${files.join(" / ")}`): Finding {
+  return {
+    analyzerId: "ml-duplicate",
+    severity: "error",
+    confidence: 0.9,
+    message,
+    locations: files.map((file) => ({ file })),
+    tags: ["ml", "duplicate"],
+  };
+}
+
 describe("deduplicateFindingsAcrossLayers", () => {
   it("keeps N distinct duplicate groups that span the SAME file pair", () => {
     // Two large modules can share several unrelated clones. Keying the dedup on
@@ -41,16 +57,52 @@ describe("deduplicateFindingsAcrossLayers", () => {
   });
 
   it("still merges the SAME functions reported by different layers, keeping the highest-priority one", () => {
+    // The ML copy carries NO line numbers (that is how the real constructor
+    // builds it), so it can only merge with the Code DNA / static copies by file
+    // set. Keying purely on file:line sites showed the clone twice on deep scans
+    // and dropped the "[confirmed by ...]" annotation.
     const sites: Array<[string, number]> = [["src/a.ts", 10], ["src/b.ts", 200]];
     const out = deduplicateFindingsAcrossLayers([
       dup("duplicates", sites),
       dup("codedna-opseq", sites),
       dup("codedna-fingerprint", sites),
-      dup("ml-duplicate", sites),
+      mlDup(["src/b.ts", "src/a.ts"]),
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].analyzerId).toBe("ml-duplicate");
     expect(out[0].message).toContain("confirmed by");
+    expect(out[0].message).toContain("Code DNA fingerprint");
+  });
+
+  it("attaches a line-less ML finding to ONE lined group over the same files, keeping the rest distinct", () => {
+    const groups: Finding[] = [
+      dup("codedna-fingerprint", [["src/a.ts", 10], ["src/b.ts", 200]], { dupGroupSize: 2 }),
+      dup("codedna-fingerprint", [["src/a.ts", 40], ["src/b.ts", 230]], { dupGroupSize: 3 }),
+      dup("codedna-fingerprint", [["src/a.ts", 70], ["src/b.ts", 260]], { dupGroupSize: 2 }),
+    ];
+    const out = deduplicateFindingsAcrossLayers([...groups, mlDup(["src/a.ts", "src/b.ts"])]);
+
+    // The ML copy merged into exactly one group rather than adding a fourth
+    // finding, and the distinct clones over the same file pair all survived.
+    expect(out).toHaveLength(3);
+    const confirmed = out.filter((f) => f.analyzerId === "ml-duplicate");
+    expect(confirmed).toHaveLength(1);
+    expect(confirmed[0].message).toContain("confirmed by");
+    expect(out.filter((f) => f.analyzerId === "codedna-fingerprint")).toHaveLength(2);
+
+    // Deterministic: the same input always picks the same group to merge into.
+    const again = deduplicateFindingsAcrossLayers([...groups, mlDup(["src/a.ts", "src/b.ts"])]);
+    expect(again.map((f) => f.message)).toEqual(out.map((f) => f.message));
+  });
+
+  it("merges line-less findings over the same file set with each other when no lined group exists", () => {
+    const out = deduplicateFindingsAcrossLayers([
+      mlDup(["src/a.ts", "src/b.ts"], "first"),
+      mlDup(["src/b.ts", "src/a.ts"], "second"),
+      mlDup(["src/a.ts", "src/c.ts"], "other pair"),
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.map((f) => f.message).sort()).toEqual(["first", "other pair"]);
   });
 
   it("does not mutate the caller's findings when it annotates the winner", () => {
