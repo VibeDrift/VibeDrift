@@ -67,7 +67,7 @@ function driftFinding(): DriftFindingReport {
   };
 }
 
-describe("renderJsonOutput includes driftFindings and codeDnaResult", () => {
+describe("renderJsonOutput includes driftFindings but not the raw CodeDnaResult", () => {
   it("includes non-empty driftFindings", () => {
     const result = minimalScanResult({ driftFindings: [driftFinding()] });
     const parsed = JSON.parse(renderJsonOutput(result));
@@ -75,12 +75,16 @@ describe("renderJsonOutput includes driftFindings and codeDnaResult", () => {
     expect(parsed.driftFindings[0].finding).toContain("snake_case");
   });
 
-  it("includes codeDnaResult when present", () => {
-    const dna = { functions: [], findings: [], duplicateGroups: [{ groupId: "g1", functions: [] }] };
+  it("omits codeDnaResult (it embeds every extracted function's full source body)", () => {
+    const dna = {
+      functions: [{ name: "secret", rawBody: "return process.env.SECRET;" }],
+      findings: [],
+      duplicateGroups: [{ groupId: "g1", functions: [] }],
+    };
     const result = minimalScanResult({ codeDnaResult: dna as unknown as ScanResult["codeDnaResult"] });
-    const parsed = JSON.parse(renderJsonOutput(result));
-    expect(parsed.codeDnaResult).toBeDefined();
-    expect(parsed.codeDnaResult.duplicateGroups).toHaveLength(1);
+    const out = renderJsonOutput(result);
+    expect(JSON.parse(out).codeDnaResult).toBeUndefined();
+    expect(out).not.toContain("process.env.SECRET");
   });
 
   it("includes teaseMessages and reimplementationCandidates when present", () => {
