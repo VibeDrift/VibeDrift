@@ -295,7 +295,11 @@ export const securityAnalyzer: Analyzer = {
   // absolute-floor subset; five noisy rules force severity "info" + a
   // "demoted" tag). Invalidates the on-disk findings cache so already-scanned
   // repos pick up the new classification on their next run.
-  version: 3,
+  // Bumped 4: the python-yaml-unsafe pattern text changed (a no-op lookahead
+  // was removed). Finding set is expected to be identical since negativeFilter
+  // already did the filtering, but the matched snippet text can differ — so
+  // warm caches must not serve a mix of old and new results.
+  version: 4,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];

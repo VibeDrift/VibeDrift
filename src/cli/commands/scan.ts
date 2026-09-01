@@ -240,6 +240,8 @@ async function runAnalysisPipeline(
   driftResult: ReturnType<typeof runDriftDetection>;
   codeDnaResult: CodeDnaResult | undefined;
   timings: Record<string, number>;
+  /** Analyzer ids that threw and were skipped — see ScanResult.degradedAnalyzers. */
+  failedAnalyzers: string[];
 }> {
   const isTerminal = options.format === "terminal" && !options.json;
   const timings: Record<string, number> = {};
@@ -266,7 +268,7 @@ async function runAnalysisPipeline(
   // reassembles their findings in declaration order, so the result is identical
   // to the old sequential loop but overlaps cache I/O. Speeds up every scan and
   // every watch tick.
-  const { findings: analyzerFindings, cacheHits, cacheMisses } = await runAnalyzers(
+  const { findings: analyzerFindings, cacheHits, cacheMisses, failed: failedAnalyzers } = await runAnalyzers(
     analyzers,
     ctx,
     { rootDir, cacheEnabled },
@@ -319,7 +321,7 @@ async function runAnalysisPipeline(
   // which re-parses the whole tree on every debounced rescan.
   disposeTrees(ctx.files);
 
-  return { ctx, allFindings, driftResult, codeDnaResult, timings };
+  return { ctx, allFindings, driftResult, codeDnaResult, timings, failedAnalyzers };
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -409,6 +411,7 @@ async function buildScanResult(
     allFindings: Finding[];
     driftResult: ReturnType<typeof runDriftDetection>;
     codeDnaResult: CodeDnaResult | undefined;
+    failedAnalyzers?: string[];
   },
   options: ScanOptions,
   startTime: number,
@@ -571,6 +574,13 @@ async function buildScanResult(
     scoringVersion,
     previousScoresMismatch,
   };
+
+  // Degraded marker: an analyzer that threw was skipped (stderr already
+  // warned), so the score above is missing its findings. Set only when
+  // non-empty so a clean run's JSON shape is unchanged.
+  if (pipeline.failedAnalyzers && pipeline.failedAnalyzers.length > 0) {
+    result.degradedAnalyzers = pipeline.failedAnalyzers;
+  }
 
   // AI Summary (when --deep is enabled, call the VibeDrift API for an executive summary)
   if (options.deep && bearerToken) {

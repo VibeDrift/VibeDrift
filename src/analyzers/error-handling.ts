@@ -38,6 +38,15 @@ function findFunctionBodyBrace(content: string, fromIndex: number): number {
   for (let i = fromIndex; i < limit; i++) {
     const c = content[i];
     if (c === "{" && depth === 0) return i;
+    // A `;` at depth 0 ends a body-less declaration — a TS overload
+    // signature (`async load(id: string): Promise<User>;`) or an abstract
+    // method. Without this stop the scan would keep walking and return the
+    // NEXT function's body brace, so that body was analyzed twice (once for
+    // the overload, once for the real implementation) and its await counted
+    // double. `;` inside `<...>`/`(...)`/`[...]` (e.g. an inline object type
+    // `Promise<{ a: string; b: number }>`) is a separator, not a terminator,
+    // and is skipped by the depth check.
+    if (c === ";" && depth === 0) return -1;
     if (c === "<" || c === "(" || c === "[" || c === "{") {
       depth++;
     } else if (c === ")" || c === "]" || c === "}") {

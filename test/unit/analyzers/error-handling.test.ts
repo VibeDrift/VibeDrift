@@ -49,4 +49,64 @@ describe("error-handling analyzer", () => {
     expect(unhandled).toBeDefined();
     expect(unhandled?.message).toContain(`4 async functions without error handling in ${dirUnhandled}/`);
   });
+
+  it("does not scan past a body-less TS overload signature into the next function (regression: overload body counted twice)", async () => {
+    // findFunctionBodyBrace used to scan up to 500 chars for the first `{`
+    // at depth 0. An overload signature (`async load(id: string): Promise<User>;`)
+    // has no body, so the scan walked past the `;` and returned the NEXT
+    // function's brace — the implementation's unhandled-await body was then
+    // analyzed twice (once attributed to the overload, once to itself).
+    // With 3 classes of [overload + impl] that double-count produced 6
+    // (> 3, a finding); the correct count of 3 stays below the threshold.
+    // A 4th file with a plain implementation tips the correct count to 4
+    // so we can assert the exact count rather than just absence.
+    const dir = "src/repo";
+    const overloadClass = (i: number) => `export class Repo${i} {
+  async load(id: string): Promise<User>;
+  async load(id: number): Promise<User>;
+  async load(id: string | number): Promise<User> {
+    const row = await this.db.get(id);
+    return toUser(row);
+  }
+}
+`;
+    const files = [0, 1, 2].map((i) => ({
+      path: `/test/${dir}/repo${i}.ts`,
+      relativePath: `${dir}/repo${i}.ts`,
+      language: "typescript" as const,
+      content: overloadClass(i),
+      lineCount: 9,
+    }));
+    files.push({
+      path: `/test/${dir}/plain.ts`,
+      relativePath: `${dir}/plain.ts`,
+      language: "typescript" as const,
+      content: `export async function ping(): Promise<void> {\n  await fetch("/ping");\n}\n`,
+      lineCount: 3,
+    });
+    const ctx: AnalysisContext = { ...BASE, files, totalLines: 30 };
+    const findings = await errorHandlingAnalyzer.analyze(ctx);
+    const unhandled = findings.find((f) => f.tags.includes("unhandled-async"));
+    expect(unhandled).toBeDefined();
+    // 3 real implementations + 1 plain function = 4. Two overload
+    // signatures per class contribute nothing — they have no body.
+    expect(unhandled?.message).toContain(`4 async functions without error handling in ${dir}/`);
+  });
+
+  it("still finds the body when a return type contains `;` inside an inline object type", async () => {
+    // `;` is only a terminator at depth 0 — inside `Promise<{ a: string; b: number }>`
+    // it's a property separator and must not abort the body search.
+    const dir = "src/api";
+    const files = Array.from({ length: 4 }, (_, i) => ({
+      path: `/test/${dir}/g${i}.ts`,
+      relativePath: `${dir}/g${i}.ts`,
+      language: "typescript" as const,
+      content: `export async function get${i}(): Promise<{ a: string; b: number }> {\n  const r = await fetch("/x");\n  return { a: "", b: r.status };\n}\n`,
+      lineCount: 4,
+    }));
+    const ctx: AnalysisContext = { ...BASE, files, totalLines: 16 };
+    const findings = await errorHandlingAnalyzer.analyze(ctx);
+    const unhandled = findings.find((f) => f.tags.includes("unhandled-async"));
+    expect(unhandled?.message).toContain(`4 async functions without error handling in ${dir}/`);
+  });
 });
