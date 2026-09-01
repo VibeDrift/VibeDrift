@@ -1036,9 +1036,12 @@ export function renderJsonOutput(result: ScanResult): string {
       // Cross-file drift findings and the Code DNA result (duplicates, taint
       // flows, pattern distributions) — present in every other output format
       // (HTML/CSV/DOCX). --format json is the machine surface for CI/tooling
-      // consumers, so it must not be the one format missing them.
+      // consumers, so it must not be the one format missing them. The raw
+      // CodeDnaResult is deliberately NOT included: it embeds every extracted
+      // function's full source body, which roughly doubles the output and puts
+      // complete source into a surface that never carried it. Its findings are
+      // already in `findings` above.
       driftFindings: result.driftFindings,
-      codeDnaResult: result.codeDnaResult,
       teaseMessages: result.teaseMessages,
       reimplementationCandidates: result.reimplementationCandidates,
       deepInsights: result.deepInsights,
