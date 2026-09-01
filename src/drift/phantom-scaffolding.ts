@@ -98,11 +98,15 @@ export const phantomScaffolding: DriftDetector = {
     const jsFiles: SourceFile[] = ctx.files
       .filter((f) => f.language === "javascript" || f.language === "typescript")
       .map((f) => ({
+        // Spread, not a field list. buildImportGraph parses with the AST when a
+        // tree is present and falls back to regex over raw content when it is
+        // not, so a field list that forgets `tree` silently puts the WHOLE repo
+        // on the regex path, where export/import patterns match inside string
+        // literals and comments. Spreading keeps that (and anything later added
+        // to DriftFile) attached; only `path` has no DriftFile equivalent.
+        ...f,
         path: f.relativePath,
-        relativePath: f.relativePath,
         language: f.language as "javascript" | "typescript",
-        content: f.content,
-        lineCount: f.lineCount,
       }));
     if (jsFiles.length < 2) return [];
 

@@ -107,6 +107,16 @@ import {
  *        1 to 34% and duplicate pairs moved -8% to +27%. Repos with no class
  *        or object-literal methods, no property-chain data references and no
  *        `//` inside literals are byte identical.
+ *   v16: phantom-scaffolding reads the AST import graph. The detector rebuilt
+ *        `SourceFile` objects for `buildImportGraph` without the parsed tree,
+ *        so the graph fell back to regex parsing of raw content for every file
+ *        and matched `export` inside string literals and comments. Sample code
+ *        embedded in a template literal counted as a real export; the detector
+ *        flagged its own test fixtures. Measured on eight repos, reported
+ *        phantom exports fall 111 to 16. Composites move only slightly (this
+ *        repo 86.2 to 86.3) because the false findings concentrated in `test/`,
+ *        where WEIGHT_TEST damps them. Repos whose phantom exports were all
+ *        real are byte identical.
  *   v17: count-based detectors score item volume, not finding count. A detector
  *        that rolls N deviating items into ONE finding had that N discarded,
  *        because both count branches divided by `findings.length`. `imports`
