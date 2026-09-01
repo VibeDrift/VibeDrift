@@ -9,7 +9,7 @@ vi.mock("../../../src/auth/config.js", async (orig) => {
   return { ...actual, readConfig: vi.fn(async () => ({ telemetryEnabled: true })) };
 });
 
-import { buildScanBeaconPayload, sendScanBeacon, sendReportOpenBeacon } from "../../../src/telemetry/beacon.js";
+import { buildScanBeaconPayload, sendScanBeacon } from "../../../src/telemetry/beacon.js";
 
 const payload = {
   language: null,
@@ -71,7 +71,7 @@ describe("buildScanBeaconPayload", () => {
   });
 });
 
-describe("sendScanBeacon / sendReportOpenBeacon: no timer leak on a rejected fetch", () => {
+describe("sendScanBeacon: no timer leak on a rejected fetch", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -93,12 +93,6 @@ describe("sendScanBeacon / sendReportOpenBeacon: no timer leak on a rejected fet
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("sendReportOpenBeacon clears the abort timer even when fetch rejects", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("ECONNREFUSED"))));
-    await sendReportOpenBeacon("scan-1", "tok", "http://127.0.0.1:1/never");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("sendScanBeacon also clears the timer on the success path (no regression)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true }) as Response));
     await sendScanBeacon(payload, "http://127.0.0.1:1/never");
@@ -106,27 +100,42 @@ describe("sendScanBeacon / sendReportOpenBeacon: no timer leak on a rejected fet
   });
 });
 
-describe("sendReportOpenBeacon: telemetry gate (P2)", () => {
+describe("sendScanBeacon: never rejects (P1)", () => {
+  const prevApiUrl = process.env.VIBEDRIFT_API_URL;
+
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.VIBEDRIFT_TELEMETRY_DISABLED;
+    if (prevApiUrl === undefined) delete process.env.VIBEDRIFT_API_URL;
+    else process.env.VIBEDRIFT_API_URL = prevApiUrl;
   });
 
-  // sendScanBeacon already gated on isTelemetryEnabled(); sendReportOpenBeacon
-  // did not, so a user who disabled telemetry still had this beacon fire from
-  // the HTML report's embedded script.
-  it("never calls fetch when telemetry is disabled via VIBEDRIFT_TELEMETRY_DISABLED", async () => {
-    const fetchSpy = vi.fn();
+  // The bug: resolveApiUrl() throws on a non-https or malformed override, and
+  // it was awaited OUTSIDE the try/catch. scan.ts fires the beacon as
+  // `void sendScanBeacon(...)`, so the throw became an unhandled promise
+  // rejection that killed every scan — free, signed-out, local ones included —
+  // for anyone with a stale VIBEDRIFT_API_URL or config apiUrl.
+  it("resolves (and skips fetch) when VIBEDRIFT_API_URL is non-https", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
     vi.stubGlobal("fetch", fetchSpy);
-    process.env.VIBEDRIFT_TELEMETRY_DISABLED = "1";
-    await sendReportOpenBeacon("scan-1", "tok", "http://127.0.0.1:1/never");
+    process.env.VIBEDRIFT_API_URL = "http://evil.example";
+    await expect(sendScanBeacon(payload)).resolves.toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("still calls fetch when telemetry is enabled", async () => {
+  it("resolves (and skips fetch) when VIBEDRIFT_API_URL is not a URL at all", async () => {
     const fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
     vi.stubGlobal("fetch", fetchSpy);
-    await sendReportOpenBeacon("scan-1", "tok", "http://127.0.0.1:1/never");
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    process.env.VIBEDRIFT_API_URL = "not a url";
+    await expect(sendScanBeacon(payload)).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolves when the telemetry-enabled check itself throws", async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
+    vi.stubGlobal("fetch", fetchSpy);
+    const { readConfig } = await import("../../../src/auth/config.js");
+    vi.mocked(readConfig).mockRejectedValueOnce(new Error("EACCES: config unreadable"));
+    await expect(sendScanBeacon(payload, "https://127.0.0.1:1/never")).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
