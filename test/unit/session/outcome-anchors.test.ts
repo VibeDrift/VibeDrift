@@ -337,6 +337,7 @@ describe("a redundancy finding whose clone was wrapped, not removed", () => {
     await writeOutcomeState(sessionsDir, "feedfacefeedface", "s-dup-roundtrip", {
       open: dup,
       hashes: {},
+      resolved: [],
     });
     const first = await readOutcomeState(sessionsDir, "feedfacefeedface", "s-dup-roundtrip");
     expect(first.open[0].anchor?.tokens?.length).toBeGreaterThan(0);
