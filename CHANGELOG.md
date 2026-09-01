@@ -20,6 +20,15 @@ explicitly under **Breaking** so CI users can recalibrate.
   then `/vibedrift:setup` once per repo. The community-marketplace listing is pending; once it lands, a plain `claude plugins install vibedrift` will also work, but does not yet.
 - **Anyone with `claude mcp add vibedrift` already configured should run `claude mcp remove vibedrift`** after installing the plugin, to avoid wiring the server in twice. Manual `claude mcp add` and the generic `mcpServers` JSON are unchanged and remain the path for every other MCP client.
 
+### Fixed — detection accuracy
+
+- **Phantom-scaffolding findings are now AST-grounded.** The detector was reading exports with a regex fallback that matched `export` inside string literals and comments, so sample code in a template literal could count as a real unused export. It now reads the parsed syntax tree. Measured on an eight-repo corpus, 86% of previously reported phantom exports were false and no longer appear. (#107)
+- **Mixed import style now scores by how many files deviate.** A project with 3 stray CommonJS files and one with 800 used to receive the same penalty, because the deviating-file count was written into the finding message and then ignored. The count now feeds the score, with diminishing returns. (#108)
+
+### Changed
+
+- **The Vibe Drift Score was refined by the two fixes above.** Scores move only on repos those fixes touch (typically by a fraction of a point up to about half a point). Existing stored scores are kept as they were; the update applies to new scans, and the CLI shows a one-time notice after upgrading.
+
 ## 0.20.0 — 2026-08-19
 
 **The in-loop checks stop telling you your own conventions are wrong, and the function index finally sees the methods it was blind to.**
