@@ -70,12 +70,22 @@ export interface OutcomeState {
   open: OpenFinding[];
   /** recent body hashes per file, for byte-exact revert detection */
   hashes: Record<string, string[]>;
+  /** tombstones: findingIds this session has resolved, most recent last. A
+   *  resolve is only an absence in `open`, and the read-merge-write in
+   *  writeOutcomeState unions `open` with the disk copy, so without a
+   *  tombstone the copy on disk would resurrect a finding on the very write
+   *  meant to remove it. Absent on sidecars written before tombstones existed;
+   *  readOutcomeState treats that as empty. */
+  resolved: string[];
 }
 
 const MAX_HASHES_PER_FILE = 20;
+/** cap on tombstones, like hashes: per-session ids are monotonic (DF-<n>), so
+ *  the oldest ones stop mattering once no writer can still hold them open. */
+const MAX_RESOLVED = 200;
 
 export function emptyOutcomeState(): OutcomeState {
-  return { open: [], hashes: {} };
+  return { open: [], hashes: {}, resolved: [] };
 }
 
 /** Merge two outcome snapshots (this write's local state and whatever is
@@ -83,25 +93,44 @@ export function emptyOutcomeState(): OutcomeState {
  *  never loses the other's progress to a blind overwrite (the same
  *  read-merge-write upload-state.ts's `commit()` uses, for the same reason).
  *
- *  `open` unions by findingId (local wins on a genuine conflict, since it is
- *  this call's own most-current view). This can, in principle, resurrect a
- *  finding a concurrent writer just resolved before that resolution reached
- *  disk — but that failure mode is exactly the direction this module already
- *  chooses on purpose everywhere else (see the module doc: "a stale open
- *  finding costs a re-flag; a false resolve costs the user's trust"), so it
- *  is not a new risk, just the existing bias applied here too. What a union
- *  actually prevents is the real hazard: a flag one process just appended to
- *  `open` silently vanishing because the other process's write landed last
- *  with a state that never knew about it.
+ *  `open` unions by findingId, minus the disk entries whose id local has
+ *  tombstoned in `resolved` (local wins on a genuine conflict, since it is
+ *  this call's own most-current view). A resolve is only an absence in
+ *  `open`, so a plain union would read "local no longer has DF-1" as "local
+ *  never heard of DF-1" and copy it back from disk on the very write meant to
+ *  remove it — a single writer could never persist a resolve. The tombstone
+ *  is what lets the merge tell the two apart. What the union still prevents
+ *  is the real concurrency hazard: a flag one process just appended to `open`
+ *  silently vanishing because the other process's write landed last with a
+ *  state that never knew about it.
  *
- *  `hashes` unions each file's recent-body-hash list and re-caps it at
- *  MAX_HASHES_PER_FILE, so revert detection never loses a hash either writer
- *  recorded. */
+ *  The tombstone is one-directional on purpose: a finding present in
+ *  local.open is kept even if onDisk.resolved names it, because being in
+ *  local.open means this writer flagged it or still holds it open, and that
+ *  is the bias this module chooses everywhere else (see the module doc: "a
+ *  stale open finding costs a re-flag; a false resolve costs the user's
+ *  trust"). So a concurrent writer's resolve that reached disk before this
+ *  writer's stale-but-open copy can still be undone by this write; that is
+ *  not a new risk, just the existing bias applied here too.
+ *
+ *  `resolved` unions both sides, drops any id that ended up in the merged
+ *  `open` (a re-flag clears its tombstone), and re-caps at MAX_RESOLVED
+ *  keeping the most recent. `hashes` unions each file's recent-body-hash list
+ *  and re-caps it at MAX_HASHES_PER_FILE, so revert detection never loses a
+ *  hash either writer recorded. */
 export function mergeOutcomeState(local: OutcomeState, onDisk: OutcomeState): OutcomeState {
+  const tombstoned = new Set(local.resolved);
   const byId = new Map<string, OpenFinding>();
-  for (const f of onDisk.open) byId.set(f.findingId, f);
+  for (const f of onDisk.open) {
+    if (!tombstoned.has(f.findingId)) byId.set(f.findingId, f);
+  }
   for (const f of local.open) byId.set(f.findingId, f);
   const open = [...byId.values()];
+
+  const resolved: string[] = [];
+  for (const id of [...onDisk.resolved, ...local.resolved]) {
+    if (!byId.has(id) && !resolved.includes(id)) resolved.push(id);
+  }
 
   const hashes: Record<string, string[]> = {};
   for (const file of new Set([...Object.keys(onDisk.hashes), ...Object.keys(local.hashes)])) {
@@ -111,7 +140,7 @@ export function mergeOutcomeState(local: OutcomeState, onDisk: OutcomeState): Ou
     }
     hashes[file] = merged.slice(-MAX_HASHES_PER_FILE);
   }
-  return { open, hashes };
+  return { open, hashes, resolved: resolved.slice(-MAX_RESOLVED) };
 }
 
 /**
@@ -236,6 +265,8 @@ export async function readOutcomeState(
     return {
       open: Array.isArray(parsed.open) ? parsed.open : [],
       hashes: parsed.hashes && typeof parsed.hashes === "object" ? parsed.hashes : {},
+      // Sidecars written before tombstones existed have no `resolved` key.
+      resolved: Array.isArray(parsed.resolved) ? parsed.resolved : [],
     };
   } catch {
     return emptyOutcomeState();

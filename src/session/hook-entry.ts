@@ -346,6 +346,10 @@ async function main(): Promise<number> {
             });
           }
           outcomes.open = outcomes.open.filter((f) => !resolvedIds.has(f.findingId));
+          // Tombstone each resolve so the read-merge-write in writeOutcomeState
+          // does not copy the finding back from disk (a resolve is otherwise
+          // just an absence from `open`, indistinguishable from never-seen).
+          outcomes.resolved.push(...resolvedIds);
         }
       }
 
@@ -361,7 +365,10 @@ async function main(): Promise<number> {
         }
         await appendEvent(sessionsDir, projectHash, event.sid, flag);
         if (flag.findingId && flag.detail.file && flag.detail.category) {
-          // The anchor rides in the local sidecar only, never in the event.
+          // A flag reopens: clear any tombstone carrying this id so the merge
+          // does not drop the finding again. The anchor rides in the local
+          // sidecar only, never in the event.
+          outcomes.resolved = outcomes.resolved.filter((id) => id !== flag.findingId);
           outcomes.open.push({
             findingId: flag.findingId,
             file: flag.detail.file,
