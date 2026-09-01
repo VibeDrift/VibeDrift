@@ -52,4 +52,42 @@ describe("extractFileMiddlewareAst", () => {
     const f = await fileWithTree("m.ts", `emitter.use(requireAuth);\n`);
     expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: false, hasValidation: false, hasRateLimit: false });
   });
+
+  // ─── REGRESSION: string literals inside the argument list blessed the file ──
+  //
+  // The lane used to regex-test the arguments' RAW TEXT, which includes string
+  // literals. A mount path or an asset directory whose NAME happens to contain an
+  // auth word therefore set hasAuth for the whole file, and every route in it
+  // inherited the bless — a file-wide false bless off a string. Per-route
+  // middleware already went through the structural middlewareNames() helper; this
+  // lane now uses the same one.
+  //
+  // These bind: swap middlewareNames() back for `arguments.text` and each case
+  // below returns hasAuth/hasValidation/hasRateLimit true.
+  it("a mount PATH containing an auth word does not bless the file", async () => {
+    const f = await fileWithTree("app.ts", `app.use("/jwt", staticRouter);\napp.get("/x", h);\n`);
+    expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: false, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("a STRING ARGUMENT to a non-auth middleware does not bless the file", async () => {
+    const f = await fileWithTree("s.ts", `app.use(express.static("passport-photos"));\n`);
+    expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: false, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("the validation and rate-limit lanes are string-proof too", async () => {
+    const f = await fileWithTree("s2.ts",
+      `app.use("/validate", pageRouter);\napp.use("/rateLimit", docsRouter);\n`);
+    expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: false, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("a real mounted middleware still blesses through a mount path", async () => {
+    // Non-vacuity: the structural read must still see the IDENTIFIER argument.
+    const f = await fileWithTree("ok.ts", `app.use("/api", requireAuth);\n`);
+    expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: true, hasValidation: false, hasRateLimit: false });
+  });
+
+  it("a call-form middleware still blesses (callee name, never its arguments)", async () => {
+    const f = await fileWithTree("ok2.ts", `app.use(passport.authenticate("jwt"));\napp.use(rateLimit({ max: 5 }));\n`);
+    expect(extractFileMiddlewareAst(f.tree!)).toEqual({ hasAuth: true, hasValidation: false, hasRateLimit: true });
+  });
 });

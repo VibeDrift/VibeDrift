@@ -597,6 +597,28 @@ function blockTailValue(block: SyntaxNode): SyntaxNode | null {
   return last;
 }
 
+/** The status an Actix `HttpResponse::<Status>()` BUILDER chain produces, or null
+ *  when `node` is not such a chain. Walks only `field_expression` receivers down
+ *  to the chain root and requires that root to be a call on a `HttpResponse::`
+ *  scoped path, so the verdict comes entirely from the status constant — a
+ *  chained method NAME never contributes. Anything else (a plain identifier
+ *  receiver, a `StatusCode::` path, a deeper unknown shape) yields null. */
+function rustHttpResponseBuilderStatus(
+  node: SyntaxNode | null,
+  depth = 0,
+): "401" | "403" | "404" | "500" | "other" | null {
+  if (!node || depth > 8 || node.type !== "call_expression") return null;
+  const fn = node.childForFieldName("function");
+  if (fn?.type === "scoped_identifier") {
+    const pathTail = (fn.childForFieldName("path")?.text ?? "").split("::").pop() ?? "";
+    return pathTail === "HttpResponse" ? rustRejectStatus(fn) : null;
+  }
+  if (fn?.type === "field_expression") {
+    return rustHttpResponseBuilderStatus(fn.childForFieldName("value"), depth + 1);
+  }
+  return null;
+}
+
 /** True when `node`, evaluated in a PRODUCE position (a `return` value, a `?` try
  *  operand, a block/body TAIL, a match-arm value, an if/else branch tail), yields
  *  a `target`-status rejection (401 by default; 403 for the credential-guarded
@@ -631,6 +653,13 @@ function rustProducesReject(node: SyntaxNode | null, target: "401" | "403" = "40
         if (RUST_ERR_CTOR_401.has(fn.text)) return target === "401"; // Actix ErrorUnauthorized(..): 401-only in v1 scope
         return false;
       }
+      // Actix: `HttpResponse::Unauthorized()` — a scoped_identifier CALLEE. This
+      // branch was missing, which made the whole `HttpResponse` entry in
+      // STATUS_PATH_TAILS dead code and left every Actix handler that rejects the
+      // idiomatic way classified as unauthenticated. The status is fully
+      // determined by the callee path, exactly as for the bare
+      // `StatusCode::UNAUTHORIZED` leaf above.
+      if (fn?.type === "scoped_identifier") return rustRejectStatus(fn) === target;
       if (fn?.type === "field_expression") {
         const field = fn.childForFieldName("field")?.text;
         if (field === "into_response") return rustProducesReject(fn.childForFieldName("value"), target);
@@ -642,6 +671,12 @@ function rustProducesReject(node: SyntaxNode | null, target: "401" | "403" = "40
           const cbody = closure?.type === "closure_expression" ? closure.childForFieldName("body") : null;
           return rustProducesReject(cbody, target); // the closure body's OWN produce tail, never any mention
         }
+        // Actix builder chain: `HttpResponse::Unauthorized().finish()`,
+        // `.json(body)`, `.insert_header(..).finish()`. Every method chained onto
+        // an `HttpResponse::<Status>()` builder still produces THAT status, so the
+        // status is read from the ROOT of the chain and the method names are never
+        // inspected (no name-based bless is introduced).
+        if (rustHttpResponseBuilderStatus(fn.childForFieldName("value")) === target) return true;
       }
       return false;
     }

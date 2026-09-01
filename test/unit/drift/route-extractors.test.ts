@@ -138,3 +138,51 @@ describe("route-extractors: Rust (AST-only, no regex fallback)", () => {
     expect(rustRouteExtractor.extract(f, deps())).toEqual([]);
   });
 });
+
+// ─── REGRESSION: findHandlerContent read the FIRST textual occurrence ────────
+//
+// The window was located with `fullContent.indexOf(routePath)`, so the first
+// place the path string appeared anywhere in the file won — a doc comment, an
+// OpenAPI/route-table string, or simply the earlier of two registrations sharing
+// one path. Every route with that path then read the SAME window, and got the
+// first one's validation / error-handler signals.
+//
+// These bind: drop the `routeLine` argument in go.ts (or the anchoring branch in
+// findHandlerContent) and both cases below regress.
+describe("findHandlerContent: window anchored to the route's own line (regression)", () => {
+  it("GET and POST on the same path read their OWN handler bodies", () => {
+    const src = [
+      `r.GET("/items", listItems)`,
+      `func listItems(c *gin.Context) { c.JSON(200, items) }`,
+      // Enough filler to exceed the 500-back / 2000-forward window span, so the
+      // two registrations genuinely cannot see each other's handler.
+      ...Array.from({ length: 60 }, (_v, i) => `// filler line ${i} ${"x".repeat(60)}`),
+      `r.POST("/items", createItem)`,
+      `func createItem(c *gin.Context) { c.Bind(&o); if err != nil { return } }`,
+    ].join("\n");
+    const routes = goRouteExtractor.extract(file("routes.go", "go", src), deps());
+    const get = routes.find((r) => r.method === "GET")!;
+    const post = routes.find((r) => r.method === "POST")!;
+    // The GET handler neither binds nor handles errors; only the POST one does.
+    expect(get.hasValidation).toBe(false);
+    expect(get.hasErrorHandler).toBe(false);
+    expect(post.hasValidation).toBe(true);
+    expect(post.hasErrorHandler).toBe(true);
+  });
+
+  it("a leading doc comment naming the path does not supply the window", () => {
+    const src = [
+      `// /orders — see docs. c.Bind(&o) is done by the gateway; err != nil there.`,
+      // Enough filler to exceed the 500-back / 2000-forward window span, so the
+      // two registrations genuinely cannot see each other's handler.
+      ...Array.from({ length: 60 }, (_v, i) => `// filler line ${i} ${"x".repeat(60)}`),
+      `r.POST("/orders", createOrder)`,
+      `func createOrder(c *gin.Context) { c.JSON(200, o) }`,
+    ].join("\n");
+    const [route] = goRouteExtractor.extract(file("routes.go", "go", src), deps());
+    expect(route.path).toBe("/orders");
+    // The comment 40+ lines up must not be what the handler window reads.
+    expect(route.hasValidation).toBe(false);
+    expect(route.hasErrorHandler).toBe(false);
+  });
+});
