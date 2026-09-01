@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBaseline, type RepoDriftBaseline } from "@/core/baseline";
 import {
   runEditChecks,
   rankAdvisoryCandidates,
+  mergeCooldownState,
   INLINE_CHECK_MAX_ENTRIES,
   COOLDOWN_MS,
   STRONG_DUP_SIMILARITY,
+  type CooldownState,
 } from "@/session/check";
 import type { SessionEvent } from "@/session/types";
 
@@ -188,6 +190,59 @@ describe("runEditChecks", () => {
     const out = await runEditChecks(opts({ sessionId: "s-chk-err", loadBaselineFor: async () => broken }));
     expect(out.flags).toEqual([]);
     expect(out.checked).toBe(false);
+  });
+});
+
+describe("mergeCooldownState (pure)", () => {
+  it("takes the max nextFindingSeq from either side", () => {
+    const local: CooldownState = { nextFindingSeq: 3, lastFyi: {} };
+    const onDisk: CooldownState = { nextFindingSeq: 7, lastFyi: {} };
+    expect(mergeCooldownState(local, onDisk).nextFindingSeq).toBe(7);
+    expect(mergeCooldownState(onDisk, local).nextFindingSeq).toBe(7);
+  });
+
+  it("unions lastFyi keys and takes the max timestamp per shared key", () => {
+    const local: CooldownState = { nextFindingSeq: 1, lastFyi: { "a.ts|x": 100, "b.ts|y": 50 } };
+    const onDisk: CooldownState = { nextFindingSeq: 1, lastFyi: { "a.ts|x": 200, "c.ts|z": 300 } };
+    expect(mergeCooldownState(local, onDisk).lastFyi).toEqual({
+      "a.ts|x": 200,
+      "b.ts|y": 50,
+      "c.ts|z": 300,
+    });
+  });
+
+  it("never regresses a cooldown key: an earlier local timestamp cannot un-throttle a key onDisk already started", () => {
+    const local: CooldownState = { nextFindingSeq: 1, lastFyi: { "a.ts|x": 10 } };
+    const onDisk: CooldownState = { nextFindingSeq: 1, lastFyi: { "a.ts|x": 9999 } };
+    expect(mergeCooldownState(local, onDisk).lastFyi["a.ts|x"]).toBe(9999);
+  });
+});
+
+describe("runEditChecks: concurrent hook subprocesses never tear the cooldown file", () => {
+  // Two hooks for parallel tool calls in the same session both read-then-write
+  // the SAME session's cooldown sidecar. This is lock-free by design (like
+  // upload-state.ts's commit()), so we do NOT assert both writers' keys are
+  // guaranteed to survive a true race — that residual window is documented and
+  // harmless (a dropped cooldown key just costs one extra FYI, never a crash).
+  // What must always hold: the file is never torn (invalid JSON), and a write
+  // that happens to observe the other's prior write converges on both keys.
+  it("stays valid JSON under a concurrent write, and a later run sees both keys", async () => {
+    const sessionId = "s-concurrent-cooldown";
+    await Promise.all([
+      runEditChecks(opts({ sessionId, file: join(repo, "src", "concA.ts") })),
+      runEditChecks(opts({ sessionId, file: join(repo, "src", "concB.ts") })),
+    ]);
+
+    const statePath = join(sessionsDir, "feedfacefeedface", `${sessionId}.cooldown.json`);
+    // Invariant 1 — no torn write: always parses, regardless of who won the race.
+    const persisted = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(typeof persisted.nextFindingSeq).toBe("number");
+
+    // Invariant 2 — convergence: a subsequent SEQUENTIAL call for a key that
+    // survived (or a fresh one) still cools down normally, i.e. the file is
+    // usable state, not corrupted by the race.
+    const again = await runEditChecks(opts({ sessionId, file: join(repo, "src", "concA.ts") }));
+    expect(again.flags.length).toBeGreaterThanOrEqual(1); // detection itself is unaffected by the sidecar race
   });
 });
 

@@ -6,10 +6,11 @@
  * an error.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { safeSegment } from "./ledger.js";
-import type { Anchors } from "./anchors.js";
+import { mergeAnchors, type Anchors } from "./anchors.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 export interface IntentState {
   anchors: Anchors;
@@ -53,6 +54,27 @@ export async function readIntentState(
   }
 }
 
+/** Merge two intent snapshots (this write's local state and whatever is
+ *  currently on disk) so a concurrent hook subprocess for the same session
+ *  never loses the other's progress to a blind overwrite (the same
+ *  read-merge-write upload-state.ts's `commit()` uses, for the same reason).
+ *  Anchors union (mergeAnchors, already used for the same purpose in
+ *  scope.ts); `locked` prefers true, since intent, once locked, must never
+ *  un-lock from a stale read; the task label follows whichever side actually
+ *  holds the lock; counters take the max, since both are monotonically
+ *  incremented per edit and never legitimately decrease. */
+export function mergeIntentState(local: IntentState, onDisk: IntentState): IntentState {
+  const locked = local.locked || onDisk.locked;
+  const task = local.locked ? local.task : onDisk.locked ? onDisk.task : local.task || onDisk.task;
+  return {
+    anchors: mergeAnchors(local.anchors, onDisk.anchors),
+    locked,
+    task,
+    unrelatedEdits: Math.max(local.unrelatedEdits, onDisk.unrelatedEdits),
+    scopeFlagged: [...new Set([...local.scopeFlagged, ...onDisk.scopeFlagged])],
+  };
+}
+
 export async function writeIntentState(
   sessionsDir: string,
   projectHash: string,
@@ -60,8 +82,12 @@ export async function writeIntentState(
   state: IntentState,
 ): Promise<void> {
   try {
-    await mkdir(join(sessionsDir, safeSegment(projectHash)), { recursive: true, mode: 0o700 });
-    await writeFile(statePath(sessionsDir, projectHash, sessionId), JSON.stringify(state), { mode: 0o600 });
+    // Read-merge-write: re-read whatever is on disk right now and merge
+    // rather than blindly overwrite, so a concurrent hook subprocess's
+    // anchors, lock, or counters for this same session are never lost.
+    const onDisk = await readIntentState(sessionsDir, projectHash, sessionId);
+    const merged = mergeIntentState(state, onDisk);
+    await writeFileAtomic(statePath(sessionsDir, projectHash, sessionId), JSON.stringify(merged), { mode: 0o600 });
   } catch {
     // best-effort; losing intent state degrades scope detection, never fails the hook
   }
