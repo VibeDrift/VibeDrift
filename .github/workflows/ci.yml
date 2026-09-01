@@ -26,6 +26,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      - name: Check Claude Code plugin version is in sync with package.json
+        run: node scripts/sync-plugin-version.mjs --check
 
 
   # The install experience, tested for real: publish to a throwaway local

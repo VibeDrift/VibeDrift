@@ -4,6 +4,22 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+**VibeDrift is now a Claude Code plugin: one install wires the MCP server in and adds a run-once setup skill, no `claude mcp add` required.**
+
+### Added — Claude Code plugin
+
+- **`.claude-plugin/plugin.json` bundles the MCP server and the skills.** Installing the plugin registers `vibedrift mcp` automatically, the same server `claude mcp add` wires in by hand, plus the existing `skills/vibedrift` drift check and the new `skills/setup`. `.claude-plugin/marketplace.json` makes this repository installable as a self-marketplace.
+- **`/vibedrift:setup`, a new skill, run once per repo.** It detects whether the repo has already been set up, configures excludes through the MCP `init` tool, runs a baseline scan and injects a context block into `CLAUDE.md`, and offers Drift Sessions through a native Claude Code consent prompt.
+- **Install path today:**
+  ```
+  /plugin marketplace add VibeDrift/VibeDrift
+  /plugin install vibedrift@vibedrift
+  ```
+  then `/vibedrift:setup` once per repo. The community-marketplace listing is pending; once it lands, a plain `claude plugins install vibedrift` will also work, but does not yet.
+- **Anyone with `claude mcp add vibedrift` already configured should run `claude mcp remove vibedrift`** after installing the plugin, to avoid wiring the server in twice. Manual `claude mcp add` and the generic `mcpServers` JSON are unchanged and remain the path for every other MCP client.
+
 ## 0.20.0 — 2026-08-19
 
 **The in-loop checks stop telling you your own conventions are wrong, and the function index finally sees the methods it was blind to.**

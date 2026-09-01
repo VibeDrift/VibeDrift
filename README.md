@@ -23,6 +23,7 @@ npx @vibedrift/cli
 
 ## Contents
 
+- [Claude Code: 30-second setup](#claude-code-30-second-setup)
 - [What drift is](#what-drift-is)
 - [The three channels](#the-three-channels)
 - [The CLI: you run it](#the-cli-you-run-it)
@@ -40,6 +41,29 @@ npx @vibedrift/cli
 - [Contributing](#contributing)
 - [License](#license)
 - [Links](#links)
+
+## Claude Code: 30-second setup
+
+**1. Install the plugin.**
+
+```
+/plugin marketplace add VibeDrift/VibeDrift
+/plugin install vibedrift@vibedrift
+```
+
+The plugin bundles the [MCP server](#the-mcp-server-your-agent-asks) — wired in for you, no `claude mcp add` needed — plus the in-loop drift-check skill and the `/vibedrift:setup` command below. The community-marketplace listing is pending, so that's the install path today; once it lands, a plain `claude plugins install vibedrift` will also work, but it does not yet.
+
+Already have `claude mcp add vibedrift` set up from before? Run `claude mcp remove vibedrift` after installing the plugin, so you are not left with two copies of the server wired in.
+
+Not on Claude Code, or want to wire the server in yourself? Skip the plugin and use `claude mcp add` or the generic `mcpServers` JSON in [the MCP server section](#the-mcp-server-your-agent-asks) below, same server, same tools, any MCP client.
+
+**2. Run `/vibedrift:setup`, once per repo.** It:
+- detects whether this repo has been set up before, and picks up from there
+- configures what to exclude, through the MCP server's `init` tool
+- runs a baseline scan and injects a context block into `CLAUDE.md`
+- offers [Drift Sessions](#drift-sessions-preview), through a native consent prompt
+
+**3. Done.** VibeDrift rides along from then on: the MCP tools answer as the agent writes, and, if you opted in, Drift Sessions flags drift live in the session.
 
 ## What drift is
 
@@ -90,6 +114,8 @@ Requires Node.js 20 or newer.
 ```bash
 claude mcp add vibedrift -- npx -y @vibedrift/cli mcp
 ```
+
+On Claude Code, the [plugin](#claude-code-30-second-setup) does this step for you, skip the command above and install it instead.
 
 Any other MCP client uses the same stdio command:
 

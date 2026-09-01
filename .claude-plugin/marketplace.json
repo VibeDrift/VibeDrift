@@ -1,0 +1,12 @@
+{
+  "name": "vibedrift",
+  "owner": { "name": "VibeDrift", "url": "https://vibedrift.ai" },
+  "description": "VibeDrift as an installable Claude Code plugin.",
+  "plugins": [{
+    "name": "vibedrift",
+    "source": "./",
+    "description": "Drift detection for AI-generated codebases, with in-loop MCP tools and a run-once setup skill.",
+    "category": "engineering",
+    "keywords": ["drift", "code-consistency", "mcp"]
+  }]
+}

@@ -57,7 +57,7 @@ npx tsx src/cli/index.ts /path/to/a/project
 | **Layer 1.7** (Code DNA) | `src/codedna/` — fingerprinting, op sequences, pattern classification, taint, deviation | local, free |
 | **Layer 2** (deep scan) | `src/ml-client/` + `src/mcp/deep-client.ts` — client that talks to the hosted cloud service; embeddings and LLM validation run server-side | cloud, metered |
 
-Supporting modules: `src/scoring/` turns findings into 5 categories of 0-20 into a composite of 0-100; `src/output/` renders reports (HTML, terminal, JSON, CSV, DOCX); `src/mcp/` is the MCP server (6 local tools — the 5 in-loop tools plus `init` setup — and the in-editor deep-scan client); `src/cli/` holds the Commander.js commands.
+Supporting modules: `src/scoring/` turns findings into 5 categories of 0-20 into a composite of 0-100; `src/output/` renders reports (HTML, terminal, JSON, CSV, DOCX); `src/mcp/` is the MCP server (8 tools — the 5 in-loop tools plus `init` setup, `enable`, and `respond_to_flag` — and the in-editor deep-scan client); `src/cli/` holds the Commander.js commands.
 
 The registries are the source of truth for what runs: `src/analyzers/index.ts` and `src/drift/index.ts`. For the deep reference — code paths, constants, invariants, and the why behind them — read the **Developer Handbook** in [`docs/handbook/`](./docs/handbook/) (published at [vibedrift.ai/handbook](https://www.vibedrift.ai/handbook)).
 
