@@ -27,6 +27,36 @@ describe("imports analyzer", () => {
     expect(findings.some((f) => f.message.includes("Mixed ESM/CommonJS"))).toBe(true);
   });
 
+  // Issue #104: this analyzer emits exactly ONE project-level finding however
+  // many files deviate, and the engine's count branch divides by the number of
+  // findings. Without itemCount, 1 stray CommonJS file and 40 score the same.
+  it("carries the minority file count as itemCount on the project finding", async () => {
+    const esm = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        path: `/test/e${i}.js`, relativePath: `e${i}.js`, language: "javascript" as const,
+        content: 'import foo from "foo";\n', lineCount: 1,
+      }));
+    const cjs = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        path: `/test/c${i}.js`, relativePath: `c${i}.js`, language: "javascript" as const,
+        content: 'const bar = require("bar");\n', lineCount: 1,
+      }));
+    const run = async (nEsm: number, nCjs: number) => {
+      const ctx: AnalysisContext = { ...BASE, files: [...esm(nEsm), ...cjs(nCjs)], totalLines: nEsm + nCjs };
+      const findings = await importsAnalyzer.analyze(ctx);
+      return findings.find((f) => f.message.includes("across project"));
+    };
+
+    // Minority is the CJS side.
+    const few = await run(20, 1);
+    expect(few?.itemCount).toBe(1);
+
+    // Same single finding, forty times the deviating population.
+    const many = await run(20, 40);
+    expect(many?.itemCount).toBe(20); // minority flips to the ESM side at 20 vs 40
+    expect(many?.locations.length).toBe(10); // locations still truncate; itemCount does not
+  });
+
   it("returns empty for consistent imports", async () => {
     const ctx: AnalysisContext = {
       ...BASE,
@@ -73,7 +103,10 @@ describe("imports analyzer", () => {
     expect(findings.some((f) => f.message.includes("Mixed"))).toBe(true);
   });
 
-  it("bumps version to 2 (invalidates findings cache)", () => {
-    expect(importsAnalyzer.version).toBe(2);
+  // Pinned on purpose: this analyzer's findings are cached by version, so a
+  // behaviour change that forgets to bump it is served stale and will not
+  // reproduce on a warm machine. v3 adds itemCount (issue #104).
+  it("pins version to 3 (invalidates findings cache)", () => {
+    expect(importsAnalyzer.version).toBe(3);
   });
 });

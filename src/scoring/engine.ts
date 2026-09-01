@@ -117,12 +117,22 @@ import {
  *        repo 86.2 to 86.3) because the false findings concentrated in `test/`,
  *        where WEIGHT_TEST damps them. Repos whose phantom exports were all
  *        real are byte identical.
+ *   v17: count-based detectors score item volume, not finding count. A detector
+ *        that rolls N deviating items into ONE finding had that N discarded,
+ *        because both count branches divided by `findings.length`. `imports`
+ *        emits exactly one project-level finding, so a repo with 3 stray
+ *        CommonJS files and one with 800 scored identically. Findings now carry
+ *        `itemCount` and the branches sum it; a finding without one counts as
+ *        1, which is the previous number. Measured on ten repos, three move:
+ *        eslint -0.4 (112 minority files), moment -0.2 (23), underscore -0.1
+ *        (4). The other seven are byte identical, including three that mix ESM
+ *        and CJS but whose minority side is 1 to 3 files. Reported in #104.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v16";
+export const SCORING_VERSION = "v17";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
@@ -506,11 +516,16 @@ function groupDeviation(
   // with FUNCTION COUNT, not lines. Normalize as a size-fair per-function rate when
   // the function count is known so structural similarity that grows with scale
   // doesn't sink large clean repos; fall back to per-KLOC density when it isn't.
+  // Volume, not finding count. A detector that rolls N deviating items into one
+  // finding carries `itemCount`; one that emits a finding per item omits it and
+  // contributes 1 each, which is the same number as before (issue #104).
+  let items = 0;
+  for (const f of findings) items += f.itemCount ?? 1;
   if (functionCount > 0) {
-    const rate = findings.length / functionCount;
+    const rate = items / functionCount;
     return 1 - Math.exp(-rate / COUNT_RATE_SCALE);
   }
-  const density = findings.length / klocCount;
+  const density = items / klocCount;
   return 1 - Math.exp(-density / COUNT_DENSITY_SCALE);
 }
 

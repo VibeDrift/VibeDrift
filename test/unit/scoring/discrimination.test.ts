@@ -321,3 +321,64 @@ describe("scoring decompression (v4)", () => {
     expect(small.compositeScore).toBeGreaterThan(20);
   });
 });
+
+/**
+ * Issue #104: a detector that rolls N deviating items into ONE finding had its
+ * volume discarded, because the count branch divides by `findings.length`.
+ * `imports` emits exactly one project-level finding, so 3 stray CommonJS files
+ * and 800 scored identically. `itemCount` carries the real population through.
+ */
+describe("count-based item volume (issue #104)", () => {
+  const ctxWithFunctions = (): AnalysisContext => {
+    const files = Array.from({ length: 20 }, (_, i) => ({
+      path: `src/m${i}.ts`,
+      relativePath: `src/m${i}.ts`,
+      language: "typescript" as const,
+      content: `export function unit${i}(a: number, b: number): number {\n  const t = a * ${i + 1};\n  return t + b;\n}\n`,
+      lineCount: 4,
+    }));
+    return makeCtx(5000, files);
+  };
+
+  const mkImports = (itemCount?: number): Finding => ({
+    analyzerId: "imports",
+    severity: "warning",
+    confidence: 0.85,
+    message: "Mixed ESM/CommonJS across project",
+    locations: [{ file: "src/m0.ts", line: 1 }],
+    tags: ["imports", "project-inconsistency"],
+    ...(itemCount === undefined ? {} : { itemCount }),
+  });
+
+  it("a rolled-up finding covering many items scores worse than one covering few", () => {
+    const ctx = ctxWithFunctions();
+    const few = computeScores([mkImports(1)], 5000, ctx).compositeScore;
+    const many = computeScores([mkImports(60)], 5000, ctx).compositeScore;
+    // Control: the low-volume case must not already be at the floor, or the
+    // comparison would hold for a detector that scored nothing at all.
+    expect(few).toBeGreaterThan(many);
+    expect(few).toBeGreaterThan(90);
+  });
+
+  it("volume scales monotonically, not as a step", () => {
+    const ctx = ctxWithFunctions();
+    const scores = [1, 10, 30, 60].map((n) => computeScores([mkImports(n)], 5000, ctx).compositeScore);
+    for (let i = 1; i < scores.length; i++) {
+      expect(scores[i]).toBeLessThan(scores[i - 1]);
+    }
+  });
+
+  it("a finding with no itemCount counts as one item (no change for per-item detectors)", () => {
+    const ctx = ctxWithFunctions();
+    const absent = computeScores([mkImports(undefined)], 5000, ctx).compositeScore;
+    const explicitOne = computeScores([mkImports(1)], 5000, ctx).compositeScore;
+    expect(absent).toBe(explicitOne);
+  });
+
+  it("two findings of one item each equal one finding of two items", () => {
+    const ctx = ctxWithFunctions();
+    const split = computeScores([mkImports(1), mkImports(1)], 5000, ctx).compositeScore;
+    const rolled = computeScores([mkImports(2)], 5000, ctx).compositeScore;
+    expect(split).toBe(rolled);
+  });
+});

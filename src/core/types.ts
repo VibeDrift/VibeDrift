@@ -407,6 +407,14 @@ export interface Finding {
    */
   dupGroupSize?: number;
   /**
+   * For findings that roll several deviating items into ONE finding: how many
+   * items this finding accounts for. The count-based branch of the scoring
+   * engine sums it across a detector's findings, so a single finding reading
+   * "112 files use CommonJS" registers as 112 rather than as 1. Absent on
+   * one-item-per-finding detectors, where it defaults to 1. See issue #104.
+   */
+  itemCount?: number;
+  /**
    * Structured context that downstream renderers (HTML, terminal, fix-
    * prompt template) use to build the Copy-as-AI-context block and
    * reference the peer baseline this finding deviates from. Populated
