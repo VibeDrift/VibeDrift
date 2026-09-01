@@ -101,10 +101,27 @@ function computeCognitiveAST(node: SyntaxNode, language: string): number {
     if (nesters.has(n.type)) {
       let score = 1 + nestingLevel;
       const deeper = nestingLevel + 1;
+      // Go's grammar has no else_clause wrapper: `else` is a bare anonymous
+      // token and a chained `else if` is a direct if_statement child right
+      // after it — there's no separate node to carry the "structural
+      // continuation" +1 that else_clause/elif_clause contribute as FLAT
+      // nodes in the other grammars. Track "just saw an else token" so we
+      // can (a) charge that same +1 ourselves and (b) walk whatever follows
+      // it (a chained if, or the final else's block) at the SAME nesting
+      // level instead of deeper — matching JS/TS/Python's else_clause
+      // handling exactly rather than merely avoiding the nesting bonus.
+      let afterGoElse = false;
       for (let i = 0; i < n.childCount; i++) {
         const child = n.child(i)!;
         if (child.type === "else_clause" || child.type === "elif_clause") {
           score += walk(child, nestingLevel);
+        } else if (language === "go" && child.type === "else") {
+          score += 1;
+          afterGoElse = true;
+          continue;
+        } else if (language === "go" && afterGoElse) {
+          score += walk(child, nestingLevel);
+          afterGoElse = false;
         } else {
           score += walk(child, deeper);
         }
@@ -345,7 +362,7 @@ export const complexityAnalyzer: Analyzer = {
   requiresAST: false,
   applicableLanguages: "all",
   // Bump when logic changes — invalidates the S1 findings cache.
-  version: 3,
+  version: 4,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];

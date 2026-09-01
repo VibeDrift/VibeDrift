@@ -6,6 +6,7 @@ import {
   loadAnalyzerFindings,
   saveAnalyzerFindings,
 } from "./findings-cache.js";
+import { debug } from "./debug.js";
 
 export interface RunAnalyzersResult {
   findings: Finding[];
@@ -40,7 +41,15 @@ export async function runAnalyzers(
       }
 
       if (findings === null) {
-        findings = await analyzer.analyze(ctx);
+        // Isolate each analyzer: one throwing must not reject the whole
+        // Promise.all and kill every other analyzer's findings. Log and
+        // skip the failing one, keep going with the rest.
+        try {
+          findings = await analyzer.analyze(ctx);
+        } catch (err) {
+          debug("analyzers", `analyzer "${analyzer.id}" threw and was skipped:`, err);
+          return { findings: [], hit: false };
+        }
         if (opts.cacheEnabled && cacheKey !== null) {
           await saveAnalyzerFindings(opts.rootDir, cacheKey, findings);
         }

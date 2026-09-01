@@ -238,7 +238,13 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
   {
     id: "python-yaml-unsafe",
     name: "Unsafe YAML load",
-    pattern: /yaml\.load\s*\([^)]*(?!\bLoader\b)/g,
+    // No in-pattern negative lookahead for `Loader=` here: `[^)]*(?!\bLoader\b)`
+    // is a no-op — `[^)]*` is greedy but backtracks freely, so it can always
+    // shrink by one character to satisfy the lookahead regardless of whether
+    // "Loader" appears later in the call. The `negativeFilter` below (tested
+    // against the full matched line, not constrained by backtracking) is
+    // what actually excludes `yaml.load(f, Loader=SafeLoader)` etc.
+    pattern: /yaml\.load\s*\(/g,
     severity: "error",
     confidence: 0.8,
     message: "yaml.load without SafeLoader can execute arbitrary code",

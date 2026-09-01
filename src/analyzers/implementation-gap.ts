@@ -90,6 +90,12 @@ const RETURN_STRING_PATTERNS: { lang: string; regex: RegExp }[] = [
  * Key-value assignments returning placeholder strings, as used in the
  * Pydantic constructor pattern that triggered this detector's creation.
  * Catches `verdict="unvalidated"` anywhere in a function body.
+ *
+ * Scoped to call-argument context (see `isInsideCallParens` below): a bare
+ * top-level `status = "todo"` or a plain object literal like
+ * `{ status: "todo" }` (common in a todo-app's own domain state) reads
+ * identically to a Pydantic-style `verdict="unvalidated"` kwarg without that
+ * context check, and was flooding unrelated codebases with false positives.
  */
 const FIELD_ASSIGN_PATTERNS: { lang: string; regex: RegExp }[] = [
   // Python kwargs: `verdict="unvalidated"`, `explanation='not implemented'`.
@@ -102,6 +108,30 @@ const FIELD_ASSIGN_PATTERNS: { lang: string; regex: RegExp }[] = [
   { lang: "javascript", regex: /["']?\w+["']?\s*:\s*(?:"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`)/g },
   { lang: "typescript", regex: /["']?\w+["']?\s*:\s*(?:"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`)/g },
 ];
+
+// Test-file paths are excluded from the field-assign check specifically —
+// mock factories and fixtures legitimately pass placeholder-word values as
+// constructor kwargs (`role: "mock"`) and aren't evidence of a stub in
+// production code. Mirrors the exclusion in security.ts.
+const FIELD_ASSIGN_SKIP_PATH =
+  /(?:fixtures?|testdata|__fixtures__|__mocks__)[/\\]|(?:^|[/\\])test[/\\]|\.(?:test|spec)\.[a-z]+$/i;
+
+/**
+ * True when `index` sits inside at least one unclosed `(...)` — i.e. inside
+ * a function/constructor call's argument list rather than a bare statement
+ * or a standalone object/dict literal. Cheap single-pass paren-depth count
+ * over the prefix; good enough given FIELD_ASSIGN_PATTERNS already caps
+ * hits per file.
+ */
+function isInsideCallParens(content: string, index: number): boolean {
+  let depth = 0;
+  for (let i = 0; i < index; i++) {
+    const c = content[i];
+    if (c === "(") depth++;
+    else if (c === ")" && depth > 0) depth--;
+  }
+  return depth > 0;
+}
 
 /**
  * Explicit "not implemented" markers. Language-specific and always
@@ -137,7 +167,7 @@ export const implementationGapAnalyzer: Analyzer = {
   category: "intentClarity",
   requiresAST: false,
   applicableLanguages: "all",
-  version: 1,
+  version: 2,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -182,25 +212,31 @@ export const implementationGapAnalyzer: Analyzer = {
 
       // 3. Field assignments carrying placeholder values.
       //    E.g. `verdict="unvalidated"` inside a Pydantic constructor.
-      //    To avoid flooding the report we cap per-file hits at 3 for
-      //    this category — one placeholder usually indicates the stub,
-      //    and nearby ones are just the supporting structure.
+      //    Scoped to call-argument context (isInsideCallParens) and
+      //    skipped entirely for test/fixture/mock paths — see the comments
+      //    on FIELD_ASSIGN_PATTERNS above. To avoid flooding the report we
+      //    cap per-file hits at 3 for this category — one placeholder
+      //    usually indicates the stub, and nearby ones are just the
+      //    supporting structure.
       let fieldHits = 0;
-      for (const pattern of FIELD_ASSIGN_PATTERNS) {
-        if (pattern.lang !== file.language) continue;
-        const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
-        let match;
-        while ((match = regex.exec(file.content)) !== null && fieldHits < 3) {
-          const literal = match[1] || match[2] || match[3];
-          if (!matchesPlaceholder(literal)) continue;
-          hits.push({
-            file: file.relativePath,
-            line: getLineNumber(file.content, match.index),
-            snippet: match[0].trim(),
-            kind: "placeholder_field",
-            label: literal,
-          });
-          fieldHits++;
+      if (!FIELD_ASSIGN_SKIP_PATH.test(file.relativePath)) {
+        for (const pattern of FIELD_ASSIGN_PATTERNS) {
+          if (pattern.lang !== file.language) continue;
+          const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
+          let match;
+          while ((match = regex.exec(file.content)) !== null && fieldHits < 3) {
+            const literal = match[1] || match[2] || match[3];
+            if (!matchesPlaceholder(literal)) continue;
+            if (!isInsideCallParens(file.content, match.index)) continue;
+            hits.push({
+              file: file.relativePath,
+              line: getLineNumber(file.content, match.index),
+              snippet: match[0].trim(),
+              kind: "placeholder_field",
+              label: literal,
+            });
+            fieldHits++;
+          }
         }
       }
     }

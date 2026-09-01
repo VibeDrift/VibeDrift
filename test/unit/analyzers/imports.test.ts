@@ -105,8 +105,31 @@ describe("imports analyzer", () => {
 
   // Pinned on purpose: this analyzer's findings are cached by version, so a
   // behaviour change that forgets to bump it is served stale and will not
-  // reproduce on a warm machine. v3 adds itemCount (issue #104).
-  it("pins version to 3 (invalidates findings cache)", () => {
-    expect(importsAnalyzer.version).toBe(3);
+  // reproduce on a warm machine. v3 adds itemCount (issue #104); v4 tests
+  // hasESM against comment-stripped content.
+  it("pins version to 4 (invalidates findings cache)", () => {
+    expect(importsAnalyzer.version).toBe(4);
+  });
+
+  it("does NOT flag a file where 'import' only appears in a comment alongside a real require() (regression: hasESM tested unstripped content)", async () => {
+    // hasESM used to be tested against the RAW content while hasCJS was
+    // tested against the comment-stripped content. A comment merely
+    // mentioning "import" (e.g. explaining why the file uses require()
+    // instead) combined with a real require() of a non-builtin made every
+    // such file read as "mixed ESM/CJS", even with zero actual import
+    // statements.
+    const ctx: AnalysisContext = {
+      ...BASE,
+      files: [
+        {
+          path: "/test/a.ts", relativePath: "a.ts", language: "typescript",
+          content: "// uses require() here, not import 'x' — see ADR-12\nconst lodash = require(\"lodash\");\n",
+          lineCount: 2,
+        },
+      ],
+      totalLines: 2,
+    };
+    const findings = await importsAnalyzer.analyze(ctx);
+    expect(findings).toEqual([]);
   });
 });

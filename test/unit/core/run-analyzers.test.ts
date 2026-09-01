@@ -43,4 +43,22 @@ describe("runAnalyzers (concurrent, order-preserving)", () => {
     const { findings } = await runAnalyzers(analyzers, emptyCtx, { rootDir: "/x", cacheEnabled: false });
     expect(findings).toHaveLength(2);
   });
+
+  it("isolates a throwing analyzer — the rest still produce findings (regression: one throw killed the whole Promise.all)", async () => {
+    const throwing: Analyzer = {
+      id: "boom",
+      name: "boom",
+      category: "redundancy",
+      requiresAST: false,
+      applicableLanguages: "all",
+      async analyze(): Promise<Finding[]> {
+        throw new Error("analyzer exploded");
+      },
+    };
+    const analyzers = [mockAnalyzer("A", 0), throwing, mockAnalyzer("C", 0)];
+    const { findings } = await runAnalyzers(analyzers, emptyCtx, { rootDir: "/x", cacheEnabled: false });
+    // A and C's findings survive; "boom" contributes nothing but doesn't
+    // reject the whole run. Declaration order preserved for the survivors.
+    expect(findings.map((f) => f.analyzerId)).toEqual(["A", "C"]);
+  });
 });

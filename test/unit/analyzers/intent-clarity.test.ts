@@ -59,7 +59,21 @@ describe("intent-clarity analyzer", () => {
     expect(mismatch).toBeUndefined();
   });
 
-  it("bumps version to 2", () => {
-    expect(intentClarityAnalyzer.version).toBe(2);
+  it("bumps version to 3", () => {
+    expect(intentClarityAnalyzer.version).toBe(3);
+  });
+
+  it("flags a long arrow-function assignment (regression: functionStarts had no arrow pattern)", async () => {
+    // detectLongFunctions' functionStarts list only matched `function`/`def`/
+    // `func`/`fn` declarations, not `const x = (...) => {` — the exact style
+    // detectUnclearNaming already handles elsewhere in this file. An 80-line
+    // arrow function was invisible to the long-function check.
+    const lines = Array.from({ length: 80 }, (_, i) => `  doStep${i}();`).join("\n");
+    const content = `export const processPipeline = async (input: unknown) => {\n${lines}\n};\n`;
+    const ctx = makeCtx([{ relativePath: "pipeline.ts", content }]);
+    const findings = await intentClarityAnalyzer.analyze(ctx);
+    const longFn = findings.find((f) => f.tags.includes("long-function"));
+    expect(longFn).toBeDefined();
+    expect(longFn?.locations.some((l) => l.snippet?.includes("processPipeline"))).toBe(true);
   });
 });

@@ -8,6 +8,8 @@ export const languageSpecificAnalyzer: Analyzer = {
   category: "architecturalConsistency",
   requiresAST: false,
   applicableLanguages: "all",
+  // Bumped when detection logic changes — invalidates the S1 findings cache.
+  version: 2,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -38,18 +40,25 @@ function detectGoUncheckedErrors(
     for (let i = 0; i < lines.length; i++) {
       const trimmed = lines[i].trim();
 
-      // Unchecked error: line assigns to err (or _) but next non-blank line doesn't check it
+      // Unchecked error: line assigns to err (or _) but no line in a bounded
+      // window afterward checks it. A single-line lookahead false-flags the
+      // common `n, err := f(); _ = n; if err != nil { ... }` shape, where an
+      // unrelated statement sits between the assignment and the check —
+      // widen the window to ~5 lines and require the checking line to
+      // actually reference err in an if/switch (or a return).
       if (/\berr\s*[:=]/.test(trimmed) && !trimmed.startsWith("//")) {
-        // Look at the next non-empty, non-comment line
-        let nextLine = "";
-        for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        let checked = false;
+        let hasFollowingContent = false;
+        for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
           const next = lines[j].trim();
-          if (next && !next.startsWith("//")) {
-            nextLine = next;
+          if (!next || next.startsWith("//")) continue;
+          hasFollowingContent = true;
+          if (/\berr\b/.test(next) && (/^(?:if|switch)\b/.test(next) || next.startsWith("return"))) {
+            checked = true;
             break;
           }
         }
-        if (nextLine && !nextLine.includes("err") && !nextLine.startsWith("return")) {
+        if (hasFollowingContent && !checked) {
           count++;
           locations.push({
             file: file.relativePath,
@@ -64,11 +73,29 @@ function detectGoUncheckedErrors(
   return { count, locations };
 }
 
+// Minimum sample size before we trust a project-wide context-threading
+// convention exists at all (per AGENTS.md: drift needs a baseline — below
+// this we have no norm to measure deviation from).
+const NAKED_GOROUTINE_MIN_SAMPLE = 3;
+// A convention only counts as "dominant" once a clear majority follows it.
+const NAKED_GOROUTINE_DOMINANCE_THRESHOLD = 0.6;
+
+/**
+ * Naked goroutines — `go func()` / `go someFunc()` launched without a
+ * context.Context threaded through nearby scope.
+ *
+ * This used to be a raw heuristic (flag every goroutine lacking `ctx`
+ * nearby), which false-flagged idiomatic WaitGroup worker-pool code that
+ * never threads context at all. Per AGENTS.md, a finding needs a baseline
+ * it deviates from — so this now requires a dominance signal: only flag the
+ * naked goroutines when a clear majority of OTHER goroutines in the project
+ * DO thread context. If most goroutines in this codebase never use context,
+ * that's this project's own convention, not drift.
+ */
 function detectGoNakedGoroutines(
   files: SourceFile[],
 ): { count: number; locations: { file: string; line: number }[] } {
-  let count = 0;
-  const locations: { file: string; line: number }[] = [];
+  const goroutines: { file: string; line: number; hasContext: boolean }[] = [];
 
   for (const file of files) {
     const lines = file.content.split("\n");
@@ -76,19 +103,33 @@ function detectGoNakedGoroutines(
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // Goroutine: go func() without context.Context in nearby scope
+      // Goroutine: go func() or go someFunc(...)
       if (/^\s*go\s+func\s*\(/.test(line) || /^\s*go\s+\w+\s*\(/.test(line)) {
-        // Check if context is passed (heuristic: "ctx" in the go call or surrounding 3 lines)
+        // Heuristic: "ctx" in the go call or surrounding 3 lines
         const nearby = lines.slice(Math.max(0, i - 2), i + 3).join(" ");
-        if (!/\bctx\b/.test(nearby) && !/context\./.test(nearby)) {
-          count++;
-          locations.push({ file: file.relativePath, line: i + 1 });
-        }
+        const hasContext = /\bctx\b/.test(nearby) || /context\./.test(nearby);
+        goroutines.push({ file: file.relativePath, line: i + 1, hasContext });
       }
     }
   }
 
-  return { count, locations };
+  if (goroutines.length < NAKED_GOROUTINE_MIN_SAMPLE) {
+    return { count: 0, locations: [] };
+  }
+
+  const withContext = goroutines.filter((g) => g.hasContext).length;
+  const dominanceRatio = withContext / goroutines.length;
+  if (dominanceRatio < NAKED_GOROUTINE_DOMINANCE_THRESHOLD) {
+    // No established convention — most goroutines in this project don't
+    // thread context, so the ones that don't aren't deviating from anything.
+    return { count: 0, locations: [] };
+  }
+
+  const naked = goroutines.filter((g) => !g.hasContext);
+  return {
+    count: naked.length,
+    locations: naked.map((g) => ({ file: g.file, line: g.line })),
+  };
 }
 
 function detectGoUnsafeMutex(

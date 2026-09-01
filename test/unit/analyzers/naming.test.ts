@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { namingAnalyzer } from "../../../src/analyzers/naming.js";
+import { parseFile } from "../../../src/utils/ast.js";
 import type { AnalysisContext, SourceFile } from "../../../src/core/types.js";
 
 function makeCtx(files: Partial<SourceFile>[]): AnalysisContext {
@@ -79,7 +80,63 @@ describe("naming analyzer (entropy gate)", () => {
     expect(noConv!.severity).toBe("info");
   });
 
-  it("bumps version to 2", () => {
-    expect(namingAnalyzer.version).toBe(2);
+  it("bumps version to 3", () => {
+    expect(namingAnalyzer.version).toBe(3);
+  });
+
+  it("is not blind to Python via the AST path (regression: targetTypes lacked function_definition)", async () => {
+    // extractIdentifiers only walks a fixed set of AST node types. Before
+    // the fix that set had no Python function-definition node, so — on a
+    // REAL parsed tree (not the regex fallback, which already handled
+    // `def` via a separate code path and would mask this bug) — every
+    // Python file yielded zero identifiers and the analyzer produced no
+    // findings at all for Python, regardless of naming convention.
+    // Parsed sequentially (not Promise.all) — concurrent first-time calls
+    // into parseFile's shared grammar-init/cache can race and return null
+    // for some files; that's a pre-existing quirk of ast.ts's init guard,
+    // unrelated to what this test is regression-checking, so sidestep it.
+    const camelFiles: SourceFile[] = [];
+    for (let i = 0; i < 8; i++) {
+      const content = `def getUser${i}():\n    pass\n\ndef fetchOrder${i}():\n    pass\n`;
+      const file: SourceFile = {
+        path: `/test/cam${i}.py`, relativePath: `cam${i}.py`, language: "python",
+        content, lineCount: content.split("\n").length,
+      };
+      file.tree = (await parseFile(file)) ?? undefined;
+      camelFiles.push(file);
+    }
+    const snakeFiles: SourceFile[] = [];
+    for (const name of ["s1", "s2"]) {
+      const content = `def get_user():\n    pass\n\ndef fetch_order():\n    pass\n`;
+      const file: SourceFile = {
+        path: `/test/${name}.py`, relativePath: `${name}.py`, language: "python",
+        content, lineCount: content.split("\n").length,
+      };
+      file.tree = (await parseFile(file)) ?? undefined;
+      snakeFiles.push(file);
+    }
+
+    // Sanity: real trees loaded (not silently falling back to null).
+    for (const f of [...camelFiles, ...snakeFiles]) expect(f.tree).toBeDefined();
+
+    const ctx: AnalysisContext = {
+      rootDir: "/test",
+      files: [...camelFiles, ...snakeFiles],
+      packageJson: null,
+      goMod: null,
+      cargoToml: null,
+      requirementsTxt: null,
+      envExample: null,
+      totalLines: 0,
+      languageBreakdown: new Map(),
+      dominantLanguage: "python",
+    };
+
+    const findings = await namingAnalyzer.analyze(ctx);
+    // Before the fix this was always [] for Python — extractIdentifiers
+    // returned nothing for every file, so conventionCounts stayed empty.
+    const dev = findings.find((f) => f.tags.includes("inconsistency"));
+    expect(dev).toBeDefined();
+    expect(dev!.message).toMatch(/snake_case|camelCase/);
   });
 });
