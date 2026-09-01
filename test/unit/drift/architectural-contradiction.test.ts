@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import { architecturalContradiction, classifyDataAccessLabel } from "../../../src/drift/architectural-contradiction.js";
+import {
+  architecturalContradiction,
+  classifyDataAccessLabel,
+  hasDataAccessPattern,
+} from "../../../src/drift/architectural-contradiction.js";
 import type { DriftContext, DriftFile } from "../../../src/drift/types.js";
 
 function mkCtx(files: DriftFile[]): DriftContext {
@@ -66,6 +71,66 @@ describe("raw-SQL detection", () => {
   it("does not call an ordinary body raw SQL", () => {
     expect(classifyDataAccessLabel(`const x = selectOption(from);`, "src/ui/picker.ts")).toBeNull();
   });
+});
+
+describe("raw-SQL detection is anchored to the start of a string literal", () => {
+  const RAW_SQL = "raw SQL queries";
+  const isRawSql = (body: string, path = "src/services/orders.ts") =>
+    hasDataAccessPattern(body, path, RAW_SQL);
+
+  // The bare keyword-pair regex bridged `select` in one import's module path to
+  // the `from` of the NEXT import, and matched prose comments. Measured on four
+  // repos, most of its raw_sql file classifications were false.
+  it("ignores import lines whose module path contains a keyword", () => {
+    const body = [
+      `import { select } from "./from";`,
+      `import { renderSelect } from "./select.js";`,
+      `import { relativeTime } from "./time.js";`,
+      `export const x = select(1);`,
+    ].join("\n");
+    expect(isRawSql(body)).toBe(false);
+    expect(classifyDataAccessLabel(body, "src/ui/picker.ts")).toBeNull();
+  });
+
+  it("ignores prose comments and sentence-case UI strings", () => {
+    const body = [
+      `// select the first item from the list, then update the cache set below`,
+      `/* Delete the entry from the map once the insert into the queue lands. */`,
+      `const hint = "Select an item from the list";`,
+      `const msg = "Update your settings, then set a name";`,
+      `export const y = 1;`,
+    ].join("\n");
+    expect(isRawSql(body)).toBe(false);
+    expect(classifyDataAccessLabel(body, "src/ui/picker.ts")).toBeNull();
+  });
+
+  it("does not classify this repo's own report renderers as raw SQL", () => {
+    // Both files were "raw SQL queries" under the unanchored regex, and the
+    // push-order tie-break then let raw_sql win them outright.
+    for (const rel of ["src/output/html.ts", "src/output/terminal.ts"]) {
+      const content = readFileSync(new URL(`../../../${rel}`, import.meta.url), "utf8");
+      expect(isRawSql(content, rel), rel).toBe(false);
+      expect(classifyDataAccessLabel(content, rel), rel).not.toBe(RAW_SQL);
+    }
+  });
+
+  const REAL_SQL: [string, string][] = [
+    ["a plain double-quoted SELECT", `query("SELECT * FROM users")`],
+    ["a template literal that opens on a newline", "db.query(`\n    SELECT id, name\n    FROM users\n    WHERE id = $1`)"],
+    ["a Go raw-string query", "rows, err := db.Query(`SELECT * FROM users WHERE id = $1`)"],
+    ["a Python triple-quoted query", `cursor.execute("""SELECT id FROM t""")`],
+    ["a Python triple-quoted query that opens on a newline", `cursor.execute("""\n  SELECT id FROM users""")`],
+    ["a lowercase query", `db.query("select * from users where id = $1")`],
+    ["an f-string / template table", "db.query(`SELECT * FROM ${table} WHERE id = 1`)"],
+    ["UPDATE ... SET", `db.exec("UPDATE users SET x = 1")`],
+    ["INSERT INTO", `db.exec("INSERT INTO users (a) VALUES (1)")`],
+    ["DELETE FROM", `db.exec("DELETE FROM users WHERE id = 1")`],
+  ];
+  for (const [label, body] of REAL_SQL) {
+    it(`still classifies ${label} as raw SQL`, () => {
+      expect(isRawSql(body)).toBe(true);
+    });
+  }
 });
 
 describe("data-access classifier / detector agreement", () => {

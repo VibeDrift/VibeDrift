@@ -42,6 +42,27 @@ interface FileArchProfile {
 
 // --- Data Access Pattern Detection ---
 
+/**
+ * A SQL statement as it appears in application code: at the START of a string
+ * literal. Each form is anchored on a quote character (`"`, `'`, or backtick —
+ * so Python triple quotes and Go raw strings qualify) followed by optional
+ * whitespace, and its clause target must be an identifier-ish token.
+ *
+ * The anchor exists because a bare `\bSELECT\b[\s\S]{0,200}?\bFROM\b` over
+ * whole files over-matched badly: `import { x } from "./select.js";\nimport
+ * { y } from "..."` bridged the module path to the next `from`, and prose
+ * comments ("select the first item from the list") classified too. Measured on
+ * four repos, most of its file classifications were false — this repo's own
+ * src/output/html.ts and terminal.ts were "raw SQL queries" — and the push-order
+ * tie-break below then let raw_sql win those files outright.
+ *
+ * Keyword case is all-upper or all-lower per statement, never mixed, so a
+ * sentence-case UI string like "Select an item from the list" does not match
+ * while `db.query("select * from users")` still does.
+ */
+const SQL_STATEMENT =
+  /["'`]\s*(?:SELECT\b[\s\S]{0,200}?\bFROM\s+[\w"`.[({$]|select\b[\s\S]{0,200}?\bfrom\s+[\w"`.[({$]|INSERT\s+INTO\s+[\w"`.[]|insert\s+into\s+[\w"`.[]|UPDATE\s+[\w"`.[]+\s+SET\b|update\s+[\w"`.[]+\s+set\b|DELETE\s+FROM\s+[\w"`.[]|delete\s+from\s+[\w"`.[])/g;
+
 function detectDataAccess(file: DriftFile): { pattern: DataAccessPattern; evidence: Evidence[] }[] {
   const results: { pattern: DataAccessPattern; evidence: Evidence[] }[] = [];
   const c = file.content;
@@ -57,10 +78,7 @@ function detectDataAccess(file: DriftFile): { pattern: DataAccessPattern; eviden
   // `SELECT * FROM users` (a `\b` after `*` cannot hold before a space),
   // `SELECT id FROM users` (FROM had to follow SELECT immediately), or
   // `UPDATE users SET x = 1`.
-  const sqlEvidence = extractEvidence(
-    c,
-    /\bSELECT\b[\s\S]{0,200}?\bFROM\b|\bUPDATE\b[\s\S]{0,200}?\bSET\b|\bINSERT\s+INTO\b|\bDELETE\s+FROM\b/gi,
-  );
+  const sqlEvidence = extractEvidence(c, SQL_STATEMENT);
   if (sqlEvidence.length > 0 && !isRepoFile(file.relativePath)) {
     results.push({ pattern: "raw_sql", evidence: sqlEvidence });
   }

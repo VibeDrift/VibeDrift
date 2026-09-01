@@ -124,12 +124,11 @@ describe("convention-oscillation detector", () => {
   });
 });
 
-describe("convention-oscillation: totalRelevantFiles is a file count", () => {
-  it("reports contributing files, not the symbol count", () => {
-    // The scoring engine reads totalRelevantFiles as "how many peers did this
-    // vote see" (SAMPLE_FULL_CONFIDENCE = 8). A symbol axis clears 8 symbols
-    // trivially, so putting the symbol count here gave a three-file finding the
-    // full damage weight of an eight-peer vote.
+describe("convention-oscillation: dominantCount and totalRelevantFiles share a unit", () => {
+  it("never reports a symbol-count numerator over a file-count denominator", () => {
+    // The symbol axis votes over symbols, so both fields are symbol counts. A
+    // file-count denominator under the symbol-count numerator rendered
+    // "X of Y" ratios above 100% whenever symbols outnumbered files.
     const files: DriftFile[] = [];
     // 2 files x 6 camelCase functions.
     for (let i = 0; i < 2; i++) {
@@ -154,10 +153,10 @@ describe("convention-oscillation: totalRelevantFiles is a file count", () => {
       .filter((f) => f.subCategory?.endsWith("_names"));
     expect(symbolFindings.length).toBeGreaterThan(0);
     for (const f of symbolFindings) {
-      // 4 files contributed symbols; 19 symbols were counted. The field must
-      // carry the former.
-      expect(f.totalRelevantFiles).toBe(4);
-      expect(f.dominantCount).toBeGreaterThan(f.totalRelevantFiles);
+      // 19 symbols across 4 files: 12 camelCase dominant, 7 snake_case.
+      expect(f.totalRelevantFiles).toBe(19);
+      expect(f.dominantCount).toBe(12);
+      expect(f.dominantCount).toBeLessThanOrEqual(f.totalRelevantFiles);
     }
   });
 });
