@@ -70,6 +70,35 @@ describe("MinHash + LSH", () => {
       expect(tokens).toContain("return");
     });
 
+    // Strings and comments are recognised in one pass, so neither can open the
+    // other: an apostrophe inside a comment must not start a string that runs
+    // to the next quote, and a `//` inside a string must not start a comment.
+    it("an apostrophe in a line comment does not swallow the code that follows", () => {
+      const tokens = tokenize(
+        ["// don't do this", "const keepMe = compute(1);", 'const label = "x";', "return keepMe;"].join("\n"),
+      );
+      expect(tokens).toContain("keepMe");
+      expect(tokens).toContain("compute");
+      expect(tokens).toContain("label");
+      expect(tokens).toContain("return");
+      expect(tokens).not.toContain("don");
+      expect(tokens).not.toContain("t");
+    });
+
+    it("a URL inside a string literal does not open a line comment", () => {
+      const tokens = tokenize(['const url = "https://api.example.com/v1";', "const limit = 42;"].join("\n"));
+      expect(tokens).toContain("limit");
+      expect(tokens).toContain("42");
+      expect(tokens).not.toContain("api");
+    });
+
+    it("a block comment containing `//` and a quote is stripped whole", () => {
+      const tokens = tokenize(["/* see https://x.y — it's fine // really */", "const after = 1;"].join("\n"));
+      expect(tokens).toContain("after");
+      expect(tokens).not.toContain("see");
+      expect(tokens).not.toContain("really");
+    });
+
     it("normalizes numeric literals to a class-less-tagged form (handled in normalizeTokens)", () => {
       const tokens = tokenize(`return 42;`);
       // Digits survive tokenize; the NUM normalization happens in normalizeTokens.

@@ -219,12 +219,32 @@ export function readTitleFromTrackRecord(rec: any): { value: string; source: str
   });
 });
 
-describe("tokenizeBody comment and literal ordering", () => {
-  // `//` was stripped before string literals, so a `//` inside a literal
-  // deleted the closing quote and desynchronized quote pairing for the rest of
-  // the body. Measured on the audited population: it leaked 45 distinct English
-  // words out of test-name literals into one stored anchor and swallowed 43% of
-  // another file's tokens.
+describe("tokenizeBody strips comments and literals in one pass", () => {
+  // Strings and comments are recognised in a single left-to-right pass, so
+  // neither can open the other. Stripping `//` first read the `//` inside a
+  // literal as a comment, deleted the closing quote and desynchronized quote
+  // pairing for the rest of the body (measured: 45 English words leaked out of
+  // test-name literals into one anchor; 43% of another file's tokens swallowed).
+  // Stripping strings first had the mirror bug: an apostrophe in a comment
+  // paired with the next quote and swallowed the real code in between.
+  it("an apostrophe inside a line comment does not swallow the following code", () => {
+    const toks = tokenizeBody(
+      ["// don't do this", "const keepMe = compute(1);", "const label = 'x';", "return keepMe;"].join("\n"),
+    );
+    expect(toks).toContain("keepMe");
+    expect(toks).toContain("compute");
+    expect(toks).toContain("label");
+    expect(toks).toContain("return");
+    expect(toks).not.toContain("don");
+  });
+
+  it("a block comment containing `//` and an apostrophe is stripped whole", () => {
+    const toks = tokenizeBody(["/* it's at https://x.y // honest */", "const after = 1;"].join("\n"));
+    expect(toks).toContain("after");
+    expect(toks).not.toContain("honest");
+    expect(toks).not.toContain("it");
+  });
+
   it("does not treat a URL inside a single-quoted string as a line comment", () => {
     const toks = tokenizeBody(`const u = 'https://example.invalid'; const after = 1;`);
     expect(toks).toContain("after");

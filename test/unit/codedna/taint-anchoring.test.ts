@@ -154,6 +154,36 @@ describe("sink anchoring", () => {
     expect(flows).toContain("command execution");
   });
 
+  // The bare anchor must not un-detect a dotted call whose receiver is a known
+  // alias for the owning module or global.
+  it("cp.exec(cmd) on a child_process alias IS a command injection", () => {
+    const flows = sinkTypes(
+      mkFn({ rawBody: body("const cmd = req.body.cmd;", "cp.exec(cmd);") }),
+    );
+    expect(flows).toContain("command execution");
+  });
+
+  it("child_process.exec(cmd) is reported as ONE command-injection sink, not two", () => {
+    const flows = sinkTypes(
+      mkFn({ rawBody: body("const cmd = req.body.cmd;", "child_process.exec(cmd);") }),
+    );
+    expect(flows).toEqual(["command execution"]);
+  });
+
+  it("window.fetch(url) IS an outbound fetch (ssrf)", () => {
+    const flows = sinkTypes(
+      mkFn({ rawBody: body("const url = req.query.url;", "const r = await window.fetch(url);") }),
+    );
+    expect(flows).toContain("outbound HTTP fetch");
+  });
+
+  it("an exec on somebody's own object (not a module alias) is still not a sink", () => {
+    const flows = sinkTypes(
+      mkFn({ rawBody: body("const id = req.params.id;", "const m = this.sh.exec(id);") }),
+    );
+    expect(flows).not.toContain("command execution");
+  });
+
   it("parseFunction() is not a dynamic-function sink, but `new Function(` is", () => {
     expect(
       sinkTypes(
