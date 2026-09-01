@@ -17,6 +17,8 @@
 npx @vibedrift/cli
 ```
 
+**On Claude Code:** install the [plugin](#claude-code-30-second-setup) instead — one install wires in the MCP server, the drift-check skill, and `/vibedrift:setup`.
+
 </div>
 
 ---
