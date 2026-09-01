@@ -458,6 +458,91 @@ const rejBody = (name: string) =>
 const authOf = (rts: ReturnType<typeof extractRustRoutesAst>) =>
   rts.map((r) => `${r.method} ${r.path} auth=${r.hasAuth} hook=${r.authUnsureHook ?? "-"}`);
 
+// ─── REGRESSION: Actix `HttpResponse::Unauthorized()` reached no branch ──────
+//
+// rustProducesReject's `call_expression` case handled an `identifier` callee and
+// a `field_expression` callee, but NOT a `scoped_identifier` one, so
+// `HttpResponse::Unauthorized()` — the Actix idiom — fell straight through to
+// `return false`. STATUS_PATH_TAILS' whole `HttpResponse` entry was therefore
+// dead code, and an Actix middleware that rejects properly was classified
+// unauthenticated, flagging its routes.
+//
+// These bind: delete the `scoped_identifier` callee branch (and the builder-chain
+// line) from rustProducesReject and every case below flips to auth=false.
+describe("auth POSITIVE: Actix HttpResponse::<Status>() produce forms", () => {
+  it("a bare tail `HttpResponse::Unauthorized()` blesses", async () => {
+    const mw =
+      `async fn gate(req: Request, next: Next) -> HttpResponse {\n` +
+      `    if req.headers().get("Authorization").is_none() {\n` +
+      `        return HttpResponse::Unauthorized();\n` +
+      `    }\n    next.run(req).await\n}\n`;
+    const f = await rs("actix1.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=true hook=-"]);
+  });
+
+  it("the `.finish()` builder chain blesses (the dominant Actix idiom)", async () => {
+    const mw =
+      `async fn gate(req: Request, next: Next) -> HttpResponse {\n` +
+      `    if bad(&req) { return HttpResponse::Unauthorized().finish(); }\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("actix2.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=true hook=-"]);
+  });
+
+  it("a longer builder chain `.insert_header(..).json(..)` blesses", async () => {
+    const mw =
+      `async fn gate(req: Request, next: Next) -> HttpResponse {\n` +
+      `    if bad(&req) {\n` +
+      `        return HttpResponse::Unauthorized().insert_header(("X-A", "b")).json("no");\n` +
+      `    }\n    next.run(req).await\n}\n`;
+    const f = await rs("actix3.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=true hook=-"]);
+  });
+
+  it("`Err(HttpResponse::Unauthorized().finish())` blesses", async () => {
+    const mw =
+      `async fn gate(req: Request, next: Next) -> Result<Response, HttpResponse> {\n` +
+      `    if bad(&req) { return Err(HttpResponse::Unauthorized().finish()); }\n` +
+      `    Ok(next.run(req).await)\n}\n`;
+    const f = await rs("actix4.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=true hook=-"]);
+  });
+
+  it("NOT a bless: a NON-401 builder (`HttpResponse::NotFound().finish()`)", async () => {
+    const mw =
+      `async fn gate(req: Request, next: Next) -> HttpResponse {\n` +
+      `    if missing(&req) { return HttpResponse::NotFound().finish(); }\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("actix5.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(gate))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("NOT a bless: an `HttpResponse::Unauthorized()` MENTION in a non-produce position", async () => {
+    const mw =
+      `async fn tap(req: Request, next: Next) -> Response {\n` +
+      `    record_metric(HttpResponse::Unauthorized().finish());\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("actix6.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(tap))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+
+  it("NOT a bless: a non-HttpResponse builder chain rooted elsewhere", async () => {
+    const mw =
+      `async fn tap(req: Request, next: Next) -> Response {\n` +
+      `    if bad(&req) { return Foo::Unauthorized().finish(); }\n` +
+      `    next.run(req).await\n}\n`;
+    const f = await rs("actix7.rs",
+      withMw(mw, `Router::new().route("/x", post(h)).layer(middleware::from_fn(tap))`));
+    expect(authOf(extractRustRoutesAst(f.tree!, f.relativePath))).toEqual(["POST /x auth=false hook=-"]);
+  });
+});
+
 describe("auth POSITIVE: covering from_fn body reject blesses", () => {
   it("a covering from_fn whose body 401s blesses even a boring 'auth' name (rule 2)", async () => {
     const f = await rs("p1.rs",

@@ -40,7 +40,9 @@ function extractGoRoutesRegex(file: DriftFile, fileMiddleware: FileMiddleware | 
     if (!method || !path) continue;
 
     const context = lines.slice(Math.max(0, i - 10), i + 10).join("\n");
-    const handlerContent = findHandlerContent(file.content, path);
+    // Anchored to THIS route's line, so GET/POST on the same path and a path
+    // named in a doc comment above do not all read the first occurrence's window.
+    const handlerContent = findHandlerContent(file.content, path, i);
 
     const perAuth = GO_AUTH.test(context);
     const perVal = GO_VALIDATION.test(handlerContent);

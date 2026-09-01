@@ -149,18 +149,30 @@ export function buildXFileIndex(files: DriftFile[], goModulePath?: string | null
     a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
   );
 
+  // Duplicate-sighting tracking is INDEPENDENT of defs/roots: a first copy that
+  // was tree-less or parse-broken leaves no defs/roots entry, and keying the
+  // duplicate test off those maps let the SECOND copy index itself cleanly — the
+  // outcome then depended on which copy the caller listed first, and "refuse
+  // beats last-wins" held only for one of the two orders.
+  const pySeen = new Set<string>();
   for (const f of sorted) {
-    if (f.language !== "python" || !f.tree) continue;
+    if (f.language !== "python") continue;
     const rel = f.relativePath;
     // Conservative duplicate-path handling: a relativePath seen twice is a repo
     // anomaly — poison it (drop its defs/root so it can never be a resolution
-    // target), but keep it in `files`. Refuse beats last-wins.
-    if (index.py.files.has(rel) && (index.py.fileDefs.has(rel) || index.py.roots.has(rel))) {
+    // target), but keep it in `files`. Refuse beats last-wins, in EITHER order.
+    if (pySeen.has(rel)) {
       index.py.fileDefs.delete(rel);
       index.py.roots.delete(rel);
       continue;
     }
+    pySeen.add(rel);
+    // `files` holds every python relativePath — tree-less and parse-broken
+    // included — so the candidate-file existence checks see the whole repo
+    // surface (the mod.py / mod/__init__.py ambiguity refusal reads this set).
+    // Go parity: buildGoHalf adds every .go path regardless of its tree.
     index.py.files.add(rel);
+    if (!f.tree) continue;
     const root = f.tree.rootNode;
     if (!root.hasError) {
       index.py.roots.set(rel, root);
@@ -599,29 +611,53 @@ function plainImportName(nameNode: SyntaxNode): string | null {
   return null;
 }
 
+/** Statement containers that do NOT introduce a Python scope: a name bound
+ *  inside one is bound at MODULE scope, so the shadow walk must descend through
+ *  them. `block` covers each suite; the clause types cover elif/else/except/
+ *  finally/case arms. Only `function_definition`, `class_definition` and `lambda`
+ *  are real scope boundaries, and the walk stops at those. */
+const PY_TRANSPARENT_BLOCKS = new Set([
+  "block", "if_statement", "elif_clause", "else_clause", "try_statement",
+  "except_clause", "except_group_clause", "finally_clause", "with_statement",
+  "for_statement", "while_statement", "match_statement", "case_clause",
+]);
+
 /** Names bound at module scope by a def/class/assignment — an import for such a
- *  name is shadowed at runtime and must not be resolved cross-file. */
+ *  name is shadowed at runtime and must not be resolved cross-file.
+ *
+ *  Descends through module-level if/try/with/for/while blocks, because Python
+ *  compound statements introduce NO scope: `try: from x import foo\nexcept
+ *  ImportError:\n    def foo(): ...` binds `foo` at module scope just as a
+ *  top-level `def foo` does. A direct-children-only scan missed every such
+ *  shadow, and a missed shadow is the dangerous direction — the import then
+ *  resolves cross-file to a body that never runs. */
 function moduleScopeShadows(root: SyntaxNode): Set<string> {
   const shadows = new Set<string>();
   const addDefName = (node: SyntaxNode | null) => {
     const n = node?.childForFieldName("name")?.text;
     if (n) shadows.add(n);
   };
-  for (const stmt of root.namedChildren) {
-    if (!stmt) continue;
-    if (stmt.type === "function_definition" || stmt.type === "class_definition") {
-      addDefName(stmt);
-    } else if (stmt.type === "decorated_definition") {
-      addDefName(stmt.childForFieldName("definition"));
-    } else if (stmt.type === "expression_statement") {
-      for (const asn of stmt.namedChildren) {
-        if (asn && asn.type === "assignment") {
-          const left = asn.childForFieldName("left");
-          if (left) for (const id of identifiersOf(left)) shadows.add(id);
+  const visit = (node: SyntaxNode, depth: number): void => {
+    if (depth > 16) return; // pathological nesting terminates; a miss only refuses less
+    for (const stmt of node.namedChildren) {
+      if (!stmt) continue;
+      if (stmt.type === "function_definition" || stmt.type === "class_definition") {
+        addDefName(stmt); // bound here; its BODY is a new scope and is not entered
+      } else if (stmt.type === "decorated_definition") {
+        addDefName(stmt.childForFieldName("definition"));
+      } else if (stmt.type === "expression_statement") {
+        for (const asn of stmt.namedChildren) {
+          if (asn && asn.type === "assignment") {
+            const left = asn.childForFieldName("left");
+            if (left) for (const id of identifiersOf(left)) shadows.add(id);
+          }
         }
+      } else if (PY_TRANSPARENT_BLOCKS.has(stmt.type)) {
+        visit(stmt, depth + 1);
       }
     }
-  }
+  };
+  visit(root, 0);
   return shadows;
 }
 
