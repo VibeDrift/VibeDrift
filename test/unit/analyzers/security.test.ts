@@ -89,4 +89,19 @@ describe("security analyzer (Bayesian stacking)", () => {
       expect(findings.some((f) => /private key/i.test(f.message))).toBe(true);
     });
   });
+
+  // ── yaml.load: the in-pattern negative lookahead was a no-op; negativeFilter does the real work ──
+  describe("python-yaml-unsafe (negativeFilter, not an in-regex lookahead)", () => {
+    it("flags a bare yaml.load call", async () => {
+      const ctx = makeCtx([{ relativePath: "config.py", language: "python", content: "data = yaml.load(f)\n" }]);
+      const findings = await securityAnalyzer.analyze(ctx);
+      expect(findings.some((f) => /yaml\.load/i.test(f.message))).toBe(true);
+    });
+
+    it("does NOT flag yaml.load with an explicit SafeLoader", async () => {
+      const ctx = makeCtx([{ relativePath: "config.py", language: "python", content: "data = yaml.load(f, Loader=SafeLoader)\n" }]);
+      const findings = await securityAnalyzer.analyze(ctx);
+      expect(findings.some((f) => /yaml\.load/i.test(f.message))).toBe(false);
+    });
+  });
 });

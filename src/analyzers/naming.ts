@@ -33,8 +33,12 @@ function extractIdentifiers(node: SyntaxNode): string[] {
   const targetTypes = new Set([
     "variable_declarator", "function_declaration", "method_definition",
     "lexical_declaration", "short_var_declaration", "function_item",
-    "let_declaration",
+    "let_declaration", "function_definition",
   ]);
+  // Note: Python's `assignment` node (variable declarations) was considered
+  // for this set too, but its target lives under the "left" field, not
+  // "name" — childForFieldName("name") would silently return undefined for
+  // it. Left out rather than adding a node type this extractor can't read.
 
   function walk(n: SyntaxNode) {
     if (targetTypes.has(n.type)) {
@@ -74,7 +78,7 @@ export const namingAnalyzer: Analyzer = {
   category: "architecturalConsistency",
   requiresAST: false,
   applicableLanguages: "all",
-  version: 2,
+  version: 3,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];

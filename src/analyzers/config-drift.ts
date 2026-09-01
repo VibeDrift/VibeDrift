@@ -4,8 +4,11 @@ import { getLineNumber } from "../utils/text.js";
 
 const ENV_PATTERNS = [
   /process\.env\.(\w+)/g,
+  /process\.env\[\s*['"](\w+)['"]\s*\]/g,       // process.env["KEY"]
   /import\.meta\.env\.(\w+)/g,
+  /import\.meta\.env\[\s*['"](\w+)['"]\s*\]/g,  // import.meta.env["KEY"]
   /os\.environ(?:\.get)?\(\s*['"](\w+)['"]/g,
+  /os\.environ\[\s*['"](\w+)['"]\s*\]/g,        // os.environ["KEY"]
   /os\.Getenv\(\s*"(\w+)"\s*\)/g,  // Go
   /env::var\(\s*"(\w+)"\s*\)/g,    // Rust
 ];
@@ -16,7 +19,7 @@ export const configDriftAnalyzer: Analyzer = {
   category: "dependencyHealth",
   requiresAST: false,
   applicableLanguages: "all",
-  version: 2,
+  version: 3,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];

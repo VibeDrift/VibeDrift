@@ -66,7 +66,7 @@ export const importsAnalyzer: Analyzer = {
   requiresAST: false,
   applicableLanguages: ["javascript", "typescript"],
   // Bumped when detection changes — invalidates the S1 findings cache.
-  version: 3,
+  version: 4,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -93,7 +93,11 @@ export const importsAnalyzer: Analyzer = {
         .replace(/`[^`]*`/g, '""')                  // template literals
         .replace(/\/[^/\n]+\/[gimsuvy]*/g, '""');   // regex literals
 
-      const hasESM = ESM_PATTERN.test(file.content);
+      // Test against the STRIPPED content, same as hasCJS — otherwise an
+      // `import` mentioned only in a comment (e.g. "// uses require() not
+      // import 'x'") plus an unrelated real require() call reads as a false
+      // "mixed ESM/CJS" finding.
+      const hasESM = ESM_PATTERN.test(stripped);
       const hasCJS = hasDriftyCjs(stripped);
 
       if (hasESM && hasCJS) {

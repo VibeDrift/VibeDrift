@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { complexityAnalyzer } from "../../../src/analyzers/complexity.js";
+import { parseFile } from "../../../src/utils/ast.js";
 import type { AnalysisContext, SourceFile } from "../../../src/core/types.js";
 
 function makeCtx(files: Partial<SourceFile>[]): AnalysisContext {
@@ -220,6 +221,70 @@ function deepRegex(a: any, b: any, c: any, d: any, e: any) {
 
   it("has a version set so cache invalidates on logic changes", () => {
     expect(complexityAnalyzer.version).toBeGreaterThanOrEqual(2);
+  });
+
+  it("scores a Go else-if chain the same as an equivalent JS chain (regression: Go grammar has no else_clause wrapper)", async () => {
+    // Go's grammar has no else_clause node — a chained `else if` is a
+    // direct if_statement child immediately after the anonymous `else`
+    // token, unlike JS/TS/Python where else-if is wrapped in a dedicated
+    // else_clause/elif_clause node. Before the fix, the walker treated
+    // every chained Go if_statement as a NESTED control (walked one level
+    // deeper each time), so an 8-way else-if chain accumulated an
+    // unbounded nesting bonus — measured JS=16 vs Go=36 for identical
+    // chains. Build real ASTs (not the regex fallback) for both languages
+    // and assert parity.
+    const branch = (n: number, lang: "js" | "go") =>
+      lang === "js"
+        ? `${n === 1 ? "if" : "} else if"} (a === ${n}) {\n    x();\n  `
+        : `${n === 1 ? "\tif" : "\t} else if"} a == ${n} {\n\t\tx()\n\t`;
+
+    let jsBody = "";
+    let goBody = "";
+    for (let i = 1; i <= 8; i++) {
+      jsBody += branch(i, "js");
+      goBody += branch(i, "go");
+    }
+    const jsContent = `function f(a) {\n  ${jsBody}} else {\n    x();\n  }\n}\n`;
+    const goContent = `package main\nfunc f(a int) {\n${goBody}} else {\n\t\tx()\n\t}\n}\n`;
+
+    const jsFile: SourceFile = {
+      path: "/test/f.ts", relativePath: "f.ts", language: "typescript",
+      content: jsContent, lineCount: jsContent.split("\n").length,
+    };
+    const goFile: SourceFile = {
+      path: "/test/f.go", relativePath: "f.go", language: "go",
+      content: goContent, lineCount: goContent.split("\n").length,
+    };
+    jsFile.tree = (await parseFile(jsFile)) ?? undefined;
+    goFile.tree = (await parseFile(goFile)) ?? undefined;
+    expect(jsFile.tree).toBeDefined();
+    expect(goFile.tree).toBeDefined();
+
+    const ctx: AnalysisContext = {
+      rootDir: "/test",
+      files: [jsFile, goFile],
+      packageJson: null,
+      goMod: null,
+      cargoToml: null,
+      requirementsTxt: null,
+      envExample: null,
+      totalLines: jsFile.lineCount + goFile.lineCount,
+      languageBreakdown: new Map(),
+      dominantLanguage: null,
+    };
+
+    const findings = await complexityAnalyzer.analyze(ctx);
+    const jsFinding = findings.find((f) => f.locations[0]?.file === "f.ts");
+    const goFinding = findings.find((f) => f.locations[0]?.file === "f.go");
+    expect(jsFinding).toBeDefined();
+    expect(goFinding).toBeDefined();
+
+    const jsCognitive = cognitiveOf(jsFinding?.locations[0]?.snippet);
+    const goCognitive = cognitiveOf(goFinding?.locations[0]?.snippet);
+    expect(goCognitive).toBe(jsCognitive);
+    // Sanity check on the magnitude — an 8-way flat else-if chain should
+    // NOT be inflated into the 30s (the pre-fix regression).
+    expect(goCognitive).toBeLessThan(20);
   });
 
   it("caps per-tier findings and rolls up the tail", async () => {
