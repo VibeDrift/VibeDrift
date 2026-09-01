@@ -187,6 +187,92 @@ describe("composite monotonicity", () => {
     );
   });
 
+  it("adding one signal-less finding to a dominance group under the same analyzerId never raises the composite", () => {
+    // `groupDeviation` used to pick its branch with `findings.every(driftSignal)`:
+    // ONE signal-less finding flipped a whole dominance group into the count
+    // branch, swapping a large worst-deviation for a tiny per-function rate —
+    // measured at +31.3 points from a single added finding. `codedna-pattern`
+    // really does this: "Pattern drift" carries driftSignal, "Mixed patterns"
+    // (same analyzerId) deliberately does not.
+    const dominance: Finding[] = [
+      drift("codedna-pattern", { consistencyScore: 30, severity: "warning", totalRelevantFiles: 20 }),
+      drift("codedna-pattern", { consistencyScore: 35, severity: "warning", totalRelevantFiles: 20, file: "src/b.ts" }),
+      drift("drift-naming_conventions", { consistencyScore: 70, file: "src/c.ts" }),
+    ];
+    const plain: Finding = {
+      analyzerId: "codedna-pattern",
+      severity: "info",
+      confidence: 0.6,
+      message: "Mixed patterns in src/d.ts: a, b — file mixes architectural approaches internally",
+      locations: [{ file: "src/d.ts" }],
+      tags: ["codedna", "pattern", "mixed"],
+    };
+
+    const before = computeScores(dominance, LINES, undefined, undefined, { mutateImpact: false });
+    const after = computeScores([...dominance, plain], LINES, undefined, undefined, {
+      mutateImpact: false,
+    });
+    expect(after.compositeScore).toBeLessThanOrEqual(before.compositeScore);
+  });
+
+  it("removing ANY single finding from a mixed signal / signal-less detector group never lowers the composite (randomized)", () => {
+    // Deterministic PRNG so a failure reproduces from its trial index.
+    let seed = 0x9e3779b9;
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
+    const severities: Finding["severity"][] = ["info", "warning", "error"];
+
+    for (let trial = 0; trial < 200; trial++) {
+      const n = 2 + Math.floor(rand() * 5);
+      const all: Finding[] = [];
+      for (let i = 0; i < n; i++) {
+        const file = `src/${String.fromCharCode(97 + i)}.ts`;
+        if (rand() < 0.5) {
+          all.push(
+            drift("codedna-pattern", {
+              consistencyScore: Math.round(rand() * 100),
+              totalRelevantFiles: 2 + Math.floor(rand() * 30),
+              severity: pick(severities),
+              confidence: 0.05 + rand() * 0.95,
+              file,
+            }),
+          );
+        } else {
+          all.push({
+            analyzerId: "codedna-pattern",
+            severity: pick(severities),
+            confidence: 0.05 + rand() * 0.95,
+            message: `Mixed patterns in ${file}`,
+            locations: [{ file }],
+            tags: ["codedna", "pattern", "mixed"],
+            ...(rand() < 0.5 ? { itemCount: 1 + Math.floor(rand() * 10) } : {}),
+          });
+        }
+      }
+      // A second detector so the category is never emptied by a removal (that
+      // path is pinned by the other tests; this one isolates the branch flip).
+      all.push(drift("drift-naming_conventions", { consistencyScore: 70, file: "src/zz.ts" }));
+
+      const lines = pick([400, 3000, 12000]);
+      const base = computeScores(all, lines, undefined, undefined, { mutateImpact: false }).compositeScore;
+      for (let i = 0; i < all.length; i++) {
+        const without = all.slice(0, i).concat(all.slice(i + 1));
+        const removed = computeScores(without, lines, undefined, undefined, {
+          mutateImpact: false,
+        }).compositeScore;
+        expect(
+          base,
+          `trial ${trial}: removing findings[${i}] (${all[i].driftSignal ? "signal" : "plain"}, ${all[i].severity}) lowered the composite: ${base} -> ${removed}`,
+        ).toBeLessThanOrEqual(removed);
+      }
+    }
+  });
+
   it("estimateScoreAfterFixes never projects a LOWER score than doing nothing", () => {
     const all: Finding[] = [
       drift("drift-architectural_consistency", { consistencyScore: 60, severity: "error" }),

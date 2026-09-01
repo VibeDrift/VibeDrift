@@ -31,14 +31,7 @@ export function deduplicateFindingsAcrossLayers(findings: Finding[]): Finding[] 
   // re-push — silently dropping every finding (composite then floats to ~100).
   if (duplicateFindings.length === 0) return [...findings];
 
-  // Group duplicate findings by the set of files they involve
-  const byFilePair = new Map<string, Finding[]>();
-
-  for (const f of duplicateFindings) {
-    const key = makeFilePairKey(f);
-    if (!byFilePair.has(key)) byFilePair.set(key, []);
-    byFilePair.get(key)!.push(f);
-  }
+  const byFilePair = groupDuplicateFindings(duplicateFindings);
 
   // For each file pair group, keep only the highest-priority finding
   const dedupedDuplicates: Finding[] = [];
@@ -85,35 +78,72 @@ export function deduplicateFindingsAcrossLayers(findings: Finding[]): Finding[] 
 }
 
 /**
- * Create a normalized key for a finding based on the FUNCTIONS it involves.
+ * Group duplicate findings by the FUNCTIONS they involve, not the file pair.
  *
- * The key must identify one duplicate group, not one file pair. Keying on the
- * file set alone collapsed every distinct duplicate group spanning the same two
- * files into a single survivor: a pair of large modules sharing five unrelated
- * clones reported one finding, and the four dropped ones took their
- * `dupGroupSize` mass with them, so the duplicated-function fraction the scoring
- * engine divides by function count silently lost most of its numerator.
+ * Keying on the file set alone collapsed every distinct duplicate group spanning
+ * the same two files into a single survivor: a pair of large modules sharing
+ * five unrelated clones reported one finding, and the four dropped ones took
+ * their `dupGroupSize` mass with them, so the duplicated-function fraction the
+ * scoring engine divides by function count silently lost most of its numerator.
  *
- * The identity is the sorted set of `file:line` locations, which is the same for
- * the same functions reported by different LAYERS (that cross-layer merge is the
- * whole point of this module) and different for different groups over the same
- * files. Files are still sorted and deduped so a 3+-file cluster merges the same
+ * So a finding whose locations all carry a line is keyed on its sorted set of
+ * `file#line` sites: identical for the same functions reported by different
+ * layers, distinct for different clones over the same files.
+ *
+ * But not every layer reports lines. ML duplicate findings are built from
+ * `function_a`/`function_b` ids and carry FILES ONLY (see
+ * `src/ml-client/confidence.ts`), so a site key would never match the Code DNA
+ * copy of the same clone: deep scans would show it twice, lose the
+ * "[confirmed by ...]" annotation, and count its damage double. A line-less
+ * finding therefore merges by FILE SET into an existing lined group over the
+ * same files — the first such group in sorted key order, so the choice is
+ * deterministic — and only forms its own file-set group when no lined group
+ * over those files exists.
+ *
+ * Files are sorted and deduped throughout so a 3+-file cluster merges the same
  * way regardless of the order a layer listed it in.
  */
-function makeFilePairKey(f: Finding): string {
-  const files = [...new Set(
-    f.locations.map((l) => l.file).filter(Boolean),
-  )].sort();
+function groupDuplicateFindings(duplicateFindings: Finding[]): Map<string, Finding[]> {
+  const groups = new Map<string, Finding[]>();
+  const push = (key: string, f: Finding) => {
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(f);
+  };
 
-  if (files.length >= 2) {
-    const sites = [...new Set(
-      f.locations
-        .filter((l) => l.file)
-        .map((l) => `${l.file}#${l.line ?? ""}`),
-    )].sort();
-    return `dup::${sites.join("::")}`;
+  // Pass 1: everything with a full site identity (plus single-file findings,
+  // which never merge across layers).
+  const lineless: Array<{ finding: Finding; fileSet: string }> = [];
+  for (const f of duplicateFindings) {
+    const files = sortedFiles(f);
+    if (files.length < 2) {
+      // Single-file duplicate findings (e.g., static "X pairs of duplicates in this file")
+      push(`dup::${files[0] ?? "unknown"}::${f.analyzerId}`, f);
+      continue;
+    }
+    const locs = f.locations.filter((l) => l.file);
+    if (locs.every((l) => typeof l.line === "number")) {
+      const sites = [...new Set(locs.map((l) => `${l.file}#${l.line}`))].sort();
+      push(`dup::sites::${sites.join("::")}`, f);
+    } else {
+      lineless.push({ finding: f, fileSet: files.join("::") });
+    }
   }
 
-  // Single-file duplicate findings (e.g., static "X pairs of duplicates in this file")
-  return `dup::${files[0] ?? "unknown"}::${f.analyzerId}`;
+  // Pass 2: line-less findings attach to the first lined group over the same
+  // file set, or form a file-set group of their own.
+  const firstLinedGroupByFileSet = new Map<string, string>();
+  for (const key of [...groups.keys()].sort()) {
+    if (!key.startsWith("dup::sites::")) continue;
+    const fileSet = sortedFiles(groups.get(key)![0]).join("::");
+    if (!firstLinedGroupByFileSet.has(fileSet)) firstLinedGroupByFileSet.set(fileSet, key);
+  }
+  for (const { finding, fileSet } of lineless) {
+    push(firstLinedGroupByFileSet.get(fileSet) ?? `dup::files::${fileSet}`, finding);
+  }
+
+  return groups;
+}
+
+function sortedFiles(f: Finding): string[] {
+  return [...new Set(f.locations.map((l) => l.file).filter(Boolean))].sort();
 }

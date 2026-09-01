@@ -498,10 +498,26 @@ function groupImportance(findings: Finding[]): number {
 
 /**
  * Representative deviation for a detector group:
- *  - dominance (every finding carries driftSignal): the worst deviation
- *    fraction in the group (already a size-normalized rate), floored.
- *  - count-based: a saturating density of finding count per KLOC, so volume
- *    scales with codebase size rather than raw count.
+ *  - dominance (findings carrying driftSignal): the worst deviation fraction in
+ *    the group (already a size-normalized rate), floored.
+ *  - count-based (findings without driftSignal): a saturating density of
+ *    finding volume per function (or per KLOC), so volume scales with codebase
+ *    size rather than raw count.
+ *  - MIXED group (both kinds under one analyzerId): the MAX of the dominance
+ *    deviation over the signalled findings and the count deviation over the
+ *    signal-less ones. This is load-bearing for monotonicity: with an all-or-
+ *    nothing `every(driftSignal)` switch, ONE signal-less finding flipped a
+ *    dominance group into the count branch, replacing a large deviation with a
+ *    tiny per-function rate — a new finding raised the score by 31 points in
+ *    the measured case. And it is reachable: `codedna-pattern` emits a
+ *    "Pattern drift" finding WITH driftSignal and a "Mixed patterns" finding
+ *    WITHOUT, under the same analyzerId. A max of two parts that are each
+ *    monotone in their own subset can only go up when a finding of either
+ *    kind is added. The dominance part carries its own sample-size discount
+ *    (`groupSampleConfidence` over the signalled findings), so the count part
+ *    is never scaled by a dominance sample it has nothing to do with. Pure
+ *    groups are unchanged: all-signal → dominance only (discounted in
+ *    `detectorDamage` as before), no-signal → count only.
  */
 /**
  * Whether a detector group is scored through the duplicated-FUNCTION-fraction
@@ -524,18 +540,42 @@ function groupDeviation(
   klocCount: number,
   functionCount: number,
 ): number {
-  const isDominance = useDriftMagnitude && findings.every((f) => f.driftSignal);
-  if (isDominance) {
-    let worst = 0;
-    for (const f of findings) {
-      worst = Math.max(worst, 1 - (f.driftSignal!.consistencyScore ?? 100) / 100);
-    }
-    // A genuinely-consistent finding (consistencyScore 100 → deviation 0) is NOT
-    // drift and must contribute zero damage — do not floor it. The DEVIATION_FLOOR
-    // only applies once there is some real deviation to register faintly.
-    if (worst <= 0) return 0;
-    return Math.max(DEVIATION_FLOOR, Math.min(1, worst));
+  if (!useDriftMagnitude) return countDeviation(findings, klocCount, functionCount);
+
+  const signalled = findings.filter((f) => f.driftSignal);
+  if (signalled.length === 0) return countDeviation(findings, klocCount, functionCount);
+
+  const dominance = dominanceDeviation(signalled);
+  if (signalled.length === findings.length) return dominance;
+
+  // Mixed group: neither kind may hide the other (see the doc comment above).
+  // The sample-size discount belongs to the dominance evidence alone, so it is
+  // folded in HERE rather than applied to the whole group in `detectorDamage`
+  // (which returns a neutral 1.0 for mixed groups): scaling the count part by
+  // the dominance sample meant removing the last signalled finding lifted the
+  // discount to 1.0 and RAISED the damage — closing a finding lowered the score.
+  const plain = findings.filter((f) => !f.driftSignal);
+  return Math.max(
+    dominance * groupSampleConfidence(signalled),
+    countDeviation(plain, klocCount, functionCount),
+  );
+}
+
+/** Worst deviation fraction across findings that all carry `driftSignal`. */
+function dominanceDeviation(findings: Finding[]): number {
+  let worst = 0;
+  for (const f of findings) {
+    worst = Math.max(worst, 1 - (f.driftSignal!.consistencyScore ?? 100) / 100);
   }
+  // A genuinely-consistent finding (consistencyScore 100 → deviation 0) is NOT
+  // drift and must contribute zero damage — do not floor it. The DEVIATION_FLOOR
+  // only applies once there is some real deviation to register faintly.
+  if (worst <= 0) return 0;
+  return Math.max(DEVIATION_FLOOR, Math.min(1, worst));
+}
+
+/** Saturating volume deviation for findings scored by count rather than dominance. */
+function countDeviation(findings: Finding[], klocCount: number, functionCount: number): number {
   // Grouped exact/near-duplicate detectors carry `dupGroupSize`: score by the
   // DUPLICATED-FUNCTION FRACTION (Σ redundant copies ÷ total functions), which is
   // size-fair AND volume-sensitive — 32 identical functions register as ~31
@@ -575,9 +615,12 @@ function groupDeviation(
  * Sample-size confidence for a dominance group: full weight once the dominance
  * vote saw at least SAMPLE_FULL_CONFIDENCE relevant files, scaled down below
  * that. Count-based findings carry no dominance sample (no driftSignal), so
- * they return a neutral 1.0 and are unaffected.
+ * they return a neutral 1.0 and are unaffected. A MIXED group also returns 1.0:
+ * its dominance part is discounted inside `groupDeviation`, where the discount
+ * can be applied to the dominance evidence only and not to the count part.
  */
 function groupSampleConfidence(findings: Finding[]): number {
+  if (findings.some((f) => !f.driftSignal)) return 1;
   let maxN = 0;
   for (const f of findings) {
     if (f.driftSignal) maxN = Math.max(maxN, f.driftSignal.totalRelevantFiles);
