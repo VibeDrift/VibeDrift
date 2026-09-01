@@ -46,6 +46,94 @@ func do() {
       expect(unchecked).toBeUndefined();
     });
 
+    // Idiomatic Go handles errors in many shapes besides `if err != nil`.
+    // A previous rework required the handling line to START with
+    // if/switch/return, which false-flagged every one of these (measured
+    // +41% flags on real Go code, 15/15 sampled were false). Each must stay
+    // un-flagged.
+    const idioms: [string, string][] = [
+      ["same-line init form `if err := f(); err != nil {`", `package main
+
+func do() error {
+	if err := f(); err != nil {
+		return err
+	}
+	return nil
+}
+`],
+      ["`log.Fatal(err)`", `package main
+
+func main() {
+	err := f()
+	log.Fatal(err)
+}
+`],
+      ["`t.Fatal(err)`", `package main
+
+func TestX(t *testing.T) {
+	err := f()
+	t.Fatal(err)
+}
+`],
+      ["`panic(err)`", `package main
+
+func mustDo() {
+	err := f()
+	panic(err)
+}
+`],
+      ["`errors.Is(err, io.EOF)`", `package main
+
+func read() {
+	err := f()
+	if errors.Is(err, io.EOF) {
+		return
+	}
+}
+`],
+      ["`return nil, err` inside a wrapped call", `package main
+
+func load() (*T, error) {
+	v, err := f()
+	return wrap(v), err
+}
+`],
+      ["check past an unrelated statement (`_ = n`)", `package main
+
+func do() {
+	n, err := f()
+	_ = n
+	if err != nil {
+		return
+	}
+}
+`],
+    ];
+    for (const [name, content] of idioms) {
+      it(`does NOT flag ${name}`, async () => {
+        const ctx = makeCtx([{ relativePath: "idiom.go", content }]);
+        const findings = await languageSpecificAnalyzer.analyze(ctx);
+        const unchecked = findings.find((f) => f.tags.includes("unchecked-error"));
+        expect(unchecked).toBeUndefined();
+      });
+    }
+
+    it("flags a genuinely unchecked err (assigned, then never referenced again)", async () => {
+      const content = `package main
+
+func bad() error {
+	err := f()
+	fmt.Println("done")
+	return nil
+}
+`;
+      const ctx = makeCtx([{ relativePath: "bad.go", content }]);
+      const findings = await languageSpecificAnalyzer.analyze(ctx);
+      const unchecked = findings.find((f) => f.tags.includes("unchecked-error"));
+      expect(unchecked).toBeDefined();
+      expect(unchecked?.locations[0]?.line).toBe(4);
+    });
+
     it("still flags an err assignment with no check at all within the window", async () => {
       const content = `package main
 

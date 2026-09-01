@@ -1047,6 +1047,10 @@ export function renderJsonOutput(result: ScanResult): string {
       // render. Undefined on free or non-deep scans.
       coherenceReport: result.coherenceReport,
       perFileScores: Object.fromEntries(result.perFileScores),
+      // Ids of analyzers that threw and were skipped this run. Undefined on a
+      // clean run. When present the scores above are DEGRADED (missing those
+      // analyzers' findings) — CI consumers should treat the score as unreliable.
+      degradedAnalyzers: result.degradedAnalyzers,
     },
     null,
     2,

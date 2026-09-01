@@ -40,20 +40,34 @@ function detectGoUncheckedErrors(
     for (let i = 0; i < lines.length; i++) {
       const trimmed = lines[i].trim();
 
-      // Unchecked error: line assigns to err (or _) but no line in a bounded
-      // window afterward checks it. A single-line lookahead false-flags the
-      // common `n, err := f(); _ = n; if err != nil { ... }` shape, where an
-      // unrelated statement sits between the assignment and the check —
-      // widen the window to ~5 lines and require the checking line to
-      // actually reference err in an if/switch (or a return).
+      // Unchecked error: line assigns to err but nothing in a bounded window
+      // afterward references it. Two things keep this from over-flagging:
+      //
+      //   1. The same-line init form — `if err := f(); err != nil {` (and the
+      //      `for`/`switch` equivalents) — IS the check; the assignment line
+      //      itself contains the comparison, so it is never a candidate.
+      //   2. ANY following non-comment line that mentions `err` counts as
+      //      handling it. Idiomatic Go handles errors in many shapes beyond
+      //      `if err != nil` — `log.Fatal(err)`, `t.Fatal(err)`, `panic(err)`,
+      //      `errors.Is(err, ...)`, `return nil, err` inside a wrapped call —
+      //      and requiring the handling line to START with if/switch/return
+      //      false-flagged every one of them (measured +41% flags on real Go
+      //      code, all false). This is the original "does a later line mention
+      //      err" rule; we intentionally add no new flag conditions.
+      //
+      // The only change from the old single-line lookahead is the window:
+      // scanning ~5 lines instead of 1 stops the common
+      // `n, err := f(); _ = n; if err != nil { ... }` shape — an unrelated
+      // statement between the assignment and the check — from being flagged.
       if (/\berr\s*[:=]/.test(trimmed) && !trimmed.startsWith("//")) {
+        if (/\berr\s*[!=]=\s*nil\b/.test(trimmed)) continue;
         let checked = false;
         let hasFollowingContent = false;
         for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
           const next = lines[j].trim();
           if (!next || next.startsWith("//")) continue;
           hasFollowingContent = true;
-          if (/\berr\b/.test(next) && (/^(?:if|switch)\b/.test(next) || next.startsWith("return"))) {
+          if (/\berr\b/.test(next)) {
             checked = true;
             break;
           }

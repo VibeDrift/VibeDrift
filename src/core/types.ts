@@ -284,6 +284,15 @@ export interface ScanResult {
    * the one-time scoring-refined notice explains the change).
    */
   previousScoresMismatch?: string;
+  /**
+   * Ids of Layer 1 analyzers that threw during this scan and were skipped.
+   * Present only when non-empty. When set, `findings` and every score built
+   * from them are DEGRADED — the skipped analyzers' findings are missing, so
+   * the composite may read cleaner than the code is. Surfaced so JSON/CI
+   * consumers can detect a degraded run rather than trust a silently-wrong
+   * score (a warning is also written to stderr at the time of failure).
+   */
+  degradedAnalyzers?: string[];
 }
 
 export interface DriftFindingReport {
