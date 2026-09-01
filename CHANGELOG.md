@@ -4,7 +4,7 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
-## [Unreleased]
+## 0.20.1 — 2026-09-01
 
 **VibeDrift is now a Claude Code plugin: one install wires the MCP server in and adds a run-once setup skill, no `claude mcp add` required.**
 
