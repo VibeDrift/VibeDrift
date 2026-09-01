@@ -96,11 +96,18 @@ export const stateManagementConsistency: DriftDetector = {
     }
     if (profiles.length < 3) return [];
 
+    // Vocabulary guard: a seeded vote SKIPS the 70% dominance gate, so a hint
+    // whose pattern is not one of this axis's own strategies would inject a
+    // phantom zero-count entry and force findings out of directories that are
+    // perfectly consistent. Only a key of STRATEGY_NAMES is allowed to seed.
+    const hint = pickIntentHint(ctx, "state_management_consistency");
+    const seededPattern = hint && hint.pattern in STRATEGY_NAMES ? hint.pattern : undefined;
+
     const votes = buildDirectoryScopedVote(profiles, STRATEGY_NAMES, {
       minGroupSize: 3,
       dominanceThreshold: 0.7,
       fileAges: buildFileAgeMap(ctx),
-      seededPattern: pickIntentHint(ctx, "state_management_consistency")?.pattern,
+      seededPattern,
     });
 
     return votes.map((v) => ({
@@ -116,6 +123,7 @@ export const stateManagementConsistency: DriftDetector = {
       consistencyScore: v.consistencyScore,
       deviatingFiles: v.deviators,
       dominantFiles: v.dominantFiles,
+      allDominantFiles: v.allDominantFiles,
       recommendation: `Standardize ${v.directory}/ on ${STRATEGY_NAMES[v.dominant]}. Mixing state libraries in the same area makes data flow hard to follow.`,
     }));
   },

@@ -32,6 +32,16 @@ const RECENT_WINDOW_DAYS = 90;
 const MIN_POPULATION = 3;
 const RECENT_CONSISTENCY_MIN = 70; // recent pattern must be this consistent
 const LEGACY_CONSISTENCY_MIN = 60; // legacy pattern also needs to be somewhat coherent
+/**
+ * Fraction of the finding's own `totalRelevantFiles` the observed population
+ * must cover before a pivot may be declared. A finding carries at most 3
+ * dominant exemplars unless it also carries `allDominantFiles`, and those 3 are
+ * an ALPHABETICAL sample, not a random draw — treating them as the dominant
+ * population made a stable 9-dominant / 3-deviating directory flip to "pivot"
+ * whenever the alphabetically-first files happened to be the recently-touched
+ * ones. When we cannot see most of the peer group, we decline to judge.
+ */
+const MIN_POPULATION_COVERAGE = 0.6;
 
 interface FileBucket {
   pattern: string;
@@ -42,9 +52,9 @@ interface FileBucket {
 function gatherFiles(
   ctx: DriftContext,
   finding: DriftFinding,
-): { recent: FileBucket[]; legacy: FileBucket[] } {
+): { recent: FileBucket[]; legacy: FileBucket[]; observed: number } {
   const dir = finding.deviatingFiles[0] ? directoryOf(finding.deviatingFiles[0].path) : null;
-  if (!dir) return { recent: [], legacy: [] };
+  if (!dir) return { recent: [], legacy: [], observed: 0 };
 
   // Build a path → (pattern, daysAgo) map we can sort into two buckets.
   // Dominant files keep their dominant label; deviators bring their own.
@@ -54,7 +64,11 @@ function gatherFiles(
   }
 
   const buckets: FileBucket[] = [];
-  for (const domPath of finding.dominantFiles ?? []) {
+  // Prefer the FULL dominant population. `dominantFiles` is a 3-file display
+  // sample (pickDominantFiles), so using it as the population under-counts the
+  // dominant side of both age buckets and manufactures pivots.
+  const dominantPopulation = finding.allDominantFiles ?? finding.dominantFiles ?? [];
+  for (const domPath of dominantPopulation) {
     if (directoryOf(domPath) !== dir) continue;
     buckets.push({
       pattern: finding.dominantPattern,
@@ -78,7 +92,7 @@ function gatherFiles(
     if (b.daysAgo <= RECENT_WINDOW_DAYS) recent.push(b);
     else legacy.push(b);
   }
-  return { recent, legacy };
+  return { recent, legacy, observed: buckets.length };
 }
 
 function dominantOf(bucket: FileBucket[]): { pattern: string; count: number; total: number } | null {
@@ -105,8 +119,15 @@ export function detectPivot(
   if (!ctx.hasGitMetadata) return finding;
   if (!finding.deviatingFiles || finding.deviatingFiles.length === 0) return finding;
 
-  const { recent, legacy } = gatherFiles(ctx, finding);
+  const { recent, legacy, observed } = gatherFiles(ctx, finding);
   if (recent.length < MIN_POPULATION || legacy.length < MIN_POPULATION) {
+    return finding;
+  }
+  // Decline to judge when most of the peer group is invisible to us (a finding
+  // that carried only the 3-file dominant sample). A pivot claim rests on the
+  // WHOLE population's age split, and a partial view skews it in whichever
+  // direction the sample happened to fall.
+  if (observed < MIN_POPULATION_COVERAGE * finding.totalRelevantFiles) {
     return finding;
   }
 

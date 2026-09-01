@@ -41,7 +41,10 @@ export function extractEvidence(
   maxResults = 3,
 ): Evidence[] {
   const evidence: Evidence[] = [];
-  const regex = new RegExp(pattern.source, pattern.flags);
+  // Force the global flag. Without it `regex.exec` never advances `lastIndex`,
+  // so the loop below re-reports the SAME match until it hits `maxResults`.
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const regex = new RegExp(pattern.source, flags);
   let match;
   while ((match = regex.exec(content)) !== null && evidence.length < maxResults) {
     const line = getLineNumber(content, match.index);
@@ -53,18 +56,33 @@ export function extractEvidence(
 /**
  * Pick the primary (most common) pattern within a single file's occurrences.
  * Used to reduce per-file multi-signals to one "primary choice".
+ *
+ * Ranking is by EVIDENCE COUNT, not by how many profile entries a pattern got.
+ * Nearly every detector emits exactly one entry per pattern it saw (one
+ * `{ pattern, evidence[] }` per family), so counting entries made every pattern
+ * tie at 1 and the winner was whichever the detector happened to push first —
+ * a file with one `console.log` and fifty `winston.info` calls classified as
+ * `console`. Occurrence count is kept as the secondary key so callers that pass
+ * multiple entries per pattern still aggregate, and insertion order remains the
+ * final tie-break (detectors order their pushes most-distinctive-first).
  */
 export function detectFilePattern<T extends string>(
   patterns: { pattern: T; evidence: Evidence[] }[],
 ): T | null {
-  const fileCounts = new Map<T, number>();
-  for (const { pattern } of patterns) {
-    fileCounts.set(pattern, (fileCounts.get(pattern) ?? 0) + 1);
+  const tally = new Map<T, { occurrences: number; evidence: number }>();
+  for (const { pattern, evidence } of patterns) {
+    const entry = tally.get(pattern) ?? { occurrences: 0, evidence: 0 };
+    entry.occurrences++;
+    entry.evidence += evidence.length;
+    tally.set(pattern, entry);
   }
   let primaryPattern: T | null = null;
-  let maxCount = 0;
-  for (const [pat, count] of fileCounts) {
-    if (count > maxCount) { maxCount = count; primaryPattern = pat; }
+  let best = { occurrences: 0, evidence: 0 };
+  for (const [pat, entry] of tally) {
+    const wins =
+      entry.evidence > best.evidence ||
+      (entry.evidence === best.evidence && entry.occurrences > best.occurrences);
+    if (wins) { best = entry; primaryPattern = pat; }
   }
   return primaryPattern;
 }
@@ -123,9 +141,19 @@ export function collectDeviatingFiles<T extends string>(
   return deviating;
 }
 
-/** Skip files that are tests, fixtures, configs, or generated — shared across detectors. */
+/**
+ * Skip files that are tests, fixtures, configs, or generated — shared across detectors.
+ *
+ * Each keyword is anchored to a path-segment boundary (`/`, `.`, `_`, `-`, or
+ * the start/end of the path), the same rule `isInLoopCheckable` uses below.
+ * Unanchored substring matching silently dropped ordinary source files whose
+ * names merely CONTAIN a keyword — `src/latest-run.ts`, `src/protest.ts`,
+ * `src/mockup.ts`, `src/specimen.ts` — from every detector's denominator. The
+ * boundary set still covers `__tests__/`, `__mocks__/`, `.test.`, and `.spec.`
+ * because `_` and `.` are boundary characters.
+ */
 export function isAnalyzableSource(path: string): boolean {
-  if (/(?:test|spec|mock|fixture|__test__|__mocks__|\.test\.|\.spec\.)/i.test(path)) return false;
+  if (/(?:^|[/._-])(?:tests?|specs?|mocks?|fixtures?)(?:[/._-]|$)/i.test(path)) return false;
   if (/(?:\.config\.|\.d\.ts$|node_modules|dist\/|build\/)/i.test(path)) return false;
   return true;
 }
@@ -494,6 +522,14 @@ export interface DirectoryVote<T extends string> {
    */
   dominantFiles: string[];
   /**
+   * EVERY file backing the dominant pattern, not the 3-file display sample.
+   * Pivot detection buckets the dominant population by commit age, and the
+   * alphabetical sample is not a random draw — feeding it the 3 exemplars made
+   * a stable 9-vs-3 directory read as a temporal pivot whenever the sampled
+   * files happened to be recent.
+   */
+  allDominantFiles: string[];
+  /**
    * True when this vote used temporal weighting (files had git metadata
    * and options.fileAges was provided). Useful for downstream reporting
    * — "this finding is temporally-aware" vs "this was a flat vote."
@@ -622,6 +658,7 @@ export function buildDirectoryScopedVote<T extends string>(
           consistencyScore: 100,
           deviators: [],
           dominantFiles: pickDominantFiles(distribution, onlyPattern),
+          allDominantFiles: [...entry.files].sort(),
           temporallyWeighted,
           intentMatched: false,
           seededPattern,
@@ -696,6 +733,7 @@ export function buildDirectoryScopedVote<T extends string>(
       consistencyScore: Math.round(dominantShare * 100),
       deviators,
       dominantFiles: pickDominantFiles(distribution, dom.dominant),
+      allDominantFiles: [...(distribution.get(dom.dominant)?.files ?? [])].sort(),
       temporallyWeighted,
       intentMatched,
       seededPattern,

@@ -67,3 +67,88 @@ describe("export-consistency detector", () => {
     expect(exportConsistency.detect(mkCtx(files))).toHaveLength(0);
   });
 });
+
+describe("export-consistency: async-only export files", () => {
+  it("counts a file whose only exports are async functions", () => {
+    // `export async function` matched neither branch of the classifier — not
+    // `export default`, and `async` is not one of the declaration keywords — so
+    // such a file was read as having NO exports and left the vote entirely.
+    // The four async-only files below ARE the named-export majority here;
+    // without them only `d.ts` profiles at all and the detector returns [] on
+    // its `fileProfiles.length < 3` guard.
+    const files: DriftFile[] = [
+      file("src/h/a.ts", `export async function loadA() { return 1; }
+`),
+      file("src/h/b.ts", `export async function loadB() { return 2; }
+`),
+      file("src/h/c.ts", `export async function loadC() { return 3; }
+`),
+      file("src/h/e.ts", `export async function loadE() { return 5; }
+`),
+      file("src/h/d.ts", `async function loadD() { return 4; }
+export default loadD;
+`),
+    ];
+    const findings = exportConsistency.detect(mkCtx(files));
+    const v = findings.find((f) => f.driftCategory === "export_style");
+    expect(v).toBeDefined();
+    expect(v!.dominantPattern).toBe("named exports only");
+    expect(v!.dominantCount).toBe(4);
+    expect(v!.totalRelevantFiles).toBe(5);
+    expect(v!.deviatingFiles.map((d) => d.path)).toEqual(["src/h/d.ts"]);
+  });
+});
+
+describe("export-consistency: intent-hint vocabulary guard", () => {
+  function withHint(files: DriftFile[], pattern: string): DriftContext {
+    return {
+      ...mkCtx(files),
+      intentHints: [{
+        category: "export_style",
+        pattern,
+        label: "named exports",
+        source: "CLAUDE.md",
+        line: 3,
+        text: "- Prefer named exports",
+        confidence: 0.9,
+      }],
+    };
+  }
+
+  // `src/a/` is unanimously named so the PROJECT-wide entropy gate passes
+  // (8 named vs 2 default), while `src/h/` splits 2-2 — under the 70%
+  // per-directory dominance threshold, so an unseeded vote reports nothing
+  // there. A seed is the only thing that can make `src/h/` emit.
+  const files: DriftFile[] = [
+    ...Array.from({ length: 6 }, (_, i) => file(`src/a/a${i}.ts`, `export const a${i} = ${i};
+`)),
+    file("src/h/n1.ts", `export const n1 = 1;
+`),
+    file("src/h/n2.ts", `export const n2 = 2;
+`),
+    file("src/h/d1.ts", `function d1() {}
+export default d1;
+`),
+    file("src/h/d2.ts", `function d2() {}
+export default d2;
+`),
+  ];
+
+  it("emits nothing without a hint (the 2-2 directory is below the dominance gate)", () => {
+    expect(exportConsistency.detect(mkCtx(files))).toHaveLength(0);
+  });
+
+  it("an out-of-vocabulary hint does not bypass the dominance gate", () => {
+    // A seeded vote SKIPS the 70% dominance threshold. `named` is the string
+    // the intent parser used to emit; the detector's enum key is `named_only`.
+    // The mismatch injected a phantom pattern into the vote and forced a
+    // finding out of a directory no raw vote would report.
+    expect(exportConsistency.detect(withHint(files, "named"))).toHaveLength(0);
+  });
+
+  it("the same declaration written in the detector's vocabulary still binds", () => {
+    const findings = exportConsistency.detect(withHint(files, "named_only"));
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.dominantPattern === "named exports only")).toBe(true);
+  });
+});

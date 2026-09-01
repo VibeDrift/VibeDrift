@@ -452,8 +452,8 @@ ${filler}
 
 /** fetchInvoice is HTTP-only; loadInvoiceRows goes straight at the driver. Two
  *  queries of the same edit therefore report DIFFERENT labels on the data-access
- *  dimension, and the whole-body query (whose db.query evidence outweighs the
- *  fetches) reports "direct database calls" first. */
+ *  dimension, and the whole-body query (whose SELECT-statement evidence outweighs
+ *  the fetches) reports "raw SQL queries" first. */
 const MIXED_ACCESS = `export function fetchInvoice(id: string) {
   const res = fetch("/api/invoices/" + id);
   const meta = fetch("/api/invoices/" + id + "/meta");
@@ -472,7 +472,10 @@ describe("the anchor names a construct that carried the flagged label", () => {
     const { open } = await raise("s-pairing", rel, MIXED_ACCESS);
     const arch = only(open, "architectural_consistency")[0];
     const anchor = arch.anchor!;
-    expect(anchor.observed).toBe("direct database calls");
+    // "raw SQL queries" (not "direct database calls"): the raw-SQL regex fix
+    // means the SELECT statements in loadInvoiceRows now classify, and raw_sql
+    // outranks direct_db in the shared evidence-ranked classifier.
+    expect(anchor.observed).toBe("raw SQL queries");
 
     // Whatever construct the anchor names, that construct's own body must be
     // what the stored label describes — otherwise the finding is anchored to

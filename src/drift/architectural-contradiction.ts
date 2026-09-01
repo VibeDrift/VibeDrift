@@ -20,6 +20,7 @@ import type { DriftDetector, DriftContext, DriftFinding, DriftFile, Evidence } f
 import {
   buildDirectoryScopedVote,
   buildFileAgeMap,
+  detectFilePattern,
   extractEvidence,
   isAnalyzableSource,
   pickIntentHint,
@@ -45,14 +46,35 @@ function detectDataAccess(file: DriftFile): { pattern: DataAccessPattern; eviden
   const results: { pattern: DataAccessPattern; evidence: Evidence[] }[] = [];
   const c = file.content;
 
-  // Repository pattern
-  const repoEvidence = extractEvidence(c, /\b(?:store|repo|repository)\.\w+\s*\(/g);
-  if (repoEvidence.length > 0) results.push({ pattern: "repository", evidence: repoEvidence });
+  // Push order IS the tie-break order: `detectFilePattern` ranks by evidence
+  // count and falls back to insertion order, so these are ordered
+  // most-distinctive-deviation-first, matching DATA_ACCESS_PRIORITY below.
 
-  // Raw SQL
-  const sqlEvidence = extractEvidence(c, /(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:FROM|INTO|SET|\*)\b/gi);
+  // Raw SQL. The clause keywords are separated by the column/table list, so
+  // each statement form is matched as a keyword PAIR within a bounded window
+  // rather than as adjacent tokens. The old
+  // `(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:FROM|INTO|SET|\*)\b` matched none of
+  // `SELECT * FROM users` (a `\b` after `*` cannot hold before a space),
+  // `SELECT id FROM users` (FROM had to follow SELECT immediately), or
+  // `UPDATE users SET x = 1`.
+  const sqlEvidence = extractEvidence(
+    c,
+    /\bSELECT\b[\s\S]{0,200}?\bFROM\b|\bUPDATE\b[\s\S]{0,200}?\bSET\b|\bINSERT\s+INTO\b|\bDELETE\s+FROM\b/gi,
+  );
   if (sqlEvidence.length > 0 && !isRepoFile(file.relativePath)) {
     results.push({ pattern: "raw_sql", evidence: sqlEvidence });
+  }
+
+  // Direct DB
+  const dbEvidence = extractEvidence(c, /\b(?:db|pool|client)\.\s*(?:Query|Exec|QueryRow|query|execute|raw)\s*\(/g);
+  if (dbEvidence.length > 0 && !isRepoFile(file.relativePath)) {
+    results.push({ pattern: "direct_db", evidence: dbEvidence });
+  }
+
+  // HTTP client calls in business logic
+  const httpEvidence = extractEvidence(c, /\b(?:fetch|axios|http\.(?:Get|Post|Put)|requests\.(?:get|post))\s*\(/g);
+  if (httpEvidence.length > 0) {
+    results.push({ pattern: "http_client", evidence: httpEvidence });
   }
 
   // ORM. Route registrations share these verb names with ORM CRUD calls:
@@ -75,17 +97,9 @@ function detectDataAccess(file: DriftFile): { pattern: DataAccessPattern; eviden
   const ormEvidence = extractEvidence(c, ormPatterns);
   if (ormEvidence.length > 0) results.push({ pattern: "orm", evidence: ormEvidence });
 
-  // Direct DB
-  const dbEvidence = extractEvidence(c, /\b(?:db|pool|client)\.\s*(?:Query|Exec|QueryRow|query|execute|raw)\s*\(/g);
-  if (dbEvidence.length > 0 && !isRepoFile(file.relativePath)) {
-    results.push({ pattern: "direct_db", evidence: dbEvidence });
-  }
-
-  // HTTP client calls in business logic
-  const httpEvidence = extractEvidence(c, /\b(?:fetch|axios|http\.(?:Get|Post|Put)|requests\.(?:get|post))\s*\(/g);
-  if (httpEvidence.length > 0) {
-    results.push({ pattern: "http_client", evidence: httpEvidence });
-  }
+  // Repository pattern
+  const repoEvidence = extractEvidence(c, /\b(?:store|repo|repository)\.\w+\s*\(/g);
+  if (repoEvidence.length > 0) results.push({ pattern: "repository", evidence: repoEvidence });
 
   return results;
 }
@@ -216,6 +230,7 @@ function analyzeAxisByDirectory<T extends string>(
     consistencyScore: v.consistencyScore,
     deviatingFiles: v.deviators,
     dominantFiles: v.dominantFiles,
+    allDominantFiles: v.allDominantFiles,
     recommendation: `In ${v.directory}/, ${v.dominantCount} of ${v.totalFiles} files use ${patternNames[v.dominant]}. Migrate deviating files for consistency.`,
   }));
 }
@@ -229,23 +244,29 @@ export const DATA_ACCESS_NAMES: Record<DataAccessPattern, string> = {
   in_memory: "in-memory data",
 };
 
-// When a single body shows multiple data-access signals, pick its primary by
-// evidence count, breaking ties toward the more distinctive deviation.
-const DATA_ACCESS_PRIORITY: DataAccessPattern[] = ["raw_sql", "direct_db", "http_client", "orm", "repository", "in_memory"];
+// When a single body shows multiple data-access signals, its primary is picked
+// by evidence count, ties broken toward the more distinctive deviation:
+// raw_sql > direct_db > http_client > orm > repository. That priority is
+// expressed exactly once — as `detectDataAccess`'s push order, which
+// `detectFilePattern` uses as its final tie-break — so the batch detector and
+// the single-body classifier below cannot rank a file differently.
 
 /**
  * Single-body classifier for the data-access axis, returning the DISPLAY label
  * (the same string stored in a finding's dominantPattern) or null when the body
  * shows no data-access choice. Shared with validate_change so the in-loop check
  * stays in lockstep with this detector's vocabulary.
+ *
+ * Ranking goes through `detectFilePattern` — the SAME function the batch
+ * detector's vote calls via `buildPatternDistribution` — so the two entry points
+ * cannot disagree on a file's primary pattern. They previously did: this
+ * function ranked by evidence count while the detector path took whichever
+ * pattern `detectDataAccess` pushed first.
  */
 export function classifyDataAccessLabel(content: string, path: string): string | null {
   const hits = detectDataAccess({ content, relativePath: path, language: "typescript" } as DriftFile);
-  if (hits.length === 0) return null;
-  const primary = hits
-    .slice()
-    .sort((a, b) => b.evidence.length - a.evidence.length || DATA_ACCESS_PRIORITY.indexOf(a.pattern) - DATA_ACCESS_PRIORITY.indexOf(b.pattern))[0];
-  return DATA_ACCESS_NAMES[primary.pattern];
+  const primary = detectFilePattern(hits);
+  return primary === null ? null : DATA_ACCESS_NAMES[primary];
 }
 
 /**
@@ -293,6 +314,13 @@ const CONFIG_NAMES: Record<ConfigPattern, string> = {
   mixed: "mixed config approaches",
 };
 
+/**
+ * Languages `detectDIPattern` can actually classify. Everything else has no DI
+ * vocabulary here, so its files must not be voted on this axis — see the
+ * comment at the DI call site.
+ */
+const DI_CLASSIFIED_LANGUAGES = new Set(["go", "javascript", "typescript"]);
+
 const DI_NAMES: Record<DIPattern, string> = {
   constructor_injection: "constructor injection",
   global_import: "global singleton imports",
@@ -321,38 +349,50 @@ export const architecturalContradiction: DriftDetector = {
     // falls back to flat (pre-temporal) behavior.
     const fileAges = buildFileAgeMap(ctx);
 
-    // Single intent hint applies to the whole architectural_consistency
-    // category. Individual axes use the same seed — CLAUDE.md doesn't
-    // typically distinguish "repository for handlers" vs "repository
-    // for services." If the declared pattern matches one axis but not
-    // others, per-axis voting naturally surfaces the right outcome.
+    // A single intent hint applies to the whole architectural_consistency
+    // category, but its declared pattern only ever names ONE axis — a
+    // "repository pattern" rule says nothing about error handling, config, or
+    // DI. Seeding every axis with it injected a phantom entry into three votes
+    // that had no such pattern, and because a seeded vote skips the dominance
+    // threshold (utils.ts `buildDirectoryScopedVote`), each of those three
+    // emitted findings the raw vote would never have produced. So bind the seed
+    // to the axis whose pattern Record actually has that key.
     const hint = pickIntentHint(ctx, "architectural_consistency");
-    const seededPattern = hint?.pattern;
+    const seedFor = (names: Record<string, string>): string | undefined =>
+      hint && hint.pattern in names ? hint.pattern : undefined;
 
     // Data access — directory-scoped
     const dataAccessProfiles = profiles
       .filter((p) => p.dataAccess.length > 0)
       .map((p) => ({ file: p.file, patterns: p.dataAccess }));
-    findings.push(...analyzeAxisByDirectory(dataAccessProfiles, DATA_ACCESS_NAMES, "data_access", fileAges, seededPattern));
+    findings.push(...analyzeAxisByDirectory(dataAccessProfiles, DATA_ACCESS_NAMES, "data_access", fileAges, seedFor(DATA_ACCESS_NAMES)));
 
     // Error handling — directory-scoped
     const errorProfiles = profiles
       .filter((p) => p.errorHandling.length > 0)
       .map((p) => ({ file: p.file, patterns: p.errorHandling }));
-    findings.push(...analyzeAxisByDirectory(errorProfiles, ERROR_HANDLING_NAMES, "error_handling", fileAges, seededPattern));
+    findings.push(...analyzeAxisByDirectory(errorProfiles, ERROR_HANDLING_NAMES, "error_handling", fileAges, seedFor(ERROR_HANDLING_NAMES)));
 
     // Config — directory-scoped
     const configProfiles = profiles
       .filter((p) => p.config.length > 0)
       .map((p) => ({ file: p.file, patterns: p.config }));
-    findings.push(...analyzeAxisByDirectory(configProfiles, CONFIG_NAMES, "configuration", fileAges, seededPattern));
+    findings.push(...analyzeAxisByDirectory(configProfiles, CONFIG_NAMES, "configuration", fileAges, seedFor(CONFIG_NAMES)));
 
-    // DI — directory-scoped (fall back to no_di sentinel for files with no DI pattern)
-    const diProfiles = profiles.map((p) => ({
-      file: p.file,
-      patterns: p.di.length > 0 ? p.di : [{ pattern: "no_di" as DIPattern, evidence: [] as Evidence[] }],
-    }));
-    findings.push(...analyzeAxisByDirectory(diProfiles, DI_NAMES, "dependency_injection", fileAges, seededPattern));
+    // DI — directory-scoped, restricted to the languages that have a real DI
+    // classifier. `detectDIPattern` only recognizes Go and JS/TS constructor
+    // injection, so a Python or Rust file could never produce anything but the
+    // `no_di` sentinel — its "vote" recorded the absence of a classifier, not
+    // the absence of DI, and a directory of them formed a phantom peer group
+    // that the JS file next door then deviated from. Files in unclassified
+    // languages sit the axis out.
+    const diProfiles = profiles
+      .filter((p) => DI_CLASSIFIED_LANGUAGES.has(p.language))
+      .map((p) => ({
+        file: p.file,
+        patterns: p.di.length > 0 ? p.di : [{ pattern: "no_di" as DIPattern, evidence: [] as Evidence[] }],
+      }));
+    findings.push(...analyzeAxisByDirectory(diProfiles, DI_NAMES, "dependency_injection", fileAges, seedFor(DI_NAMES)));
 
     return findings;
   },

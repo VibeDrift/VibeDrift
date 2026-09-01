@@ -63,7 +63,10 @@ describe("parseIntentFiles", () => {
     expect(async).toBeDefined();
     expect(async!.source).toBe("AGENTS.md");
 
-    const named = result.hints.find((h) => h.pattern === "named");
+    // `named_only`, not `named`: a hint's `pattern` must be a key the
+    // export-consistency detector's own enum holds, or seeding it injects a
+    // phantom vote entry instead of boosting the declared style.
+    const named = result.hints.find((h) => h.pattern === "named_only");
     expect(named).toBeDefined();
     expect(named!.source).toBe(".cursorrules");
   });
@@ -74,9 +77,9 @@ describe("parseIntentFiles", () => {
       `# Conventions\n- Do not use default exports\n- Avoid .then() chains\n`,
     );
     const result = await parseIntentFiles(dir);
-    const defaultExport = result.hints.find((h) => h.pattern === "default");
+    const defaultExport = result.hints.find((h) => h.pattern === "default_export");
     expect(defaultExport).toBeUndefined();
-    const thenChain = result.hints.find((h) => h.pattern === "then_chain");
+    const thenChain = result.hints.find((h) => h.pattern === "then_chains");
     expect(thenChain).toBeUndefined();
   });
 

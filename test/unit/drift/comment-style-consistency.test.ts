@@ -44,3 +44,56 @@ describe("comment-style-consistency detector", () => {
     expect(commentStyleConsistency.detect(ctx)).toHaveLength(0);
   });
 });
+
+describe("comment-style-consistency: the denominator is the peer group", () => {
+  it("scores 6 JSDoc vs 4 line-comment files as 60, not 6", () => {
+    // 90 files with no comments at all express no comment-style choice, so they
+    // are not deviations from one. Dividing by every analyzed file made this
+    // repo score 6/100, which the scoring engine reads as a 94% deviation rate
+    // on an axis where exactly 10 files ever voted.
+    const files = [
+      ...Array.from({ length: 90 }, (_, i) => ({
+        relativePath: `src/plain${i}.ts`,
+        language: "typescript" as const,
+        content: `export function plain${i}() { return ${i}; }\n`,
+      })),
+      ...Array.from({ length: 6 }, (_, i) => ({
+        relativePath: `src/doc${i}.ts`,
+        language: "typescript" as const,
+        content: `/**\n * Documented.\n */\nexport function doc${i}() { return ${i}; }\n`,
+      })),
+      ...Array.from({ length: 4 }, (_, i) => ({
+        relativePath: `src/line${i}.ts`,
+        language: "typescript" as const,
+        content: `// terse\n// aside\nexport function line${i}() { return ${i}; }\n`,
+      })),
+    ];
+    const findings = commentStyleConsistency.detect(makeCtx(files));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].dominantCount).toBe(6);
+    expect(findings[0].totalRelevantFiles).toBe(10);
+    expect(findings[0].consistencyScore).toBe(60);
+  });
+
+  it("does not read a JS private class field as a hash comment", () => {
+    // `#count = 0;` is a private field, not a `#` comment. Counting it could
+    // hand a class-heavy file to the `hash_comment` style, inventing a third
+    // coexisting style in a codebase that has two.
+    const files = [
+      ...Array.from({ length: 4 }, (_, i) => ({
+        relativePath: `src/klass${i}.ts`,
+        language: "typescript" as const,
+        content: `export class K${i} {\n  #count = 0;\n  #limit = 10;\n  #seen = new Set();\n  bump() { this.#count++; }\n}\n`,
+      })),
+      ...Array.from({ length: 4 }, (_, i) => ({
+        relativePath: `src/doc${i}.ts`,
+        language: "typescript" as const,
+        content: `/**\n * Documented.\n */\nexport function doc${i}() { return ${i}; }\n`,
+      })),
+    ];
+    const findings = commentStyleConsistency.detect(makeCtx(files));
+    // The four class files carry no comments at all, so only one style has
+    // content and there is nothing to compare it against.
+    expect(findings).toHaveLength(0);
+  });
+});

@@ -90,11 +90,18 @@ export const asyncConsistency: DriftDetector = {
       });
     }
 
+    // Vocabulary guard: a seeded vote SKIPS the 70% dominance gate, so a hint
+    // whose pattern is not one of this axis's own keys would inject a phantom
+    // zero-count entry and force findings out of directories that are perfectly
+    // consistent. Only a declaration written in AsyncStyle's vocabulary seeds.
+    const hint = pickIntentHint(ctx, "async_patterns");
+    const seededPattern = hint && hint.pattern in STYLE_NAMES ? hint.pattern : undefined;
+
     const votes = buildDirectoryScopedVote(profiles, STYLE_NAMES, {
       minGroupSize: 3,
       dominanceThreshold: 0.7,
       fileAges: buildFileAgeMap(ctx),
-      seededPattern: pickIntentHint(ctx, "async_patterns")?.pattern,
+      seededPattern,
     });
 
     return votes.map((v) => ({
@@ -110,6 +117,7 @@ export const asyncConsistency: DriftDetector = {
       consistencyScore: v.consistencyScore,
       deviatingFiles: v.deviators,
       dominantFiles: v.dominantFiles,
+      allDominantFiles: v.allDominantFiles,
       recommendation: `Standardize ${v.directory}/ on ${STYLE_NAMES[v.dominant]}. ${v.dominant === "async_await" ? "async/await is more readable and has clearer error handling with try/catch." : "Consider migrating to async/await for consistency and readability."}`,
     }));
   },

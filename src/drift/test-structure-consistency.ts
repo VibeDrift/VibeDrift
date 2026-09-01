@@ -44,14 +44,19 @@ interface TestProfile {
 function classifyFramework(content: string): Framework | null {
   if (/\btap\.test\(|tap\.beforeEach\(/.test(content)) return "tap";
   if (/^import\s+test\s+from\s+['"]ava['"]/m.test(content) || /\bava\.test\(/.test(content)) return "ava";
-  if (/\bdescribe\s*\([^)]*\)\s*,\s*function\b/.test(content) && /\bbefore\(|\bafter\(/.test(content)) return "mocha";
+  // Real mocha is `describe("suite", function () { ... })`. The old
+  // `describe\s*\([^)]*\)\s*,\s*function` demanded a CLOSING paren before the
+  // comma — a shape no test file has — so mocha was never classified and every
+  // mocha suite fell through to `bdd_nested` below. `before(`/`after(` (not
+  // `beforeEach`/`beforeAll`) keeps jest and vitest suites out.
+  if (/\bdescribe\s*\(\s*['"`][^'"`]*['"`]\s*,\s*function\b/.test(content) && /\bbefore\(|\bafter\(/.test(content)) return "mocha";
   if (/\bdescribe\s*\(\s*['"]/.test(content) && /\bit\s*\(\s*['"]/.test(content)) return "bdd_nested";
   if (/^test\s*\(\s*['"]/m.test(content) || /\bvitest\b.*\btest\(/.test(content)) return "flat_test";
   return null;
 }
 
 function classifyMockStyle(content: string): MockStyle | null {
-  if (/\b(?:jest|vi)\.(?:fn|mock|spyOn|spyOn)\(/.test(content)) return "framework_mocks";
+  if (/\b(?:jest|vi)\.(?:fn|mock|spyOn)\(/.test(content)) return "framework_mocks";
   if (/\bsinon\.(?:stub|spy|mock|fake)\(/.test(content)) return "sinon";
   if (/\bconst\s+\w+Stub\s*=\s*\{|\bconst\s+\w+Mock\s*=\s*\{/.test(content)) return "manual";
   return null;

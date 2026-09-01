@@ -94,6 +94,7 @@ function describeStructured(profiles: FileLoggerProfile[]): string {
 
 interface FileLoggerProfile {
   file: string;
+  language: string;
   patterns: { pattern: LoggerFamily; evidence: Evidence[] }[];
 }
 
@@ -107,7 +108,7 @@ function detectFamilies(file: DriftFile): FileLoggerProfile | null {
     if (ev.length > 0) matches.push({ pattern: family, evidence: ev });
   }
   if (matches.length === 0) return null;
-  return { file: file.relativePath, patterns: matches };
+  return { file: file.relativePath, language: file.language, patterns: matches };
 }
 
 export const loggingConsistency: DriftDetector = {
@@ -116,64 +117,101 @@ export const loggingConsistency: DriftDetector = {
   category: "logging_consistency",
 
   detect(ctx: DriftContext): DriftFinding[] {
-    const profiles: FileLoggerProfile[] = [];
+    const all: FileLoggerProfile[] = [];
     for (const file of ctx.files) {
       const p = detectFamilies(file);
-      if (p) profiles.push(p);
+      if (p) all.push(p);
     }
-    if (profiles.length < 3) return [];
+    if (all.length < 3) return [];
 
-    // Name the `structured` family from what's actually in the code, never
-    // from a hardcoded library list. When the only structured logging is a
-    // `logger.*` console wrapper, this stays generic instead of falsely
-    // claiming winston/pino/bunyan/log4js are present.
-    const familyNames: Record<LoggerFamily, string> = {
-      ...FAMILY_NAMES,
-      structured: describeStructured(profiles),
-    };
+    // Partition the vote BY LANGUAGE. Three of the five families are
+    // language-exclusive (`python_logging`, `go_slog`, and `debug_pkg` are
+    // unreachable outside their ecosystems), so a pooled vote made every
+    // TypeScript file in a Python-majority repo "deviate from the Python
+    // logging module" — a language artifact, not a logger choice. A logger
+    // convention is only comparable among files that could have made the
+    // same choice.
+    const byLanguage = new Map<string, FileLoggerProfile[]>();
+    for (const p of all) {
+      const list = byLanguage.get(p.language);
+      if (list) list.push(p);
+      else byLanguage.set(p.language, [p]);
+    }
 
-    // Files that use multiple families get classified by the most-used one.
-    // When an intent hint declares a logger (e.g. "use winston"), seed the
-    // dominance vote so the declaration carries weight even when the
-    // codebase is in transition.
-    const counts = buildPatternDistribution(profiles);
-    const hint = pickIntentHint(ctx, "logging_consistency");
-    if (counts.size < 2 && !hint) return [];
-
-    const seeded = seedDominanceVote(counts, hint);
-    if (!seeded.dominant) return [];
-
-    const { dominant, dominantCount } = seeded;
-    const totalFiles = profiles.length;
-    const consistencyScore = Math.round((dominantCount / totalFiles) * 100);
-
-    const deviating = collectDeviatingFiles(counts, dominant, profiles, familyNames);
-    const divergence = seeded.declaredMatched === false;
-    if (deviating.length === 0 && !divergence) return [];
-
-    // Dominance gate: at least 60% of files should agree before we call
-    // the minority "drift". Seeded votes bypass this gate — the hint
-    // itself is sufficient signal (agreement: emit drift; divergence:
-    // emit divergence).
-    if (!hint && dominantCount / totalFiles < 0.6) return [];
-
-    return [{
-      detector: "logging-consistency",
-      driftCategory: "logging_consistency",
-      severity: deviating.length >= 3 ? "error" : "warning",
-      confidence: 0.75,
-      finding: divergence
-        ? `Team declared ${familyNames[seeded.declaredPattern as LoggerFamily] ?? seeded.declaredPattern} in ${hint!.source} but ${dominantCount}/${totalFiles} files use ${familyNames[dominant]}`
-        : `${deviating.length} file(s) use ${[...new Set(deviating.map((d) => d.detectedPattern))].join(", ")} while ${dominantCount} use ${familyNames[dominant]}`,
-      dominantPattern: familyNames[dominant],
-      dominantCount,
-      totalRelevantFiles: totalFiles,
-      consistencyScore,
-      deviatingFiles: deviating,
-      dominantFiles: pickDominantFiles(counts, dominant),
-      recommendation: divergence
-        ? `Team convention in ${hint!.source}:${hint!.line} says use ${hint!.label}. Migrate ${totalFiles - dominantCount} file(s) to match the declaration.`
-        : `Standardize on ${familyNames[dominant]}. Mixed logging forces log aggregation to handle multiple output shapes.`,
-    }];
+    const findings: DriftFinding[] = [];
+    // Deterministic order across re-scans.
+    for (const language of [...byLanguage.keys()].sort()) {
+      findings.push(...voteWithinLanguage(ctx, byLanguage.get(language)!));
+    }
+    return findings;
   },
 };
+
+/** The dominance vote across one language's files. */
+function voteWithinLanguage(ctx: DriftContext, profiles: FileLoggerProfile[]): DriftFinding[] {
+  if (profiles.length < 3) return [];
+
+  // Name the `structured` family from what's actually in the code, never
+  // from a hardcoded library list. When the only structured logging is a
+  // `logger.*` console wrapper, this stays generic instead of falsely
+  // claiming winston/pino/bunyan/log4js are present.
+  const familyNames: Record<LoggerFamily, string> = {
+    ...FAMILY_NAMES,
+    structured: describeStructured(profiles),
+  };
+
+  // Files that use multiple families get classified by the most-used one.
+  // When an intent hint declares a logger (e.g. "use winston"), seed the
+  // dominance vote so the declaration carries weight even when the
+  // codebase is in transition. Vocabulary guard: a seeded vote bypasses the
+  // 60% dominance gate below and `seedDominanceVote` injects an unknown
+  // declared pattern as a ZERO-COUNT entry weighted ~1.95, so a hint outside
+  // this axis's families could win the vote outright — reporting a dominant no
+  // file uses, with consistencyScore 0. Only a key of FAMILY_NAMES may seed.
+  const counts = buildPatternDistribution(profiles);
+  const rawHint = pickIntentHint(ctx, "logging_consistency");
+  const hint = rawHint && rawHint.pattern in FAMILY_NAMES ? rawHint : null;
+  if (counts.size < 2 && !hint) return [];
+
+  const seeded = seedDominanceVote(counts, hint);
+  if (!seeded.dominant) return [];
+
+  // Second line of defence: even an in-vocabulary declaration can flip a small
+  // group onto a family no file uses. Never report that phantom as dominant —
+  // fall back to what the code does. `declaredMatched` still reports divergence.
+  const phantomWon = seeded.dominantCount === 0 && seeded.codeDominant !== null;
+  const dominant = phantomWon ? seeded.codeDominant! : seeded.dominant;
+  const dominantCount = phantomWon ? (counts.get(dominant)?.count ?? 0) : seeded.dominantCount;
+  const totalFiles = profiles.length;
+  const consistencyScore = Math.round((dominantCount / totalFiles) * 100);
+
+  const deviating = collectDeviatingFiles(counts, dominant, profiles, familyNames);
+  const divergence = seeded.declaredMatched === false;
+  if (deviating.length === 0 && !divergence) return [];
+
+  // Dominance gate: at least 60% of files should agree before we call
+  // the minority "drift". Seeded votes bypass this gate — the hint
+  // itself is sufficient signal (agreement: emit drift; divergence:
+  // emit divergence).
+  if (!hint && dominantCount / totalFiles < 0.6) return [];
+
+  return [{
+    detector: "logging-consistency",
+    driftCategory: "logging_consistency",
+    severity: deviating.length >= 3 ? "error" : "warning",
+    confidence: 0.75,
+    finding: divergence
+      ? `Team declared ${familyNames[seeded.declaredPattern as LoggerFamily] ?? seeded.declaredPattern} in ${hint!.source} but ${dominantCount}/${totalFiles} files use ${familyNames[dominant]}`
+      : `${deviating.length} file(s) use ${[...new Set(deviating.map((d) => d.detectedPattern))].join(", ")} while ${dominantCount} use ${familyNames[dominant]}`,
+    dominantPattern: familyNames[dominant],
+    dominantCount,
+    totalRelevantFiles: totalFiles,
+    consistencyScore,
+    deviatingFiles: deviating,
+    dominantFiles: pickDominantFiles(counts, dominant),
+    allDominantFiles: [...(counts.get(dominant)?.files ?? [])].sort(),
+    recommendation: divergence
+      ? `Team convention in ${hint!.source}:${hint!.line} says use ${hint!.label}. Migrate ${totalFiles - dominantCount} file(s) to match the declaration.`
+      : `Standardize on ${familyNames[dominant]}. Mixed logging forces log aggregation to handle multiple output shapes.`,
+  }];
+}

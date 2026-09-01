@@ -56,13 +56,18 @@ const CATEGORY_KEYWORDS: Record<string, { pattern: string; keywords: string[]; l
     { pattern: "SCREAMING_SNAKE", label: "SCREAMING_SNAKE", keywords: ["screaming snake", "screaming_snake"] },
   ],
   async_patterns: [
+    // Detector emits AsyncStyle: "async_await" | "then_chains" | "mixed".
+    // `then_chain` (singular) is NOT a detector key: it never matched an entry
+    // in the distribution, so seeding it injected a phantom pattern that bypassed
+    // the dominance gate instead of boosting the one the team declared. There is
+    // no `callback` style on this axis, so no keyword maps to one.
     { pattern: "async_await", label: "async/await", keywords: ["async/await", "async await", "use async await"] },
-    { pattern: "then_chain", label: ".then() chains", keywords: [".then chain", "promise chain", ".then()"] },
-    { pattern: "callback", label: "callbacks", keywords: ["callback style", "use callbacks"] },
+    { pattern: "then_chains", label: ".then() chains", keywords: [".then chain", "promise chain", ".then()"] },
   ],
   export_style: [
-    { pattern: "named", label: "named exports", keywords: ["named exports", "named export only", "no default exports", "avoid default exports"] },
-    { pattern: "default", label: "default exports", keywords: ["default exports", "default export", "use default exports"] },
+    // Detector emits ExportStyle: "default_export" | "named_only".
+    { pattern: "named_only", label: "named exports", keywords: ["named exports", "named export only", "no default exports", "avoid default exports"] },
+    { pattern: "default_export", label: "default exports", keywords: ["default exports", "default export", "use default exports"] },
   ],
   import_style: [
     { pattern: "alias", label: "path alias", keywords: ["path alias", "alias imports", "@/ imports", "use aliases"] },
@@ -87,16 +92,22 @@ const CATEGORY_KEYWORDS: Record<string, { pattern: string; keywords: string[]; l
     { pattern: "go_slog", label: "Go slog", keywords: ["slog", "log/slog", "go slog"] },
   ],
   state_management_consistency: [
-    // Detector emits: "redux" | "zustand" | "mobx" | "jotai" | "recoil" | "context" | "local_state".
-    // Patterns are frontend-ecosystem-specific; a team declaring "use Zustand"
-    // should auto-flag files that reach for Redux or MobX instead.
+    // Detector emits StateStrategy: "react_hooks_local" | "react_context" |
+    // "redux" | "zustand" | "react_query" | "mobx" | "vue_pinia" | "vue_vuex" |
+    // "svelte_stores". Patterns are frontend-ecosystem-specific; a team
+    // declaring "use Zustand" should auto-flag files that reach for Redux or
+    // MobX instead. Jotai and Recoil have no detector strategy, so no keyword
+    // may emit one — an unrecognized pattern seeds a phantom vote entry rather
+    // than binding to anything.
     { pattern: "redux", label: "Redux", keywords: ["redux", "use redux", "redux toolkit", "rtk"] },
     { pattern: "zustand", label: "Zustand", keywords: ["zustand", "use zustand"] },
     { pattern: "mobx", label: "MobX", keywords: ["mobx", "use mobx"] },
-    { pattern: "jotai", label: "Jotai", keywords: ["jotai", "use jotai"] },
-    { pattern: "recoil", label: "Recoil", keywords: ["recoil", "use recoil"] },
-    { pattern: "context", label: "React Context", keywords: ["react context", "context api", "use context"] },
-    { pattern: "local_state", label: "local component state", keywords: ["local state", "usestate", "component state"] },
+    { pattern: "react_query", label: "React Query", keywords: ["react query", "react-query", "usequery", "tanstack query"] },
+    { pattern: "react_context", label: "React Context", keywords: ["react context", "context api", "use context"] },
+    { pattern: "react_hooks_local", label: "local component state", keywords: ["local state", "usestate", "component state"] },
+    { pattern: "vue_pinia", label: "Pinia (Vue)", keywords: ["pinia", "use pinia"] },
+    { pattern: "vue_vuex", label: "Vuex (Vue)", keywords: ["vuex", "use vuex"] },
+    { pattern: "svelte_stores", label: "Svelte stores", keywords: ["svelte store", "svelte stores", "writable store"] },
   ],
   test_structure_consistency: [
     // Detector emits: "bdd_nested" | "flat_test" | "mocha" | "ava" | "tap" for framework,
