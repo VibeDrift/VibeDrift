@@ -5,10 +5,10 @@ import { stat } from "fs/promises";
 import chalk from "chalk";
 import ora from "ora";
 import { buildAnalysisContext, recomputeContextStats } from "../../core/discovery.js";
-import { parseFiles } from "../../utils/ast.js";
+import { parseFiles, disposeTrees } from "../../utils/ast.js";
 import { createAnalyzerRegistry } from "../../analyzers/index.js";
 import { runDriftDetection, attachEngineComposite, scoredDriftView } from "../../drift/index.js";
-import { computeScores, applySecurityMinPeerFloor, applyReimplementationConcentrationGate, SCORING_VERSION } from "../../scoring/engine.js";
+import { computeScores, applySecurityMinPeerFloor, applyReimplementationConcentrationGate, functionCountFor, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
 import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, renderLocalReportLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
@@ -310,6 +310,15 @@ async function runAnalysisPipeline(
     }
   }
 
+  // All consumers of the parsed ASTs (analyzers, drift detectors, and —
+  // transitively, via the calls above — Code DNA) have finished reading
+  // `file.tree` by this point; nothing later in the pipeline (scoring,
+  // rendering, history, the ML client) touches it. Free the WASM-backed
+  // trees now rather than let them ride on `ctx.files` for the rest of the
+  // command — the leak this closes is unbounded under `vibedrift watch`,
+  // which re-parses the whole tree on every debounced rescan.
+  disposeTrees(ctx.files);
+
   return { ctx, allFindings, driftResult, codeDnaResult, timings };
 }
 
@@ -479,7 +488,9 @@ async function buildScanResult(
   );
 
   // Deep insights are reserved for the premium AI tier (routed via VibeDrift API).
-  // No direct Anthropic key path is exposed to end users.
+  // No direct Anthropic key path is exposed to end users. Always empty today —
+  // no code path populates this field yet; it stays on the public ScanResult/
+  // JSON shape as a stable placeholder for that tier rather than a live field.
   const deepInsights: ScanResult["deepInsights"] = [];
 
   // Tease — show "run --deep" upsell only when user is *not* using deep mode.
@@ -510,7 +521,7 @@ async function buildScanResult(
   // rendered output — a below-floor advisory never appears as "new drift" in
   // the comparison banner. driftResult.driftFindings itself is untouched so
   // the baseline (assembleBaseline) still reads the raw representation.
-  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines);
+  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines, functionCountFor(ctx.files));
 
   // Scan-over-scan diff. Defaults to enabled; `--no-compare` opts out.
   // `--since` overrides the default "latest prior scan" target.
@@ -646,6 +657,16 @@ export async function logAndRender(
   // of a silent multi-second hang. Every other path runs that work up front.
   const htmlLoaderPath = !!bearerToken && format === "html" && !options.json;
 
+  // Unauthenticated html scans spin up a long-lived local report server (see
+  // serveHtmlReportOnLocalhost below) that keeps the process alive via its own
+  // SIGINT handler / 10-minute timeout — it, not this function, owns when the
+  // process actually exits. Every other path (json/csv/docx/terminal, or an
+  // authenticated html scan that links to the dashboard) returns without
+  // anything keeping the event loop open, so --fail-on-score can exit here
+  // directly, as before.
+  const localReportServerPath = !bearerToken && format === "html";
+  const failOnScore = options.failOnScore !== undefined && compositeScore < options.failOnScore;
+
   // Rich fix-prompt prose (PAID). Attaches metadata.fixPromptProse used by the
   // dashboard/HTML report. Skipped if already synthesized (--write-context does
   // it earlier, before its files are written). Best-effort.
@@ -677,12 +698,14 @@ export async function logAndRender(
     });
   }
 
-  if (!bearerToken && format === "html") {
+  if (localReportServerPath) {
     // Unauthenticated html: the full report is no longer gated. Render the
     // complete report (every finding, drift detail, exact duplicate) and serve
     // it on localhost so anyone gets it, not a teaser. Authenticated users get
     // the dashboard link instead (handled in renderToFormat below).
-    await serveHtmlReportOnLocalhost(result, options, paid, plan);
+    // Pass the eventual exit code through: the server's own SIGINT/timeout
+    // handlers are what actually terminate the process on this path.
+    await serveHtmlReportOnLocalhost(result, options, paid, plan, failOnScore ? 1 : 0);
   } else {
     // Build the deferred loader steps for the html path: first the AI fix-prompt
     // synthesis (Pro), then the dashboard sync. Each runs behind its own spinner
@@ -708,11 +731,24 @@ export async function logAndRender(
     await renderToFormat(result, format, options, paid, plan, deferredSteps);
   }
 
-  // Fail on score threshold
-  if (options.failOnScore !== undefined && compositeScore < options.failOnScore) {
-    process.exit(1);
+  // Fail on score threshold. On the local-server path the server itself
+  // already got the desired exit code and owns process termination (its
+  // SIGINT handler / 10-minute timeout call process.exit) — exiting here
+  // too would tear the server down before the report ever loads in the
+  // user's browser. Just record the code for that eventual exit. Every
+  // other path has nothing else keeping the event loop open, so exit
+  // immediately, as before.
+  if (failOnScore) {
+    if (localReportServerPath) {
+      process.exitCode = 1;
+    } else {
+      process.exit(1);
+    }
   }
 }
+
+// Test-only re-export (kept at module scope, tree-shaken from the bundle).
+export const __test_serveHtmlReportOnLocalhost = serveHtmlReportOnLocalhost;
 
 /** One deferred, post-summary step on the html loader path: a labeled spinner
  *  wrapping a best-effort async task (fix-prompt synthesis, dashboard sync). */
@@ -730,13 +766,24 @@ interface DeferredStep {
  * links (the summary links to the detailed view by relative path). The command
  * stays alive serving until Ctrl+C, with a 10-minute auto-close as a backstop.
  * Authenticated scans link to the dashboard instead (see renderToFormat).
+ *
+ * Bound to 127.0.0.1 only — the report (file paths, code snippets) must never
+ * be reachable from other machines on the same network, which the previous
+ * unqualified `listen(port, cb)` (0.0.0.0, all interfaces) exposed it to.
+ *
+ * `exitCodeOnClose` is the code this function's own SIGINT handler / 10-minute
+ * timeout will pass to `process.exit` when the server eventually closes — it,
+ * not the caller, owns process termination on this path (see logAndRender's
+ * --fail-on-score handling). Returns the server so tests can inspect the bound
+ * address and close it deterministically instead of waiting on Ctrl+C/timeout.
  */
 async function serveHtmlReportOnLocalhost(
   result: ScanResult,
   options: ScanOptions,
   paid: boolean,
   plan?: import("../../auth/plan.js").Plan,
-): Promise<void> {
+  exitCodeOnClose = 0,
+): Promise<import("http").Server> {
   // High-level summary on stdout first.
   console.log(renderConciseSummary(result, plan));
 
@@ -763,10 +810,12 @@ async function serveHtmlReportOnLocalhost(
     if (options.output) notice(options, chalk.dim(`    The report was written to ${options.output}.`));
   });
   const port = 4173 + Math.floor(Math.random() * 100);
-  // Auto-close after 10 minutes; Ctrl+C closes immediately.
-  const closeTimer = setTimeout(() => { server.close(); process.exit(0); }, 600_000);
-  process.on("SIGINT", () => { clearTimeout(closeTimer); server.close(); process.exit(0); });
-  server.listen(port, () => {
+  // Auto-close after 10 minutes; Ctrl+C closes immediately. Both terminate
+  // the process with exitCodeOnClose, so a failed --fail-on-score threshold
+  // still surfaces as a nonzero exit once the server's lifetime ends.
+  const closeTimer = setTimeout(() => { server.close(); process.exit(exitCodeOnClose); }, 600_000);
+  process.on("SIGINT", () => { clearTimeout(closeTimer); server.close(); process.exit(exitCodeOnClose); });
+  server.listen(port, "127.0.0.1", () => {
     const url = `http://localhost:${port}`;
     console.log(renderLocalReportLink(url));
     if (openInBrowser(url)) {
@@ -784,6 +833,7 @@ async function serveHtmlReportOnLocalhost(
     console.log("");
     console.log(chalk.dim("  Report server is running. Press Ctrl+C to stop."));
   });
+  return server;
 }
 
 /**

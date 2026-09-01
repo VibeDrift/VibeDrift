@@ -29,7 +29,7 @@
  */
 
 import { watch as fsWatch } from "fs";
-import { readdir, stat } from "fs/promises";
+import { readdir, lstat, stat, mkdir, writeFile, rm } from "fs/promises";
 import { join, relative, resolve } from "path";
 import chalk from "chalk";
 import { runScan } from "./scan.js";
@@ -50,6 +50,7 @@ const IGNORE_SEGMENTS = [
   "target",
   ".vercel",
   ".vibedrift",
+  ".vibedrift-watch-probe",
   "coverage",
   ".nyc_output",
   ".turbo",
@@ -67,6 +68,97 @@ function shouldIgnore(relPath: string): boolean {
     if (relPath.endsWith(ext)) return true;
   }
   return false;
+}
+
+/** Subdirectory the liveness probe writes its throwaway file into, and the
+ *  timeout it waits for a matching fs.watch event before giving up. */
+const PROBE_SUBDIR = ".vibedrift-watch-probe";
+const PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Wait for a matching event from an arbitrary event source, or time out.
+ * `subscribe` is called synchronously and must return an unsubscribe
+ * function; `matches` decides whether a given event satisfies the wait.
+ * Resolves `true` on the first matching event, `false` if `timeoutMs`
+ * elapses first.
+ *
+ * Exported standalone (decoupled from fs.watch) so the wait/timeout decision
+ * itself is unit-testable with a fake event source instead of a real
+ * filesystem watcher.
+ */
+export function waitForWatchEvent<T>(
+  subscribe: (onEvent: (event: T) => void) => () => void,
+  matches: (event: T) => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolvePromise(result);
+    };
+    const unsubscribe = subscribe((event) => {
+      if (matches(event)) finish(true);
+    });
+    const timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+/**
+ * One-time liveness probe for `fs.watch(rootDir, { recursive: true })`.
+ *
+ * The module docstring above promises a poll fallback whenever recursive
+ * watching doesn't really work — but the only signal the try/catch around
+ * `fsWatch()` can observe is a THROWN error. On some Node/OS combinations
+ * `recursive: true` is silently accepted without error, yet the underlying
+ * OS watch is installed on `rootDir` only: edits in any subdirectory (nearly
+ * every real edit) are never reported, and the promised fallback never
+ * engages because nothing ever throws.
+ *
+ * This writes a throwaway file one level deep — inside a SUBDIRECTORY of
+ * `rootDir`, never `rootDir` itself, since a change to rootDir's own
+ * directory listing would fire even on a non-recursive watch and prove
+ * nothing about subdirectory coverage — and waits up to `timeoutMs` for the
+ * watcher to report it. The probe directory is removed afterward either way.
+ */
+export async function probeRecursiveWatchLiveness(
+  rootDir: string,
+  watcher: ReturnType<typeof fsWatch>,
+  timeoutMs = PROBE_TIMEOUT_MS,
+): Promise<boolean> {
+  const probeDir = join(rootDir, PROBE_SUBDIR);
+  const probeFile = `probe-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    await mkdir(probeDir, { recursive: true });
+
+    // Arm the listener BEFORE writing the file — subscribe() runs
+    // synchronously, so by the time we `await writeFile` below the watcher
+    // is already listening and cannot miss the event racing the write.
+    const waitPromise = waitForWatchEvent<string | Buffer | null>(
+      (onEvent) => {
+        const listener = (_event: string, filename: string | Buffer | null) => onEvent(filename);
+        watcher.on("change", listener);
+        return () => watcher.off("change", listener);
+      },
+      (filename) => {
+        if (!filename) return false;
+        const rel = (typeof filename === "string" ? filename : filename.toString()).replace(/\\/g, "/");
+        return rel.includes(probeFile);
+      },
+      timeoutMs,
+    );
+
+    await writeFile(join(probeDir, probeFile), "probe");
+
+    return await waitPromise;
+  } catch {
+    return false;
+  } finally {
+    await rm(probeDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export interface WatchOptions {
@@ -220,6 +312,26 @@ export async function runWatch(
     }
   }
 
+  // fs.watch(root, { recursive: true }) can be ACCEPTED without throwing on a
+  // platform/Node build where recursive watching silently degrades to
+  // top-level-only — the fallback above never engages in that case because
+  // nothing threw. Confirm the watcher actually reports a SUBDIRECTORY change
+  // before trusting it; fall back to polling if it doesn't.
+  if (watcher) {
+    const isLive = await probeRecursiveWatchLiveness(rootDir, watcher);
+    if (!isLive) {
+      if (options.verbose) {
+        console.log(
+          chalk.dim(
+            "  fs.watch recursive accepted the option but didn't report a subdirectory change — falling back to poll mode.",
+          ),
+        );
+      }
+      watcher.close();
+      watcher = null;
+    }
+  }
+
   if (!watcher) {
     // Polling fallback: at each interval tick, walk the tree once and
     // compare mtimes to the last snapshot. New or modified files trigger
@@ -299,11 +411,18 @@ async function snapshotMtimes(rootDir: string): Promise<Map<string, number>> {
       if (shouldIgnore(rel)) continue;
       let info;
       try {
-        info = await stat(full);
+        // lstat, not stat: a symlink must never be followed here. Following
+        // it (via stat) into a directory lets a symlink loop (a directory
+        // symlinked back to one of its own ancestors — or to itself) recurse
+        // forever, since nothing else in this walk detects cycles. Skipping
+        // symlinks outright is the simplest fix that can't loop.
+        info = await lstat(full);
       } catch {
         continue;
       }
-      if (info.isDirectory()) {
+      if (info.isSymbolicLink()) {
+        continue;
+      } else if (info.isDirectory()) {
         await walk(full);
       } else if (info.isFile()) {
         out.set(rel, info.mtimeMs);
@@ -323,3 +442,6 @@ function anyDelta(prev: Map<string, number>, curr: Map<string, number>): boolean
   }
   return false;
 }
+
+// Test-only re-export (kept at module scope, tree-shaken from the bundle).
+export const __test_snapshotMtimes = snapshotMtimes;

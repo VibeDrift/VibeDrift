@@ -47,15 +47,24 @@ async function getLanguage(lang: SupportedLanguage, filePath?: string): Promise<
 export async function parseFile(file: SourceFile): Promise<Tree | null> {
   if (!file.language) return null;
 
+  // The Parser instance is only a driver — the Tree it returns owns its own
+  // native (WASM heap) memory independent of the Parser. So the Parser can
+  // (and must) be freed here, right after use, without invalidating the Tree
+  // handed back to the caller. Left undeleted, every parsed file leaked one
+  // Parser's worth of WASM memory — unbounded under `vibedrift watch`, which
+  // reparses the whole tree on every debounced change.
+  let parser: Parser | undefined;
   try {
     await ensureInit();
     const language = await getLanguage(file.language, file.relativePath);
-    const parser = new Parser();
+    parser = new Parser();
     parser.setLanguage(language);
     const tree = parser.parse(file.content);
     return tree;
   } catch {
     return null;
+  } finally {
+    parser?.delete();
   }
 }
 
@@ -63,6 +72,28 @@ export async function parseFiles(files: SourceFile[]): Promise<void> {
   for (const file of files) {
     if (file.language) {
       file.tree = (await parseFile(file)) ?? undefined;
+    }
+  }
+}
+
+/**
+ * Free every parsed AST tree held on `files`, releasing the WASM-backed
+ * native memory each Tree owns. Call this once EVERY consumer of
+ * `file.tree` for this scan/pipeline pass is done reading it — the
+ * analyzers, the drift detectors, and (transitively) Code DNA all read
+ * `file.tree` synchronously inside the same pass that calls `parseFiles`;
+ * nothing downstream of that pass (scoring, rendering, history, the ML
+ * client) touches `.tree`. After this call every `file.tree` is
+ * `undefined` and must not be read again for this pass.
+ *
+ * Idempotent and safe on files with no tree (unsupported language, parse
+ * failure) — those are silently skipped.
+ */
+export function disposeTrees(files: SourceFile[]): void {
+  for (const file of files) {
+    if (file.tree) {
+      file.tree.delete();
+      file.tree = undefined;
     }
   }
 }

@@ -20,7 +20,7 @@ import { mkdir, readFile, stat, writeFile, rm } from "node:fs/promises";
 
 import { buildAnalysisContext } from "./discovery.js";
 import { runDriftDetection } from "../drift/index.js";
-import { parseFiles } from "../utils/ast.js";
+import { parseFiles, disposeTrees } from "../utils/ast.js";
 import { extractAllFunctions } from "../codedna/function-extractor.js";
 import { buildSignature } from "../codedna/minhash.js";
 import { SECURITY_SUPPRESSION_SUBCATEGORY } from "../drift/security-suppression.js";
@@ -293,6 +293,10 @@ export async function buildBaseline(rootDir: string): Promise<RepoDriftBaseline>
   const { ctx } = await buildAnalysisContext(rootDir);
   await parseFiles(ctx.files);
   const { driftFindings } = runDriftDetection(ctx);
+  // assembleBaseline below reads ctx.files' content/paths only (content
+  // hashing, extractAllFunctions — neither touches the AST) — drift
+  // detection above was the last tree reader, so it's safe to free here.
+  disposeTrees(ctx.files);
   return assembleBaseline(rootDir, ctx, driftFindings);
 }
 

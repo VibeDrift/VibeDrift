@@ -37,16 +37,44 @@ export function isSafeVersionToken(v: string): boolean {
   return /^[0-9A-Za-z][0-9A-Za-z.\-+]*$/.test(v);
 }
 
-function semverGreater(a: string, b: string): boolean {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
+/** Split a version into its numeric core ("1.2.3") and an optional
+ *  prerelease tag ("beta" from "1.2.3-beta"). Build metadata ("+...", if
+ *  present) is dropped — it never affects precedence. */
+function splitVersion(v: string): { core: string; prerelease: string | null } {
+  const noBuild = v.split("+")[0]!;
+  const dashIdx = noBuild.indexOf("-");
+  if (dashIdx === -1) return { core: noBuild, prerelease: null };
+  return { core: noBuild.slice(0, dashIdx), prerelease: noBuild.slice(dashIdx + 1) };
+}
+
+/**
+ * True when `a` is a newer version than `b`. Handles a prerelease suffix
+ * (e.g. "1.2.4-beta") on either side — a bare `Number("4-beta")` is `NaN`,
+ * which made every comparison touching that segment silently no-op, so a
+ * real update to a prerelease build was reported as "nothing to do".
+ *
+ * Only the numeric major.minor.patch core decides precedence UNLESS both
+ * sides have the same core, in which case a real release outranks a
+ * prerelease of it (semver: 1.2.3 > 1.2.3-beta), and two prereleases of the
+ * same core fall back to a plain string comparison — good enough here since
+ * this codebase doesn't publish or compare prereleases in normal operation.
+ */
+export function semverGreater(a: string, b: string): boolean {
+  const va = splitVersion(a);
+  const vb = splitVersion(b);
+  const pa = va.core.split(".").map((s) => { const n = Number(s); return Number.isFinite(n) ? n : 0; });
+  const pb = vb.core.split(".").map((s) => { const n = Number(s); return Number.isFinite(n) ? n : 0; });
   for (let i = 0; i < 3; i++) {
     const x = pa[i] ?? 0;
     const y = pb[i] ?? 0;
     if (x > y) return true;
     if (x < y) return false;
   }
-  return false;
+  // Numeric cores are equal.
+  if (va.prerelease === vb.prerelease) return false;
+  if (va.prerelease === null) return true; // a is the real release of this core, b is a prerelease of it
+  if (vb.prerelease === null) return false; // b is the real release of this core, a is a prerelease of it
+  return va.prerelease > vb.prerelease;
 }
 
 export async function runUpdate(currentVersion: string): Promise<void> {
