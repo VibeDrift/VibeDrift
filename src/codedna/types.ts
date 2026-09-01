@@ -18,6 +18,21 @@ export interface ExtractedFunction {
   line: number;
   language: SupportedLanguage;
   params: string[];
+  /**
+   * Bare parameter NAMES, index-aligned with `params`, with type annotations,
+   * default values, pointer/reference markers and `mut`/visibility modifiers
+   * stripped. Empty string where no single name could be recovered (a
+   * destructuring or tuple pattern).
+   *
+   * `params` holds whatever sat between the commas, so in every typed language
+   * an entry is `"id: string"` / `"ctx context.Context"` / `"id: u32"` and never
+   * matches an identifier in the body. Anything keying taint, summaries or
+   * call-site argument matching on a parameter must read THIS, not `params`.
+   *
+   * Optional only so that hand-built `ExtractedFunction` fixtures predating the
+   * field keep type-checking; the extractor always populates it.
+   */
+  paramNames?: string[];
   paramCount: number;
   rawBody: string;
   declarationCode: string;

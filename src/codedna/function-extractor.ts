@@ -359,12 +359,42 @@ function hasRealParamList(content: string, matchStart: number, matched: string):
   return content[j] === "{";
 }
 
+/**
+ * Recover the bare NAME of one parameter from its raw source text.
+ *
+ * `params` is `paramsStr.split(",")`, so in every typed language an entry
+ * carries its type: `"id: string"`, `"ctx context.Context"`, `"mut id: u32"`,
+ * `"limit = 10"`. Anything matching a parameter against identifiers in the body
+ * — the taint summary's synthetic param sources, one-hop call-site argument
+ * matching — compared those raw strings and therefore never matched on TS, Go or
+ * Rust, silently disabling interprocedural taint everywhere but plain JS.
+ *
+ * Go puts the name FIRST (`ctx context.Context`); every other supported language
+ * puts modifiers first and the name last once the annotation is cut
+ * (`public readonly id: string` → `public readonly id` → `id`). A destructuring
+ * or tuple pattern has no single name and yields `""` rather than a guess.
+ */
+function toParamName(raw: string, language: SupportedLanguage): string {
+  let p = raw.trim();
+  if (!p) return "";
+  p = p.replace(/^\.\.\./, "").replace(/^[&*]+/, "").trim();
+  if (/^[[{(]/.test(p)) return ""; // destructuring / tuple pattern
+  p = p.split(/[:=]/)[0].trim();
+  const words = p.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "";
+  const name = language === "go" ? words[0] : words[words.length - 1];
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? name : "";
+}
+
 // Extract all functions from a single source file
 export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] {
   const functions: ExtractedFunction[] = [];
   if (!file.language) return functions;
+  // Bound to a local so the narrowing survives into the callbacks below
+  // (`file.language` is a mutable property, so TS re-widens it inside a closure).
+  const language = file.language;
 
-  const patterns = getLanguagePatterns(file.language);
+  const patterns = getLanguagePatterns(language);
 
   for (const { re, bodyAfterMatch, isArrow, realParamList } of patterns) {
     const regex = new RegExp(re.source, re.flags);
@@ -388,6 +418,7 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
       if (body.length < 10) continue;
 
       const params = paramsStr.trim() ? paramsStr.split(",").map((p) => p.trim()) : [];
+      const paramNames = params.map((p) => toParamName(p, language));
       const declarationCode = (file.content.split("\n")[line - 1] ?? "").trim();
       const tokens = tokenizeBody(body);
       if (tokens.length < 5) continue;
@@ -400,6 +431,7 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
         line,
         language: file.language,
         params,
+        paramNames,
         paramCount: params.length,
         rawBody: body,
         declarationCode,
