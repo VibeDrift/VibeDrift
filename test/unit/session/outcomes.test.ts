@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBaseline, type RepoDriftBaseline } from "@/core/baseline";
 import { runEditChecks } from "@/session/check";
-import { recheckFile, detectRevert, type OpenFinding } from "@/session/outcomes";
+import {
+  recheckFile,
+  detectRevert,
+  mergeOutcomeState,
+  readOutcomeState,
+  writeOutcomeState,
+  emptyOutcomeState,
+  type OpenFinding,
+  type OutcomeState,
+} from "@/session/outcomes";
 
 const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 
@@ -114,6 +123,99 @@ export function unrelatedTwo(b) { return b - 1; }`;
     expect(recheckFile(baseline, "src/util.ts", noDup, dupOpen).resolved.map((f) => f.findingId)).toEqual(
       dupOpen.map((f) => f.findingId),
     );
+  });
+});
+
+describe("mergeOutcomeState (pure)", () => {
+  const finding = (id: string, over: Partial<OpenFinding> = {}): OpenFinding => ({
+    findingId: id,
+    file: "src/x.ts",
+    category: "async_patterns",
+    ...over,
+  });
+
+  it("unions open findings present on only one side", () => {
+    const local: OutcomeState = { open: [finding("DF-1")], hashes: {} };
+    const onDisk: OutcomeState = { open: [finding("DF-2")], hashes: {} };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.open.map((f) => f.findingId).sort()).toEqual(["DF-1", "DF-2"]);
+  });
+
+  it("prefers local's entry on a genuine findingId conflict", () => {
+    const local: OutcomeState = { open: [finding("DF-1", { category: "naming" })], hashes: {} };
+    const onDisk: OutcomeState = { open: [finding("DF-1", { category: "async_patterns" })], hashes: {} };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.open).toHaveLength(1);
+    expect(merged.open[0].category).toBe("naming");
+  });
+
+  it("does NOT resurrect a finding local deliberately dropped (resolved) when onDisk never had it either", () => {
+    const local: OutcomeState = { open: [], hashes: {} };
+    const onDisk: OutcomeState = { open: [], hashes: {} };
+    expect(mergeOutcomeState(local, onDisk).open).toEqual([]);
+  });
+
+  it("unions per-file revert hashes from both sides without duplicating shared entries", () => {
+    const local: OutcomeState = { open: [], hashes: { "a.ts": ["h1", "h2"] } };
+    const onDisk: OutcomeState = { open: [], hashes: { "a.ts": ["h2", "h3"] } };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(new Set(merged.hashes["a.ts"])).toEqual(new Set(["h1", "h2", "h3"]));
+  });
+
+  it("unions hashes across files present on only one side", () => {
+    const local: OutcomeState = { open: [], hashes: { "a.ts": ["h1"] } };
+    const onDisk: OutcomeState = { open: [], hashes: { "b.ts": ["h2"] } };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.hashes).toEqual({ "a.ts": ["h1"], "b.ts": ["h2"] });
+  });
+});
+
+describe("writeOutcomeState: read-merge-write", () => {
+  function finding(id: string): OpenFinding {
+    return { findingId: id, file: "src/x.ts", category: "naming" };
+  }
+
+  // Sequential (deterministic) demonstration of the actual fix contract: a
+  // SECOND write for the same session, whose caller computed its local state
+  // from an earlier read, must not blindly clobber what the FIRST write
+  // already committed. This is exactly what a blind writeFile() used to do.
+  it("a later write merges with, rather than clobbers, what an earlier write committed", async () => {
+    const dir = tmp("vd-out-merge-");
+    const hash = "feedfacefeedfaaa";
+    const sid = "s-seq";
+
+    await writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-a")] });
+    // stateB was computed from a stale (pre-DF-a) read, as a concurrent
+    // writer's would be — it does not know about DF-a at all.
+    await writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-b")] });
+
+    const final = await readOutcomeState(dir, hash, sid);
+    expect(final.open.map((f) => f.findingId).sort()).toEqual(["DF-a", "DF-b"]);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // True concurrency is lock-free by design (like upload-state.ts's
+  // commit()), so a genuine race's outcome is not fully deterministic — we do
+  // NOT assert both findings are guaranteed to survive. What must always
+  // hold: the sidecar is never torn (invalid JSON), and at least one write's
+  // finding is durably present.
+  it("never tears the file under a concurrent write, and at least one finding survives", async () => {
+    const dir = tmp("vd-out-concurrent-");
+    const hash = "feedfacefeedfaaa";
+    const sid = "s-conc";
+
+    await Promise.all([
+      writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-a")] }),
+      writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-b")] }),
+    ]);
+
+    const final = await readOutcomeState(dir, hash, sid);
+    const ids = final.open.map((f) => f.findingId);
+    expect(ids.every((id) => id === "DF-a" || id === "DF-b")).toBe(true);
+    expect(ids.length).toBeGreaterThan(0);
+
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

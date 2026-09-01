@@ -7,6 +7,7 @@ import {
   RECAP_MAX_FILES,
   RECAP_MAX_FILE_BYTES,
   RECAP_MAX_TOTAL_BYTES,
+  RECAP_MAX_TIME_MS,
 } from "@/session/trial-recap";
 
 function tmp(): string {
@@ -141,5 +142,39 @@ describe("sumLocalLedgerTotals", () => {
     expect(RECAP_MAX_FILES).toBe(200);
     expect(RECAP_MAX_FILE_BYTES).toBe(5 * 1024 * 1024);
     expect(RECAP_MAX_TOTAL_BYTES).toBe(20 * 1024 * 1024);
+    expect(RECAP_MAX_TIME_MS).toBe(500);
+  });
+
+  // The sync walk cannot be preempted by the hook's 2s self-timeout (a
+  // setTimeout only fires once the event loop is free), so it enforces its
+  // own wall-clock deadline between files rather than relying on the
+  // byte/count caps alone — those bound how much is read, not how long a
+  // slow or cloud-synced filesystem takes to read it.
+  it("bails to null once the wall-clock budget is exceeded between files", () => {
+    const dir = tmp();
+    mkdirSync(join(dir, "aaaa"), { recursive: true });
+    for (let i = 0; i < 3; i++) writeFileSync(join(dir, "aaaa", `s${i}.jsonl`), flag("DF-1") + "\n");
+
+    let call = 0;
+    const now = () => {
+      call++;
+      if (call === 1) return 0; // establishes the deadline (0 + maxTimeMs)
+      if (call === 2) return 10; // first per-file check: still within budget
+      return 100_000; // every check after: well past the budget
+    };
+
+    expect(sumLocalLedgerTotals(dir, { maxTimeMs: 50 }, now)).toBeNull();
+  });
+
+  it("does not bail when the walk finishes comfortably inside the time budget", () => {
+    const dir = tmp();
+    mkdirSync(join(dir, "aaaa"), { recursive: true });
+    writeFileSync(join(dir, "aaaa", "s1.jsonl"), flag("DF-1") + "\n");
+    const now = () => 0; // clock never advances: always within any positive budget
+    expect(sumLocalLedgerTotals(dir, { maxTimeMs: 500 }, now)).toEqual({
+      flagged: 1,
+      resolved: 0,
+      complete: true,
+    });
   });
 });

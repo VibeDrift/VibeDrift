@@ -42,7 +42,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   fileConstructs,
@@ -53,6 +53,7 @@ import {
 } from "./finding-anchor.js";
 import { safeSegment } from "./ledger.js";
 import type { RepoDriftBaseline } from "../core/baseline.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 export interface OpenFinding {
   findingId: string;
@@ -75,6 +76,42 @@ const MAX_HASHES_PER_FILE = 20;
 
 export function emptyOutcomeState(): OutcomeState {
   return { open: [], hashes: {} };
+}
+
+/** Merge two outcome snapshots (this write's local state and whatever is
+ *  currently on disk) so a concurrent hook subprocess for the same session
+ *  never loses the other's progress to a blind overwrite (the same
+ *  read-merge-write upload-state.ts's `commit()` uses, for the same reason).
+ *
+ *  `open` unions by findingId (local wins on a genuine conflict, since it is
+ *  this call's own most-current view). This can, in principle, resurrect a
+ *  finding a concurrent writer just resolved before that resolution reached
+ *  disk — but that failure mode is exactly the direction this module already
+ *  chooses on purpose everywhere else (see the module doc: "a stale open
+ *  finding costs a re-flag; a false resolve costs the user's trust"), so it
+ *  is not a new risk, just the existing bias applied here too. What a union
+ *  actually prevents is the real hazard: a flag one process just appended to
+ *  `open` silently vanishing because the other process's write landed last
+ *  with a state that never knew about it.
+ *
+ *  `hashes` unions each file's recent-body-hash list and re-caps it at
+ *  MAX_HASHES_PER_FILE, so revert detection never loses a hash either writer
+ *  recorded. */
+export function mergeOutcomeState(local: OutcomeState, onDisk: OutcomeState): OutcomeState {
+  const byId = new Map<string, OpenFinding>();
+  for (const f of onDisk.open) byId.set(f.findingId, f);
+  for (const f of local.open) byId.set(f.findingId, f);
+  const open = [...byId.values()];
+
+  const hashes: Record<string, string[]> = {};
+  for (const file of new Set([...Object.keys(onDisk.hashes), ...Object.keys(local.hashes)])) {
+    const merged = [...(onDisk.hashes[file] ?? [])];
+    for (const h of local.hashes[file] ?? []) {
+      if (!merged.includes(h)) merged.push(h);
+    }
+    hashes[file] = merged.slice(-MAX_HASHES_PER_FILE);
+  }
+  return { open, hashes };
 }
 
 /**
@@ -212,8 +249,12 @@ export async function writeOutcomeState(
   state: OutcomeState,
 ): Promise<void> {
   try {
-    await mkdir(join(sessionsDir, safeSegment(projectHash)), { recursive: true, mode: 0o700 });
-    await writeFile(statePath(sessionsDir, projectHash, sessionId), JSON.stringify(state), { mode: 0o600 });
+    // Read-merge-write: re-read whatever is on disk right now and merge
+    // rather than blindly overwrite, so a concurrent hook subprocess's
+    // appended finding or recorded hash for this same session is never lost.
+    const onDisk = await readOutcomeState(sessionsDir, projectHash, sessionId);
+    const merged = mergeOutcomeState(state, onDisk);
+    await writeFileAtomic(statePath(sessionsDir, projectHash, sessionId), JSON.stringify(merged), { mode: 0o600 });
   } catch {
     // best-effort; losing outcome state degrades to "flags stay open", never a failure
   }
