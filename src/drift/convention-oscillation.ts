@@ -182,6 +182,13 @@ function analyzeSymbolTypeConventions(
   if (deviatingFiles.length < 2) return null;
 
   const consistencyScore = Math.round((maxCount / totalSymbols) * 100);
+  // `totalRelevantFiles` must be a FILE count. Reporting the symbol count here
+  // defeated the scoring engine's group-sample confidence term
+  // (SAMPLE_FULL_CONFIDENCE = 8), which reads this field as "how many peers did
+  // the vote see": any symbol axis clears 8 symbols trivially, so a three-file
+  // finding was weighted as if it had eight independent peers. The symbol
+  // counts stay where they belong — in the finding text and the ratio.
+  const contributingFiles = new Set(typeSymbols.map((s) => s.file)).size;
   return {
     detector: "naming_conventions",
     subCategory: `${type}_names`,
@@ -191,7 +198,7 @@ function analyzeSymbolTypeConventions(
     finding: `${type} naming convention oscillates: ${maxCount} use ${dominant}, ${deviantCount} use other conventions — likely from different AI sessions`,
     dominantPattern: dominant,
     dominantCount: maxCount,
-    totalRelevantFiles: totalSymbols,
+    totalRelevantFiles: contributingFiles,
     consistencyScore,
     deviatingFiles: deviatingFiles.slice(0, 10),
     recommendation: `${maxCount} of ${totalSymbols} ${type} names use ${dominant}. Standardize deviating names.`,
@@ -246,6 +253,7 @@ function analyzeFileNaming(ctx: DriftContext): DriftFinding[] {
     consistencyScore: v.consistencyScore,
     deviatingFiles: v.deviators.slice(0, 10),
     dominantFiles: v.dominantFiles,
+    allDominantFiles: v.allDominantFiles,
     recommendation: `Standardize file names in ${v.directory}/ to ${v.dominant}.`,
   }));
 }

@@ -301,7 +301,15 @@ export const returnShapeConsistency: DriftDetector = {
     const findings: DriftFinding[] = [];
     const MIN_GROUP_SIZE = 3;
     const DOMINANCE_THRESHOLD = 0.7;
-    const hint = pickIntentHint(ctx, "return_shape_consistency");
+    // Vocabulary guard. A seeded vote bypasses DOMINANCE_THRESHOLD, and
+    // `seedDominanceVote` injects an entry for a pattern it does not already
+    // hold with `weight: 1 + confidence` (~1.95) against a real file's weight of
+    // 1 — so a declaration outside this axis's vocabulary won the vote with a
+    // count of ZERO, driving consistencyScore to 0 and leaving
+    // `SHAPE_NAMES[dominant]` undefined in the rendered finding. Only a key of
+    // SHAPE_NAMES may seed.
+    const rawHint = pickIntentHint(ctx, "return_shape_consistency");
+    const hint = rawHint && rawHint.pattern in SHAPE_NAMES ? rawHint : null;
 
     for (const [dir, profiles] of groups) {
       if (profiles.length < MIN_GROUP_SIZE) continue;
@@ -312,7 +320,15 @@ export const returnShapeConsistency: DriftDetector = {
       const seeded = seedDominanceVote(counts, hint);
       if (!seeded.dominant) continue;
 
-      const { dominant, dominantCount } = seeded;
+      // `seedDominanceVote` injects a declared pattern the distribution does not
+      // hold as a ZERO-COUNT entry weighted ~1.95, which outvotes a single real
+      // file. Never report that phantom as the dominant: it makes
+      // consistencyScore 0 and names a shape no file in the group uses. Fall
+      // back to what the code actually does — the divergence is still reported,
+      // because `declaredMatched` is computed from the raw code dominant.
+      const phantomWon = seeded.dominantCount === 0 && seeded.codeDominant !== null;
+      const dominant = phantomWon ? seeded.codeDominant! : seeded.dominant;
+      const dominantCount = phantomWon ? (counts.get(dominant)?.count ?? 0) : seeded.dominantCount;
       const totalFiles = profiles.length;
       const consistencyScore = Math.round((dominantCount / totalFiles) * 100);
       // Seeded votes bypass the raw-dominance threshold because the

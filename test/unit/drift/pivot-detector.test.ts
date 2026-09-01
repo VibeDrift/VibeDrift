@@ -201,3 +201,46 @@ describe("detectPivot", () => {
     expect(result.pivot).toBeUndefined();
   });
 });
+
+describe("detectPivot: the dominant population is not a 3-file sample", () => {
+  // A directory of 9 stable `repository` files and 3 `raw_sql` deviators. Nine
+  // is more than pickDominantFiles' cap of 3, so a finding carries only the
+  // three ALPHABETICALLY FIRST dominant paths. Here those three happen to be
+  // the recently-touched ones, so treating them as the dominant population
+  // reads "recent = all repository, legacy = all raw_sql" and declares a pivot
+  // the repo never made.
+  const dominantPaths = Array.from({ length: 9 }, (_, i) => `handlers/dom${i}.ts`);
+  const deviatingPaths = ["handlers/zz1.ts", "handlers/zz2.ts", "handlers/zz3.ts"];
+
+  const files: DriftFile[] = [
+    // dom0..dom2 sort first AND are recent; dom3..dom8 are old.
+    ...dominantPaths.map((p, i) => makeFile(p, i < 3 ? 10 : 400)),
+    // The deviators are all old, so the alphabetical sample skews the split.
+    ...deviatingPaths.map((p) => makeFile(p, 500)),
+  ];
+  const ctx = makeCtx(files);
+
+  const base = {
+    dominantPattern: "repository",
+    dominantCount: 9,
+    totalRelevantFiles: 12,
+    dominantFiles: dominantPaths.slice(0, 3),
+    deviatingFiles: deviatingPaths.map((path) => ({ path, detectedPattern: "raw_sql", evidence: [] })),
+  };
+
+  it("does not flip to a pivot when the full dominant population is carried", () => {
+    const result = detectPivot(ctx, makeFinding({ ...base, allDominantFiles: dominantPaths }));
+    // Recent = the 3 recent repository files. Legacy = 6 repository + 3 raw_sql,
+    // so the legacy dominant is ALSO repository — same pattern in both windows,
+    // which is drift, not a pivot.
+    expect(result.pivot).toBeUndefined();
+    expect(result.legacyFiles).toBeUndefined();
+  });
+
+  it("declines to judge when only the 3-file dominant sample is available", () => {
+    // Without allDominantFiles we can see 3 of 9 dominant files: 6 of the
+    // directory's 12, under the coverage floor. Declining beats guessing.
+    const result = detectPivot(ctx, makeFinding(base));
+    expect(result.pivot).toBeUndefined();
+  });
+});

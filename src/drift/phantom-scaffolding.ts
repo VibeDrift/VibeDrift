@@ -88,6 +88,23 @@ function extractRouteRegistrations(file: DriftFile): RouteRegistration[] {
   return routes;
 }
 
+/**
+ * Package/binary entry points, which are reached from OUTSIDE the import graph.
+ *
+ * "Zero incoming imports" is the whole phantom signal, and an entry point has
+ * zero by definition — nothing in the repo imports `src/cli/index.ts`,
+ * `src/index.ts`, `src/server.ts`, or anything under `bin/`; the package
+ * manifest or the runtime does. Every CRUD-like export they carry was therefore
+ * reported as dead scaffolding on every scan. They are excluded from the
+ * candidate population entirely, not just from the phantom list, because they
+ * are not a case this detector can judge.
+ */
+const ENTRY_POINT_PATH = /(?:^|\/)(?:bin\/|(?:index|main|server)\.[cm]?[jt]sx?$)/i;
+
+function isEntryPoint(path: string): boolean {
+  return ENTRY_POINT_PATH.test(path);
+}
+
 export const phantomScaffolding: DriftDetector = {
   id: "phantom-scaffolding",
   name: "Phantom Scaffolding",
@@ -129,6 +146,9 @@ export const phantomScaffolding: DriftDetector = {
     for (const exports of graph.exportsByFile.values()) {
       for (const ex of exports) {
         if (!isCrudLike(ex.name)) continue;
+        // Entry points are reached from outside the import graph, so their zero
+        // incoming-import count is not evidence of anything. See ENTRY_POINT_PATH.
+        if (isEntryPoint(ex.file)) continue;
         // Count every CRUD-like export as part of the directory population —
         // routed/wired ones are the "dominant" wired-up pattern phantoms deviate from.
         const exDir = directoryOf(ex.file);

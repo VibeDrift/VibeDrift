@@ -123,3 +123,41 @@ describe("convention-oscillation detector", () => {
     }
   });
 });
+
+describe("convention-oscillation: totalRelevantFiles is a file count", () => {
+  it("reports contributing files, not the symbol count", () => {
+    // The scoring engine reads totalRelevantFiles as "how many peers did this
+    // vote see" (SAMPLE_FULL_CONFIDENCE = 8). A symbol axis clears 8 symbols
+    // trivially, so putting the symbol count here gave a three-file finding the
+    // full damage weight of an eight-peer vote.
+    const files: DriftFile[] = [];
+    // 2 files x 6 camelCase functions.
+    for (let i = 0; i < 2; i++) {
+      files.push(file(
+        `src/service${i}.ts`,
+        Array.from({ length: 6 }, (_, j) => `function camelName${i}${j}() {}`).join("\n") + "\n",
+      ));
+    }
+    // 1 file with 4 snake_case functions — the deviating minority.
+    files.push(file(
+      "src/legacy_svc.ts",
+      Array.from({ length: 4 }, (_, j) => `function snake_name_${j}() {}`).join("\n") + "\n",
+    ));
+    // A second deviating file, since the detector needs ≥2 deviating files.
+    files.push(file(
+      "src/legacy_two.ts",
+      Array.from({ length: 3 }, (_, j) => `function other_snake_${j}() {}`).join("\n") + "\n",
+    ));
+
+    const symbolFindings = conventionOscillation
+      .detect(mkCtx(files))
+      .filter((f) => f.subCategory?.endsWith("_names"));
+    expect(symbolFindings.length).toBeGreaterThan(0);
+    for (const f of symbolFindings) {
+      // 4 files contributed symbols; 19 symbols were counted. The field must
+      // carry the former.
+      expect(f.totalRelevantFiles).toBe(4);
+      expect(f.dominantCount).toBeGreaterThan(f.totalRelevantFiles);
+    }
+  });
+});

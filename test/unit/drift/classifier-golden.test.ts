@@ -53,7 +53,15 @@ const GOLDEN: [string, string | null, string | null, string | null][] = [
   ["classifyAsyncStyle", null, null, "null/undefined sentinels"],
   ["extractFunctionBodies", null, null, "null/undefined sentinels"],
   ["classifyDataAccessLabel", null, null, "null/undefined sentinels"],
-  ["loadUserRowsRawSql", "async_await", "direct database calls", null],
+  // Deliberate golden change: this body holds two raw SQL statements
+  // (`SELECT * FROM users`, `SELECT count(*) FROM sessions`) and two
+  // `db.query(` calls. It recorded "direct database calls" only because the
+  // raw-SQL regex could not match either statement — `SELECT\s+(?:FROM|...|\*)\b`
+  // needs FROM to follow SELECT immediately and cannot put a `\b` after `*`. With
+  // the statement forms matched, raw_sql and direct_db tie at 2 pieces of
+  // evidence each and the priority order (raw_sql first) decides, which is what
+  // the fixture's own name says it should be.
+  ["loadUserRowsRawSql", "async_await", "raw SQL queries", null],
   ["listActiveUsersOrm", "async_await", "ORM methods", null],
   ["saveOrderViaRepository", null, "repository pattern", null],
   ["fetchInvoiceThenChain", "then_chains", "inline HTTP client calls", null],

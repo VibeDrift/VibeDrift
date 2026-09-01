@@ -33,6 +33,16 @@ function isSourceFile(path: string): boolean {
   return true;
 }
 
+/**
+ * A named export declaration. The optional `async` is load-bearing: without it
+ * `export async function f() {}` matched neither this branch nor the
+ * `export default` one, so a file whose exports are all async functions was
+ * read as having NO exports and silently left the vote's denominator — the
+ * common shape for handler and service modules.
+ */
+const NAMED_EXPORT_DECL =
+  /^export\s+(?:async\s+)?(?:function|class|const|let|var|interface|type|enum|abstract|declare)\b/;
+
 function analyzeExports(file: DriftFile): FileExportProfile | null {
   if (!file.language || !["javascript", "typescript"].includes(file.language)) return null;
   if (!isSourceFile(file.relativePath)) return null;
@@ -48,7 +58,7 @@ function analyzeExports(file: DriftFile): FileExportProfile | null {
     if (/^export\s+default\b/.test(line) || /\bmodule\.exports\s*=/.test(line)) {
       hasDefaultExport = true;
       if (evidence.length < 2) evidence.push({ line: i + 1, code: line.slice(0, 100) });
-    } else if (/^export\s+(?:function|class|const|let|var|interface|type|enum|abstract)\b/.test(line)) {
+    } else if (NAMED_EXPORT_DECL.test(line)) {
       hasNamedExport = true;
       if (evidence.length < 2) evidence.push({ line: i + 1, code: line.slice(0, 100) });
     } else if (/^export\s*\{/.test(line)) {
@@ -104,11 +114,19 @@ export const exportConsistency: DriftDetector = {
       });
     }
 
+    // Vocabulary guard: a seeded vote SKIPS the 70% dominance gate, so a hint
+    // whose pattern this axis has never heard of would inject a phantom
+    // zero-count entry and force findings out of directories that are perfectly
+    // consistent. Only a declaration written in this axis's own vocabulary
+    // (a key of STYLE_NAMES) is allowed to seed.
+    const hint = pickIntentHint(ctx, "export_style");
+    const seededPattern = hint && hint.pattern in STYLE_NAMES ? hint.pattern : undefined;
+
     const votes = buildDirectoryScopedVote(profiles, STYLE_NAMES, {
       minGroupSize: 3,
       dominanceThreshold: 0.7,
       fileAges: buildFileAgeMap(ctx),
-      seededPattern: pickIntentHint(ctx, "export_style")?.pattern,
+      seededPattern,
     });
 
     return votes.map((v) => ({
@@ -124,6 +142,7 @@ export const exportConsistency: DriftDetector = {
       consistencyScore: v.consistencyScore,
       deviatingFiles: v.deviators,
       dominantFiles: v.dominantFiles,
+      allDominantFiles: v.allDominantFiles,
       recommendation: `Standardize ${v.directory}/ on ${STYLE_NAMES[v.dominant]}. ${v.dominant === "named_only" ? "Named exports enable tree-shaking and explicit imports." : "Default exports simplify imports but disable tree-shaking."}`,
     }));
   },
