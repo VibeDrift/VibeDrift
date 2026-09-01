@@ -19,6 +19,7 @@ import { findingKey } from "../output/fix-prompt.js";
 const MAX_FINDINGS_PER_BATCH = 10;
 const MAX_REF_FILES_PER_FINDING = 3;
 const MAX_SNIPPET_LINES = 60;
+const TIMEOUT_MS = 30_000;
 
 interface RefFileSnippet {
   path: string;
@@ -142,6 +143,9 @@ export async function synthesizeFixPrompts(
   const base = options.apiUrl ?? "https://vibedrift-api.fly.dev";
   const url = `${base}/v1/fix-prompts`;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
   try {
     const t0 = Date.now();
     const res = await fetch(url, {
@@ -151,6 +155,7 @@ export async function synthesizeFixPrompts(
         Authorization: `Bearer ${options.token}`,
       },
       body: JSON.stringify({ items }),
+      signal: controller.signal,
     });
     if (!res.ok) {
       if (options.verbose) console.error(`[fix-prompts] API returned ${res.status} — skipping rich prose`);
@@ -176,5 +181,7 @@ export async function synthesizeFixPrompts(
     }
   } catch (err) {
     if (options.verbose) console.error(`[fix-prompts] request failed: ${(err as Error).message ?? err}`);
+  } finally {
+    clearTimeout(timeout);
   }
 }

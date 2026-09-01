@@ -156,3 +156,90 @@ describe("sanitizeResultForUpload — keeps what the dashboard needs", () => {
     expect(loc.snippet).toBe(SECRET_SNIPPET);
   });
 });
+
+/**
+ * codeDnaResult.functions[] (ExtractedFunction) carries `rawBody` — the
+ * COMPLETE body of every function extracted from the codebase, unbounded —
+ * plus `declarationCode` (the signature line) and `bodyTokens` (a
+ * near-lossless token reconstruction of the body). Unlike a finding's
+ * `snippet` or a drift `Evidence.code` (bounded, cited excerpts — see the
+ * pinned test above), these three fields have no size bound and are not
+ * cited against a specific finding: they are the function, verbatim.
+ *
+ * `log-scan.ts`'s `compactPayload` used to drop `codeDnaResult.functions`
+ * ONLY as a >9MB size-trimming fallback — a payload-size concern, not a
+ * privacy boundary. On any scan under that threshold (the common case),
+ * every function body in the repo shipped to the dashboard on every
+ * signed-in scan, contradicting this module's own "no file contents"
+ * header.
+ */
+describe("sanitizeResultForUpload — codeDnaResult never carries function bodies", () => {
+  function withCodeDna(): ScanResult {
+    return mkResult({
+      codeDnaResult: {
+        functions: [
+          {
+            name: "billing",
+            file: "/Users/someone/private-repo/src/billing.ts",
+            relativePath: "src/billing.ts",
+            line: 2,
+            language: "typescript",
+            params: [],
+            paramCount: 0,
+            rawBody: SECRET_SOURCE,
+            declarationCode: "function billing() {",
+            domainCategory: "billing",
+            bodyTokens: ["function", "billing", "(", ")", "{", "return", "42", ";", "}"],
+            bodyTokenCount: 9,
+            bodyHash: 123456,
+          },
+        ],
+        fingerprints: [],
+        duplicateGroups: [],
+        sequenceSimilarities: [],
+        patternDistributions: [],
+        taintFlows: [],
+        deviationJustifications: [],
+        findings: [],
+        timings: {
+          extractionMs: 1,
+          fingerprintMs: 1,
+          sequenceMs: 1,
+          patternMs: 1,
+          taintMs: 1,
+          deviationMs: 1,
+          totalMs: 6,
+        },
+      },
+    } as unknown as Partial<ScanResult>);
+  }
+
+  it("does not upload any function's raw body", () => {
+    expect(JSON.stringify(sanitizeResultForUpload(withCodeDna()))).not.toContain("sk_live_NEVER_UPLOAD_ME");
+  });
+
+  it("does not upload any part of a function body via rawBody", () => {
+    expect(JSON.stringify(sanitizeResultForUpload(withCodeDna()))).not.toContain("function billing()");
+  });
+
+  it("does not upload declarationCode or bodyTokens", () => {
+    const out = sanitizeResultForUpload(withCodeDna()) as Record<string, unknown>;
+    const cdr = out.codeDnaResult as { functions: Array<Record<string, unknown>> };
+    const fn = cdr.functions[0];
+    expect(fn).not.toHaveProperty("rawBody");
+    expect(fn).not.toHaveProperty("declarationCode");
+    expect(fn).not.toHaveProperty("bodyTokens");
+  });
+
+  it("keeps the function metadata the dashboard's codeDnaSummary needs", () => {
+    const out = sanitizeResultForUpload(withCodeDna()) as Record<string, unknown>;
+    const cdr = out.codeDnaResult as { functions: Array<Record<string, unknown>> };
+    const fn = cdr.functions[0];
+    expect(fn.name).toBe("billing");
+    expect(fn.relativePath).toBe("src/billing.ts");
+    expect(fn.line).toBe(2);
+    expect(fn.language).toBe("typescript");
+    expect(fn.bodyTokenCount).toBe(9);
+    expect(fn.bodyHash).toBe(123456);
+  });
+});

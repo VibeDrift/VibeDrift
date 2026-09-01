@@ -7,6 +7,9 @@ import { run, detectExcludeCandidates } from "../../../src/tools-core/tools/init
 let dir: string;
 
 async function seedRepo(root: string): Promise<void> {
+  // A project marker so `assertPlausibleProjectRoot` (root-dir-guard.ts)
+  // accepts this as a real repo root — a bare mkdtemp dir has none.
+  await mkdir(join(root, ".git"), { recursive: true });
   await mkdir(join(root, "src"), { recursive: true });
   await mkdir(join(root, "test", "fixtures"), { recursive: true });
   await writeFile(join(root, "src", "index.ts"), "export const a = 1;\n");

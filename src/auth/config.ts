@@ -155,10 +155,31 @@ export async function configExists(): Promise<boolean> {
 /**
  * Update specific fields without clobbering the rest of the config.
  * Reads, merges, writes.
+ *
+ * Serialized through `patchQueue` (a chained-promise mutex) because this is a
+ * read-modify-write over a single shared file: multiple MCP tool handlers can
+ * call `patchConfig` concurrently in the same process (e.g. two tools each
+ * updating `lastNudgedAt` / `lastDeepScanAt`), and without serialization the
+ * second writer's read predates the first writer's write, so its write clobbers
+ * the first patch entirely (lost update). This only protects against
+ * concurrent writers WITHIN this process — a separate `vibedrift` process
+ * writing at the same time can still race, but that's an existing, separate
+ * gap (see `writeConfig`'s single `writeFile` call).
  */
+let patchQueue: Promise<unknown> = Promise.resolve();
+
 export async function patchConfig(patch: Partial<VibeDriftConfig>): Promise<VibeDriftConfig> {
-  const current = await readConfig();
-  const next: VibeDriftConfig = { ...current, ...patch };
-  await writeConfig(next);
-  return next;
+  const run = async (): Promise<VibeDriftConfig> => {
+    const current = await readConfig();
+    const next: VibeDriftConfig = { ...current, ...patch };
+    await writeConfig(next);
+    return next;
+  };
+  // Chain onto the queue regardless of whether the previous link resolved or
+  // rejected, so one failed patch never wedges every subsequent caller.
+  const result = patchQueue.then(run, run);
+  // Swallow the result/rejection in the queue itself — callers still get the
+  // real outcome via `result`, this just keeps the chain alive.
+  patchQueue = result.catch(() => undefined);
+  return result;
 }
