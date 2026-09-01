@@ -47,6 +47,23 @@ const FAMILY_NAMES: Record<LoggerFamily, string> = {
   go_slog: "Go log/slog",
 };
 
+/**
+ * Which languages can actually reach each family. The vote is partitioned by
+ * language (see `detect`), but an intent hint is repo-wide: a `go_slog`
+ * declaration in CLAUDE.md seeded EVERY partition, so the TypeScript files
+ * were told "team declared Go log/slog but 3/3 files use console.*" with a
+ * "Migrate 0 file(s)" recommendation. A hint may only seed the partitions whose
+ * language could have honoured it. `null` means any language: `logger.*`
+ * wrappers and Rust `tracing::` both land in `structured`.
+ */
+const FAMILY_LANGUAGES: Record<LoggerFamily, readonly string[] | null> = {
+  console: ["javascript", "typescript"],
+  structured: null,
+  debug_pkg: ["javascript", "typescript"],
+  python_logging: ["python"],
+  go_slog: ["go"],
+};
+
 const FAMILY_PATTERNS: Record<LoggerFamily, RegExp> = {
   console: /\bconsole\.(?:log|info|warn|error|debug)\s*\(/g,
   structured:
@@ -141,14 +158,25 @@ export const loggingConsistency: DriftDetector = {
     const findings: DriftFinding[] = [];
     // Deterministic order across re-scans.
     for (const language of [...byLanguage.keys()].sort()) {
-      findings.push(...voteWithinLanguage(ctx, byLanguage.get(language)!));
+      findings.push(...voteWithinLanguage(ctx, language, byLanguage.get(language)!));
     }
     return findings;
   },
 };
 
+/** True when `pattern` is a known family that files of `language` could use. */
+function isHintForLanguage(pattern: string, language: string): boolean {
+  if (!(pattern in FAMILY_NAMES)) return false;
+  const languages = FAMILY_LANGUAGES[pattern as LoggerFamily];
+  return languages === null || languages.includes(language);
+}
+
 /** The dominance vote across one language's files. */
-function voteWithinLanguage(ctx: DriftContext, profiles: FileLoggerProfile[]): DriftFinding[] {
+function voteWithinLanguage(
+  ctx: DriftContext,
+  language: string,
+  profiles: FileLoggerProfile[],
+): DriftFinding[] {
   if (profiles.length < 3) return [];
 
   // Name the `structured` family from what's actually in the code, never
@@ -167,10 +195,13 @@ function voteWithinLanguage(ctx: DriftContext, profiles: FileLoggerProfile[]): D
   // 60% dominance gate below and `seedDominanceVote` injects an unknown
   // declared pattern as a ZERO-COUNT entry weighted ~1.95, so a hint outside
   // this axis's families could win the vote outright — reporting a dominant no
-  // file uses, with consistencyScore 0. Only a key of FAMILY_NAMES may seed.
+  // file uses, with consistencyScore 0. Only a key of FAMILY_NAMES may seed,
+  // and only in a partition whose language can reach that family
+  // (FAMILY_LANGUAGES) — otherwise a Go-only declaration reads as divergence
+  // in every non-Go partition.
   const counts = buildPatternDistribution(profiles);
   const rawHint = pickIntentHint(ctx, "logging_consistency");
-  const hint = rawHint && rawHint.pattern in FAMILY_NAMES ? rawHint : null;
+  const hint = rawHint && isHintForLanguage(rawHint.pattern, language) ? rawHint : null;
   if (counts.size < 2 && !hint) return [];
 
   const seeded = seedDominanceVote(counts, hint);

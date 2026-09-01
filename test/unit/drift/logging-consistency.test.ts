@@ -221,6 +221,39 @@ debug("c");
     expect(loggingConsistency.detect(withHint(oneEach, "winston"))).toHaveLength(0);
   });
 
+  it("a language-exclusive declaration seeds only the partition that can honour it", () => {
+    // A repo-wide `go_slog` hint used to seed EVERY language partition. The
+    // TypeScript partition then reported "team declared Go log/slog but 3/3
+    // files use console.*" with a "Migrate 0 file(s)" recommendation — a TS
+    // file cannot use slog, so there is no divergence to report.
+    const goFiles = Array.from({ length: 3 }, (_, i) => ({
+      relativePath: `cmd/svc${i}.go`,
+      language: "go" as const,
+      content: `package main\nimport "log/slog"\nfunc run${i}() { slog.Info("hi") }\n`,
+    }));
+    const tsFiles = Array.from({ length: 3 }, (_, i) => ({
+      relativePath: `web/svc${i}.ts`,
+      language: "typescript" as const,
+      content: `export function go${i}() { console.log("hi"); }\n`,
+    }));
+    const ctx: DriftContext = {
+      ...makeCtx([...goFiles, ...tsFiles]),
+      intentHints: [{
+        category: "logging_consistency",
+        pattern: "go_slog",
+        label: "Go log/slog",
+        source: "CLAUDE.md",
+        line: 4,
+        text: "- Use log/slog for all Go logging",
+        confidence: 0.9,
+      }],
+    };
+
+    // The Go partition agrees with the hint; the TypeScript partition is
+    // unanimous on the only family it can reach. Neither is drift.
+    expect(loggingConsistency.detect(ctx)).toHaveLength(0);
+  });
+
   it("an in-vocabulary declaration binds without ever reporting a zero-count dominant", () => {
     for (const pattern of ["structured", "console", "debug_pkg"]) {
       const findings = loggingConsistency.detect(withHint(oneEach, pattern));
