@@ -4,6 +4,52 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## Unreleased
+
+**The Vibe Drift Score can no longer go up when a finding is added or down when one is fixed, and a whole-repo audit closes a set of privacy, detection and robustness gaps (#113).**
+
+### Changed — scoring
+
+- **The score is now monotone in the finding set.** Adding a finding can never raise it and closing one can never lower it. Three inversions were removed: a security or intent finding landing in a previously empty category could pull the headline up (measured 65.0 to 74.9 from one real security finding, and a Fix Plan that projected a lower score after a fix); a category with one faint finding could score above the same category with none; and detector confidence was averaged, so a low-confidence finding diluted its group's damage. `SCORING_VERSION` advances to v18.
+- **Scores move on upgrade.** The direction is down or unchanged, except where a repo that was previously over-penalised recovers. Measured against the previous release on nine real repositories:
+
+  | Repo | before | after |
+  |---|---|---|
+  | moment | 68.2 | 56.6 |
+  | date-fns | 67.0 | 56.7 |
+  | zod | 75.7 | 67.4 |
+  | htmx | 76.4 | 68.4 |
+  | eslint | 85.2 | 79.4 |
+  | VibeDrift | 86.2 | 81.5 |
+  | starship | 71.7 | 97.2 |
+  | dayjs | 80.6 | 80.6 |
+  | underscore | 54.5 | 54.5 |
+
+- Existing stored scores are kept as they were; the update applies to new scans, and the CLI shows the one-time "scoring refined" notice after upgrading.
+
+### Fixed — security & privacy
+
+- **CSV export neutralises formula injection.** Cells beginning with `=`, `+`, `-`, `@`, tab or carriage return are prefixed so repo-controlled text cannot execute as a formula when the export is opened in a spreadsheet.
+- **Deep-scan uploads no longer include function bodies.** Only the bounded evidence snippet the dashboard shows is sent, as the upload contract always said.
+- **The local report server binds to loopback only.** It previously listened on all interfaces, serving the report to the LAN for the listen window.
+- **The API URL must be `https://`** (localhost excepted) and any non-default URL is warned about, since the sign-in token is attached to whatever it names.
+- **MCP write-capable tools validate the target directory** against project markers before writing hook configuration.
+
+### Fixed — detection accuracy
+
+- **Analyzers:** Python functions are now visible to the naming analyzer and arrow functions to long-function detection; Go else-if chains no longer inflate cognitive complexity; mock and todo objects no longer escalate implementation-gap findings. One analyzer throwing no longer aborts the scan: it is skipped with a warning and the result is marked degraded.
+- **Security lane:** authorisation exceptions, a handler's own response body and static routers no longer bless a route as authenticated; Actix reject idioms, resolved cross-file middleware and a 3-of-4 authed-routes case no longer flag authenticated routes.
+- **Drift classification** ranks by evidence rather than declaration order, the raw-SQL pattern actually matches `SELECT ... FROM`, and intent-hint seeding fails closed on unknown vocabulary and is scoped per language.
+- **Code DNA:** taint sanitisers and sinks anchor on identifier boundaries; the LCS length gate no longer zeroes pairs up to 0.645 similarity; pattern drift requires a dominant pattern (60% and 3+ peers) and a deviating file is no longer counted twice.
+- **Sessions:** sidecar state is written atomically, so resolves and cooldowns persist across concurrent hooks.
+- **Robustness:** the offline telemetry beacon no longer holds a scan open for up to 3s when the network is down, and a stalled fix-prompts connection no longer hangs a `--deep` scan indefinitely.
+- **A malformed `VIBEDRIFT_API_URL` or config `apiUrl` can no longer crash a scan.** The anonymous scan beacon is best-effort end to end and never rejects; a bad URL now means "beacon skipped", including for signed-out and `--local-only` runs. Analyzer crashes are no longer silent either: a failing analyzer prints a warning and the result carries `degradedAnalyzers` (also in `--format json`), so a score computed without that analyzer is never mistaken for a clean one.
+- **`--format json` now includes cross-file drift findings** and reimplementation candidates. The raw Code DNA result is deliberately not included: it embeds every extracted function's full source body.
+
+### Changed — caches
+
+- Findings-cache versions are bumped (`imports` and `security` to 4, several others by one) and `BASELINE_VERSION` advances to 7, so warm caches and baselines rebuild once on the first scan after upgrading. There is nothing to do.
+
 ## 0.20.1 — 2026-09-01
 
 **VibeDrift is now a Claude Code plugin: one install wires the MCP server in and adds a run-once setup skill, no `claude mcp add` required.**
