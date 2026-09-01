@@ -315,6 +315,8 @@ To gate locally instead, `vibedrift hook install` writes a git pre-push hook tha
 | `vibedrift ignore <globs...>` | Append path globs to `.vibedriftignore` |
 | `vibedrift watch [path]` | Re-scan and refresh `.vibedrift/` on file changes (Pro) |
 | `vibedrift watch-session [path]` | [Drift Sessions](#drift-sessions-preview), the live agent tape (preview) |
+| `vibedrift enable [path]` | [Drift Sessions](#drift-sessions-preview): activate this repo — typing this is the consent; records prompts (secrets masked) + edit metadata to a local ledger |
+| `vibedrift decline [path]` | [Drift Sessions](#drift-sessions-preview): decline for this repo — never asked again, capture stays off (reverse anytime with `vibedrift enable`) |
 | `vibedrift mcp` | Run the [MCP server](#the-mcp-server-your-agent-asks) over stdio |
 | `vibedrift hook <action>` | Manage the **git** pre-push drift gate, not the agent hooks (install is Pro) |
 | `vibedrift login` / `logout` | Account auth |

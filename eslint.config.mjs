@@ -5,7 +5,7 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ["dist/**", "node_modules/**", "test/fixtures/**", "scripts/**", "eval/**"],
+    ignores: ["dist/**", "node_modules/**", "test/fixtures/**", "eval/**"],
   },
   {
     rules: {
@@ -26,6 +26,35 @@ export default tseslint.config(
     files: ["test/**/*.ts", "**/*.test.ts"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
+    // Release-gating scripts (scripts/sync-plugin-version.mjs,
+    // scripts/publish-guard.mjs, etc.) were previously excluded by the
+    // blanket scripts/** ignore above and got zero lint coverage. They're
+    // plain Node ESM, not TypeScript, so they just need the runtime
+    // globals declared — the top-level eslint.configs.recommended rules
+    // above already apply to them once they're no longer ignored.
+    files: ["scripts/*.mjs"],
+    languageOptions: {
+      sourceType: "module",
+      ecmaVersion: 2022,
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        Buffer: "readonly",
+        performance: "readonly",
+        URL: "readonly",
+        URLSearchParams: "readonly",
+        fetch: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        setInterval: "readonly",
+        clearInterval: "readonly",
+        globalThis: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+      },
     },
   },
 );
