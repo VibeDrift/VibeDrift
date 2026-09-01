@@ -12,9 +12,17 @@
  * `confirm`, so a malicious rootDir still needs the user to click through.
  * `init` has no such prompt, so this guard is its only check.
  *
- * Call this before the first filesystem write, not before every read —
- * `init`'s `detectOnly` preview also calls it since it is cheap and keeps
- * the check unconditional rather than branch-dependent.
+ * Where it is called:
+ *   - `enable`: in the channel-neutral core (src/tools-core/tools/enable.ts),
+ *     since every channel that can enable capture should be gated.
+ *   - `init`: in the MCP adapter only (src/mcp/tools/init.ts), NOT the core.
+ *     The interactive `vibedrift init` CLI runs in the user's own cwd by
+ *     explicit command, and a brand-new project has no markers yet — the
+ *     guard must not refuse there at the end of the prompt walkthrough.
+ *
+ * Call this before the first filesystem write, not before every read — the
+ * MCP `init` adapter also runs it for `detectOnly` previews since it is cheap
+ * and keeps the check unconditional rather than branch-dependent.
  */
 import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
