@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatCount } from "../../../src/output/format.js";
+import { formatCount, scoreBar } from "../../../src/output/format.js";
 
 /**
  * formatCount must be byte-stable across machine locales. `Number#toLocaleString()`
@@ -31,5 +31,32 @@ describe("formatCount", () => {
       if (prev === undefined) delete process.env.LANG;
       else process.env.LANG = prev;
     }
+  });
+});
+
+/**
+ * P3: scoreBar computed `filled = Math.round((score / max) * width)` with no
+ * clamp. A score above max (a real possibility — e.g. a projected/"after
+ * fixes" score, or a caller passing an already-summed delta) pushes `filled`
+ * past `width`, and `width - filled` goes negative — String#repeat throws a
+ * RangeError on a negative count. Clamp `filled` to [0, width].
+ */
+describe("scoreBar", () => {
+  it("renders a fully-filled bar at score === max", () => {
+    expect(scoreBar(20, 20, 10)).toBe("█".repeat(10));
+  });
+
+  it("does not throw when score > max, and clamps to a fully-filled bar", () => {
+    expect(() => scoreBar(25, 20, 10)).not.toThrow();
+    expect(scoreBar(25, 20, 10)).toBe("█".repeat(10));
+  });
+
+  it("does not throw and clamps to empty when score is negative", () => {
+    expect(() => scoreBar(-5, 20, 10)).not.toThrow();
+    expect(scoreBar(-5, 20, 10)).toBe("░".repeat(10));
+  });
+
+  it("renders a partially-filled bar within range", () => {
+    expect(scoreBar(10, 20, 10)).toBe("█".repeat(5) + "░".repeat(5));
   });
 });

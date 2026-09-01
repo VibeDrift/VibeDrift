@@ -853,8 +853,12 @@ function buildHygiene(result: ScanResult): string {
 
   const more = sorted.length > 10 ? `<div class="hyg-row"><span class="sev"></span><span class="txt" style="color:var(--text-tertiary)">+ ${sorted.length - 10} more hygiene checks</span><span class="file"></span></div>` : "";
 
+  const hygieneScoreLine = result.maxHygieneScore > 0
+    ? `<span class="meta">Hygiene Score: ${result.hygieneScore.toFixed(1)}/${result.maxHygieneScore} &middot; not part of your Vibe Drift Score</span>`
+    : `<span class="meta">not part of your Vibe Drift Score</span>`;
+
   return `<section class="va-sect">
-    <div class="va-sect-h"><h3>Hygiene</h3><span class="meta">not part of your Vibe Drift Score</span></div>
+    <div class="va-sect-h"><h3>Hygiene</h3>${hygieneScoreLine}</div>
     <div class="hyg">
       <p class="hyg-note">General code-quality checks (complexity, duplication, dead code). Useful context, but they don't measure drift, so they're excluded from the score.</p>
       ${rows}
@@ -1421,12 +1425,13 @@ ${buildHygiene(result)}
 ${buildDeepScanSection(result)}
 ${buildFooter(result, "detailed")}`;
 
+  const beaconUrl = `${opts.beaconApiUrl ?? "https://vibedrift-api.fly.dev"}/v1/beacon/report-open`;
   const beacon = opts.scanId ? `
 // Report-open beacon — fires once when the report loads in a browser.
 (function(){
   try{
-    var url="${opts.beaconApiUrl ?? "https://vibedrift-api.fly.dev"}/v1/beacon/report-open";
-    fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scan_id:"${opts.scanId}",opened_at:new Date().toISOString()})}).catch(function(){});
+    var url=${JSON.stringify(beaconUrl)};
+    fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scan_id:${JSON.stringify(opts.scanId)},opened_at:new Date().toISOString()})}).catch(function(){});
   }catch(e){}
 })();` : "";
 
@@ -1517,7 +1522,7 @@ ${beacon}
   if(csv)csv.addEventListener('click',function(){
     var d=window.__VIBEDRIFT_DATA;
     if(!d){toast('Report data not available');return;}
-    var q=function(v){var s=String(v);return /[",\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+    var q=function(v){var s=String(v);if(/^[=+\\-@\\t\\r]/.test(s)){s="'"+s;}return /[",\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
     var row=function(){return Array.prototype.slice.call(arguments).map(q).join(',');};
     var L=[];
     L.push('VIBEDRIFT REPORT');

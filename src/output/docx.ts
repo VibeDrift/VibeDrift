@@ -4,6 +4,12 @@ import type { CodeDnaResult } from "../codedna/types.js";
 import { getVersion } from "../core/version.js";
 import { formatCount } from "./format.js";
 import { getAnalyzerKind } from "../scoring/categories.js";
+import { createAnalyzerRegistry } from "../analyzers/index.js";
+
+// Analyzer count for the "N findings from M static analyzers" line — derived
+// from the registry (read-only) instead of a hardcoded literal, so this
+// stays correct as analyzers are added or removed.
+const STATIC_ANALYZER_COUNT = createAnalyzerRegistry().length;
 
 // ──── Minimal ZIP generator (OOXML requires ZIP container) ────
 
@@ -135,7 +141,16 @@ function styles(): string {
 const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
 function xml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Strip characters XML 1.0 forbids outright (control chars other than tab
+  // \x09, LF \x0A, CR \x0D). A source snippet containing e.g. NUL, VT, or FF
+  // would otherwise be emitted verbatim into word/document.xml and corrupt
+  // the .docx (Word fails to open it / repairs it, dropping content).
+  return s
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function para(text: string, style?: string, props?: string): string {
@@ -434,7 +449,13 @@ function buildDocxFindingsTable(result: ScanResult): string {
     getAnalyzerKind(f.analyzerId) === "hygiene" ||
     (!f.tags?.includes("drift") && !f.tags?.includes("codedna")),
   );
-  parts.push(para(`${statics.length} findings from ${13} static analyzers.`));
+  parts.push(para(`${statics.length} findings from ${STATIC_ANALYZER_COUNT} static analyzers.`));
+  // Hygiene composite — same scalar the terminal ("Hygiene Score: NN/MM") and
+  // HTML report surface. Independent of the Vibe Drift Score; shown here so
+  // DOCX readers get the same context instead of only the raw finding list.
+  if (result.maxHygieneScore > 0) {
+    parts.push(para(`Hygiene Score: ${result.hygieneScore.toFixed(1)}/${result.maxHygieneScore} (not part of the Vibe Drift Score).`));
+  }
   parts.push(para(""));
 
   for (const f of statics.slice(0, 50)) {

@@ -304,18 +304,33 @@ function renderFixPlan(result: ScanResult, driftFirst = false, maxItems = 5): st
       return (b.consistencyImpact ?? 0) - (a.consistencyImpact ?? 0);
     });
     // Deduplicate by analyzer — show at most 1 finding per analyzer type
-    // to maximize variety in the preview.
+    // to maximize variety in the preview. The diversity cap scales with
+    // maxItems (rather than a fixed constant) so it never leaves headroom
+    // unused: a fixed cap below maxItems under-fills the plan whenever the
+    // top findings cluster in one analyzer and there aren't enough other
+    // analyzers left in prioritySorted to reach maxItems.
+    const diverseCap = Math.max(1, maxItems - 2);
     const seen = new Set<string>();
     const diverse: Finding[] = [];
     for (const f of prioritySorted) {
       const key = f.analyzerId;
       if (seen.has(key) && diverse.length < maxItems) {
         // Allow a second from the same analyzer only if we're short of the cap
-        if (diverse.length >= 3) continue;
+        if (diverse.length >= diverseCap) continue;
       }
       seen.add(key);
       diverse.push(f);
       if (diverse.length >= maxItems) break;
+    }
+    // Backfill: if the diversity cap left the plan short of maxItems (e.g.
+    // every top finding shares one analyzer), fill the remaining slots from
+    // prioritySorted allowing duplicates, rather than under-filling.
+    if (diverse.length < maxItems) {
+      for (const f of prioritySorted) {
+        if (diverse.length >= maxItems) break;
+        if (diverse.includes(f)) continue;
+        diverse.push(f);
+      }
     }
     top = diverse;
   } else {
@@ -357,7 +372,10 @@ function renderFixPlan(result: ScanResult, driftFirst = false, maxItems = 5): st
 
   lines.push("");
   if (gain > 0.5) {
-    const approx = Math.round(after.compositeScore / 5) * 5;
+    // 1 decimal to match the composite/category precision everywhere else
+    // (HTML, JSON, CSV, DOCX) — a rounded-to-nearest-5 approximation here
+    // reads as a different number than the same projection in the report.
+    const approx = after.compositeScore.toFixed(1);
     lines.push(`  Fix these ${top.length} → projected ~${chalk.green(approx + "/" + after.maxCompositeScore)} ${currentGrade !== afterGrade ? chalk.green(`(${currentGrade} → ${afterGrade})`) : `(${currentGrade})`}`);
   }
   lines.push("");
@@ -563,7 +581,7 @@ function renderHygienePane(result: ScanResult): string[] {
   lines.push(chalk.bold.yellow("\u2500\u2500 Hygiene findings (not part of Vibe Drift Score) \u2500\u2500\u2500\u2500\u2500\u2500"));
   lines.push(chalk.dim("  Generic hygiene checks — complexity, dead code, TODOs, generic"));
   lines.push(chalk.dim("  security and dependency issues. These feed the Hygiene Score"));
-  lines.push(chalk.dim(`  (${result.hygieneScore.toFixed(0)}/${result.maxHygieneScore}), not the drift composite.`));
+  lines.push(chalk.dim(`  (${result.hygieneScore.toFixed(1)}/${result.maxHygieneScore}), not the drift composite.`));
   lines.push("");
 
   for (const cat of ALL_CATEGORIES) {
@@ -651,7 +669,7 @@ function renderCategoryBars(result: ScanResult): string[] {
         const arrow = s.delta > 0 ? "\u25B2" : "\u25BC";
         deltaStr = " " + dColor(`${arrow}${Math.abs(s.delta).toFixed(1)}`);
       }
-      lines.push(`  ${label} ${color(`${s.score.toFixed(0).padStart(2)}/${s.maxScore}`)}  ${bar}${deltaStr}`);
+      lines.push(`  ${label} ${color(`${s.score.toFixed(1).padStart(4)}/${s.maxScore}`)}  ${bar}${deltaStr}`);
     }
 
     if (cat === "securityPosture") {
@@ -674,7 +692,7 @@ function renderCategoryBars(result: ScanResult): string[] {
     DRIFT_DISPLAY_CATEGORIES.length,
   );
   const scopeSuffix = scopeNote ? `  ${chalk.dim(scopeNote)}` : "";
-  lines.push(`  ${padRight("Vibe Drift Score:", 28)} ${totalColor(`${result.compositeScore.toFixed(0)}/${result.maxCompositeScore}`)}${scopeSuffix}`);
+  lines.push(`  ${padRight("Vibe Drift Score:", 28)} ${totalColor(`${result.compositeScore.toFixed(1)}/${result.maxCompositeScore}`)}${scopeSuffix}`);
   // Floor-gate badge (render-only): an absolute security floor trip (committed
   // secret, disabled TLS, unsanitized input reaching eval/exec) is surfaced as
   // a warning line but NEVER changes compositeScore or the letter grade — see
@@ -693,7 +711,7 @@ function renderCategoryBars(result: ScanResult): string[] {
   // scalar so it's clearly NOT part of the drift score.
   if (result.maxHygieneScore > 0) {
     const hygieneColor = scoreColorFn(result.hygieneScore, result.maxHygieneScore);
-    lines.push(`  ${chalk.dim(padRight("Hygiene Score:", 28))} ${hygieneColor(`${result.hygieneScore.toFixed(0)}/${result.maxHygieneScore}`)}`);
+    lines.push(`  ${chalk.dim(padRight("Hygiene Score:", 28))} ${hygieneColor(`${result.hygieneScore.toFixed(1)}/${result.maxHygieneScore}`)}`);
   }
   // One-line gloss so a first-time reader understands what each
   // scalar represents. Dim so it's easy to skip once internalized.
@@ -1015,6 +1033,14 @@ export function renderJsonOutput(result: ScanResult): string {
       hygieneScore: result.hygieneScore,
       maxHygieneScore: result.maxHygieneScore,
       findings: result.findings,
+      // Cross-file drift findings and the Code DNA result (duplicates, taint
+      // flows, pattern distributions) — present in every other output format
+      // (HTML/CSV/DOCX). --format json is the machine surface for CI/tooling
+      // consumers, so it must not be the one format missing them.
+      driftFindings: result.driftFindings,
+      codeDnaResult: result.codeDnaResult,
+      teaseMessages: result.teaseMessages,
+      reimplementationCandidates: result.reimplementationCandidates,
       deepInsights: result.deepInsights,
       // The deep-scan coherence audit (AI-powered) — included so --json / CI /
       // analytics consumers can read the same hero report the terminal and HTML
