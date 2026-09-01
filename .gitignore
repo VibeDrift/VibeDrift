@@ -34,3 +34,8 @@ PLAN-*.md
 
 # Claude Code local hook installs (vibedrift enable) — never committed
 .claude/settings.local.json
+
+# Contributor-side agent config (see docs/AI_CONTRIBUTOR_GUIDE.md — never belongs in the diff)
+CLAUDE.md
+.claude/
+.cursor/
