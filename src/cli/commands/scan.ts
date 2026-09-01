@@ -8,7 +8,7 @@ import { buildAnalysisContext, recomputeContextStats } from "../../core/discover
 import { parseFiles, disposeTrees } from "../../utils/ast.js";
 import { createAnalyzerRegistry } from "../../analyzers/index.js";
 import { runDriftDetection, attachEngineComposite, scoredDriftView } from "../../drift/index.js";
-import { computeScores, applySecurityMinPeerFloor, applyReimplementationConcentrationGate, SCORING_VERSION } from "../../scoring/engine.js";
+import { computeScores, applySecurityMinPeerFloor, applyReimplementationConcentrationGate, functionCountFor, SCORING_VERSION } from "../../scoring/engine.js";
 import { debug, setDebugEnabled } from "../../core/debug.js";
 import { generateTeaseMessages, countReimplementationCandidates } from "../../output/tease.js";
 import { renderTerminalOutput, renderConciseSummary, renderJsonOutput, renderStarCta, renderDashboardLink, renderLocalReportLink, DASHBOARD_SPINNER_TEXT, DASHBOARD_SPINNER_SUCCESS_SYMBOL } from "../../output/terminal.js";
@@ -524,7 +524,7 @@ async function buildScanResult(
   // rendered output — a below-floor advisory never appears as "new drift" in
   // the comparison banner. driftResult.driftFindings itself is untouched so
   // the baseline (assembleBaseline) still reads the raw representation.
-  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines);
+  const rendered = scoredDriftView(driftResult.driftFindings ?? [], ctx.totalLines, functionCountFor(ctx.files));
 
   // Scan-over-scan diff. Defaults to enabled; `--no-compare` opts out.
   // `--since` overrides the default "latest prior scan" target.

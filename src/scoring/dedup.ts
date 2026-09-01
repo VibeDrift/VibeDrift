@@ -59,7 +59,11 @@ export function deduplicateFindingsAcrossLayers(findings: Finding[]): Finding[] 
     const best = group[0];
     const sources = [...new Set(group.map((f) => f.analyzerId))];
 
-    // Annotate the winning finding with detection source info
+    // Annotate the winning finding with detection source info. On a COPY: the
+    // caller still holds the original finding objects (and re-reads them for the
+    // findings library, the session ledger and the diff), so appending to
+    // `best.message` in place rewrote a finding this function was only supposed
+    // to select — and appended again on every re-run over the same array.
     if (sources.length > 1) {
       const sourceLabels = sources.map((s) =>
         s === "ml-duplicate" ? "ML embeddings"
@@ -67,7 +71,11 @@ export function deduplicateFindingsAcrossLayers(findings: Finding[]): Finding[] 
         : s === "codedna-opseq" ? "Code DNA sequence"
         : "static analysis"
       );
-      best.message += ` [confirmed by ${sourceLabels.join(", ")}]`;
+      dedupedDuplicates.push({
+        ...best,
+        message: `${best.message} [confirmed by ${sourceLabels.join(", ")}]`,
+      });
+      continue;
     }
 
     dedupedDuplicates.push(best);
@@ -77,21 +85,33 @@ export function deduplicateFindingsAcrossLayers(findings: Finding[]): Finding[] 
 }
 
 /**
- * Create a normalized key for a finding based on its involved files.
- * For single-file findings, uses the file + analyzer as key.
- * For multi-file findings (duplicates), sorts file paths for consistency.
+ * Create a normalized key for a finding based on the FUNCTIONS it involves.
+ *
+ * The key must identify one duplicate group, not one file pair. Keying on the
+ * file set alone collapsed every distinct duplicate group spanning the same two
+ * files into a single survivor: a pair of large modules sharing five unrelated
+ * clones reported one finding, and the four dropped ones took their
+ * `dupGroupSize` mass with them, so the duplicated-function fraction the scoring
+ * engine divides by function count silently lost most of its numerator.
+ *
+ * The identity is the sorted set of `file:line` locations, which is the same for
+ * the same functions reported by different LAYERS (that cross-layer merge is the
+ * whole point of this module) and different for different groups over the same
+ * files. Files are still sorted and deduped so a 3+-file cluster merges the same
+ * way regardless of the order a layer listed it in.
  */
 function makeFilePairKey(f: Finding): string {
-  // Use ALL unique files (sorted + deduped) so 3+-file clusters merge
-  // correctly when reported by different layers. The old approach used
-  // only the first two files, which meant {A,B,C} and {A,C} could
-  // produce different keys and inflate the duplicate count.
   const files = [...new Set(
     f.locations.map((l) => l.file).filter(Boolean),
   )].sort();
 
   if (files.length >= 2) {
-    return `dup::${files.join("::")}`;
+    const sites = [...new Set(
+      f.locations
+        .filter((l) => l.file)
+        .map((l) => `${l.file}#${l.line ?? ""}`),
+    )].sort();
+    return `dup::${sites.join("::")}`;
   }
 
   // Single-file duplicate findings (e.g., static "X pairs of duplicates in this file")

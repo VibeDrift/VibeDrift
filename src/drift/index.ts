@@ -1,7 +1,7 @@
 import type { AnalysisContext, Finding } from "../core/types.js";
 import type { DriftContext, DriftFinding, DriftDetector, DriftCategory } from "./types.js";
 import { DRIFT_WEIGHTS } from "./types.js";
-import { categoryHealth, isBelowSecurityPeerFloor } from "../scoring/engine.js";
+import { categoryHealth, isBelowSecurityPeerFloor, functionCountFor } from "../scoring/engine.js";
 import { architecturalContradiction } from "./architectural-contradiction.js";
 import { conventionOscillation } from "./convention-oscillation.js";
 import { securityConsistency } from "./security-consistency.js";
@@ -116,12 +116,33 @@ export function runDriftDetection(ctx: AnalysisContext): {
   const findings = allDrift.map(driftFindingToFinding);
 
   // Per-category report bars — the 13-category breakdown for HTML/CSV/DOCX exports.
-  const driftScores = computeDriftScores(findings, ctx.totalLines);
+  // The function count must be the SAME one the composite uses, or the two read
+  // different magnitude formulas for the same findings (see computeDriftScores).
+  const driftScores = computeDriftScores(
+    findings,
+    ctx.totalLines,
+    ctx.functionCount ?? functionCountFor(ctx.files),
+  );
 
   return { findings, driftFindings: allDrift, driftScores };
 }
 
-function computeDriftScores(findings: Finding[], totalLines: number): DriftScores {
+/**
+ * @param functionCount total indexed functions, from the same memoized helper
+ *        the scoring engine uses (`functionCountFor`). Count-based categories
+ *        (semantic_duplication, phantom_scaffolding) are normalized by a
+ *        per-FUNCTION rate when it is known and fall back to a per-KLOC density
+ *        when it is 0 — two different formulas. Omitting it here meant a
+ *        category's REPORT BAR was computed with the KLOC formula while the
+ *        composite used the function-rate one, so the bar and the headline
+ *        disagreed about the same findings. 0 keeps the legacy fallback for
+ *        callers that have no context to compute it from.
+ */
+export function computeDriftScores(
+  findings: Finding[],
+  totalLines: number,
+  functionCount = 0,
+): DriftScores {
   const categories: DriftCategory[] = [
     "architectural_consistency",
     "security_posture",
@@ -160,7 +181,7 @@ function computeDriftScores(findings: Finding[], totalLines: number): DriftScore
       // full-health bar right next to the composite's N/A.
       continue;
     }
-    const health = categoryHealth(catFindings, true, klocCount);
+    const health = categoryHealth(catFindings, true, klocCount, functionCount);
     scores[cat] = {
       score: Math.round(weight * health * 10) / 10,
       maxScore: weight,
@@ -210,11 +231,16 @@ function computeDriftScores(findings: Finding[], totalLines: number): DriftScore
 export function scoredDriftView(
   driftFindings: DriftFinding[],
   totalLines: number,
+  functionCount = 0,
 ): { driftFindings: DriftFinding[]; driftScores: DriftScores } {
   const scored = driftFindings.filter(
     (d) => !isBelowSecurityPeerFloor(d) && d.subCategory !== SECURITY_SUPPRESSION_SUBCATEGORY,
   );
-  const driftScores = computeDriftScores(scored.map(driftFindingToFinding), totalLines);
+  const driftScores = computeDriftScores(
+    scored.map(driftFindingToFinding),
+    totalLines,
+    functionCount,
+  );
   return { driftFindings: scored, driftScores };
 }
 
