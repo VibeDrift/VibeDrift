@@ -23,7 +23,6 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const SRC_DIR = path.join(REPO_ROOT, "docs", "handbook");
-const ASSET_DIR = path.join(SRC_DIR, "assets");
 
 // ---------------------------------------------------------------------------
 // Config + chapter collection
@@ -185,7 +184,8 @@ function renderInline(text) {
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
   s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  // restore code spans
+  // restore code spans (NUL-byte sentinels are the intentional marker here)
+  // eslint-disable-next-line no-control-regex
   s = s.replace(/\x00(\d+)\x00/g, (_, i) => codeSpans[Number(i)]);
   return s;
 }
@@ -361,7 +361,7 @@ function renderMarkdown(md, headings, chapterSlug) {
   return out.join("\n");
 }
 
-function renderList(rawItems, chapterSlug) {
+function renderList(rawItems, _chapterSlug) {
   // parse items with indentation → tree
   const parsed = [];
   for (const raw of rawItems) {

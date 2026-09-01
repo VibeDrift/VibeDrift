@@ -35,6 +35,19 @@ function capture(): { stream: Writable; text: () => string } {
   return { stream, text: () => buf.replace(ansi, "") };
 }
 
+/** Bounded retry poll (instead of a single fixed-delay setTimeout) so this
+ *  stays reliable on a loaded CI box: keep checking every 10ms, up to
+ *  ~500ms, until the live-tape renderer has caught up. If it never catches
+ *  up, fall through so the assertion below fails with a clear diff instead
+ *  of a silent flake. */
+async function waitFor(check: () => boolean, timeoutMs = 500, intervalMs = 10): Promise<void> {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start >= timeoutMs) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 describe("runLiveTape", () => {
   it("renders new events live and prints a summary at session end", async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "vd-live-")));
@@ -49,13 +62,12 @@ describe("runLiveTape", () => {
       signal: ctrl.signal,
     });
 
-    const tick = () => new Promise((r) => setTimeout(r, 30));
     await appendEvent(dir, HASH, "live", ev("session_start"));
     await appendEvent(dir, HASH, "live", ev("edit", { detail: { file: "src/a.ts", diffstat: "+5" } }));
     await appendEvent(dir, HASH, "live", ev("flag", { findingId: "DF-1", detail: { file: "src/a.ts", category: "async_patterns", dominant: "async/await", observed: ".then() chains" } }));
-    await tick();
+    await waitFor(() => text().includes("DF-1"));
     await appendEvent(dir, HASH, "live", ev("session_end"));
-    await tick();
+    await waitFor(() => text().includes("session summary"));
 
     ctrl.abort();
     await loop;
