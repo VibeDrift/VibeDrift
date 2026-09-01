@@ -25,6 +25,7 @@ import {
   PROJECT_CONFIG_VERSION,
   type ProjectConfig,
 } from "../../core/project-config.js";
+import { assertPlausibleProjectRoot } from "../root-dir-guard.js";
 
 export const inputSchema = {
   rootDir: z.string().describe("Absolute path to the repository root"),
@@ -93,6 +94,11 @@ export async function run(args: {
   // Normalize so a relative path behaves the same whether called from the CLI
   // (which already resolves) or directly from the MCP adapter.
   const rootDir = resolve(args.rootDir);
+
+  // Defense-in-depth: rootDir is fully caller-controlled and, unlike enable,
+  // init has no Allow/Deny consent prompt of its own — this is its only
+  // check before writing .vibedrift/config.json / .vibedriftignore into it.
+  assertPlausibleProjectRoot(rootDir);
 
   const detected = await detectExcludeCandidates(rootDir);
 

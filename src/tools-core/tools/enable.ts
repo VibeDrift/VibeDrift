@@ -31,6 +31,7 @@ import {
 import { recordAnswer } from "../../session/activation.js";
 import { appendConsentReceipt } from "../../session/consent.js";
 import type { StructuredBase } from "../result.js";
+import { assertPlausibleProjectRoot } from "../root-dir-guard.js";
 
 // zod raw shape (matches the other tools-core tools).
 import { z } from "zod";
@@ -63,6 +64,11 @@ export interface EnableResult extends StructuredBase {
 }
 
 export async function run(args: EnableArgs): Promise<EnableResult> {
+  // Defense-in-depth: rootDir is fully caller-controlled and enable installs
+  // hook config into it. The forced Allow/Deny prompt + `confirm` are the
+  // primary consent gate; this rejects an implausible target outright.
+  assertPlausibleProjectRoot(args.rootDir);
+
   const { rootDir, projectHash } = repoIdentity(resolve(args.rootDir));
   const sessionsDir = defaultSessionsDir();
   const ledgerDir = join(sessionsDir, projectHash);
