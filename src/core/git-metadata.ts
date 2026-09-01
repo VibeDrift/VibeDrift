@@ -67,6 +67,14 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
  */
 export async function getChangedFiles(rootDir: string, ref?: string): Promise<string[] | null> {
   const base = ref && ref.trim() ? ref.trim() : "HEAD";
+  // `base` is passed to `git diff` as a bare positional argument (see below).
+  // A ref starting with '-' (e.g. an unsanitized --diff value like
+  // "--upload-pack=...") would be parsed by git as an OPTION instead of a
+  // revision. Reject it before it ever reaches execFile rather than let git
+  // interpret user input as a flag.
+  if (base.startsWith("-")) {
+    throw new Error(`Invalid git ref "${base}": refs starting with '-' are not allowed.`);
+  }
   try {
     const out: string[] = [];
     // --relative makes paths relative to cwd (rootDir), matching SourceFile.relativePath

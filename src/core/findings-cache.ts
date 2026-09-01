@@ -16,7 +16,7 @@
  *   3. TTL (30 days) and size cap (500MB) enforced by pruneCache().
  */
 
-import { readFile, writeFile, mkdir, readdir, stat, unlink } from "fs/promises";
+import { readFile, writeFile, mkdir, readdir, stat, unlink, utimes } from "fs/promises";
 import { vibedriftHome } from "./vibedrift-home.js";
 import { createHash } from "crypto";
 import { join } from "path";
@@ -88,7 +88,6 @@ export async function loadAnalyzerFindings(
     // Best-effort — ignore failures.
     try {
       const now = new Date();
-      const { utimes } = await import("fs/promises");
       await utimes(path, now, now);
     } catch { /* ignore */ }
     return data.findings;
