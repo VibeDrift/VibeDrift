@@ -226,25 +226,66 @@ export function classifyPatterns(files: SourceFile[]): PatternDistribution[] {
   return distributions;
 }
 
-export function patternFindings(distributions: PatternDistribution[]): Finding[] {
-  const findings: Finding[] = [];
+/**
+ * Drift needs a baseline to deviate FROM. The plurality winner is not one.
+ *
+ * The vote used to take whichever pattern had the highest count, no matter how
+ * thin the win: a 3/3/3 split across nine handlers made the first-seen pattern
+ * "the project convention" and reported the other SIX files as pattern drift,
+ * against a 33% plurality. A repo with no convention is a repo with no drift to
+ * report — that is the entropy-gate rule the cross-file drift detectors already
+ * follow, applied here. Requires both a real majority AND enough peers to
+ * believe it (a 2/1 split is a 67% share over a sample of three).
+ */
+const PATTERN_DOMINANCE_MIN = 0.6;
+const PATTERN_MIN_PEERS = 3;
 
-  if (distributions.length < 2) return findings;
-
-  // Find project-wide dominant pattern
+/**
+ * Project-wide vote over per-file dominant patterns.
+ *
+ * `dominant` is `"none"` when no pattern is dominant ENOUGH to be a baseline —
+ * see PATTERN_DOMINANCE_MIN / PATTERN_MIN_PEERS.
+ */
+export function votePatternDominance(distributions: PatternDistribution[]): {
+  dominant: ArchPattern;
+  dominantCount: number;
+  total: number;
+  consistencyScore: number;
+} {
   const patternCounts = new Map<ArchPattern, number>();
   for (const dist of distributions) {
     patternCounts.set(dist.dominantPattern, (patternCounts.get(dist.dominantPattern) ?? 0) + 1);
   }
 
-  let projectDominant: ArchPattern = "none";
-  let maxCount = 0;
+  let dominant: ArchPattern = "none";
+  let dominantCount = 0;
   for (const [pattern, count] of patternCounts) {
-    if (count > maxCount) {
-      maxCount = count;
-      projectDominant = pattern;
+    if (count > dominantCount) {
+      dominantCount = count;
+      dominant = pattern;
     }
   }
+
+  const total = distributions.length;
+  const share = total > 0 ? dominantCount / total : 0;
+  if (
+    dominant === "none" ||
+    total < PATTERN_MIN_PEERS ||
+    dominantCount < PATTERN_MIN_PEERS ||
+    share < PATTERN_DOMINANCE_MIN
+  ) {
+    return { dominant: "none", dominantCount, total, consistencyScore: Math.round(share * 100) };
+  }
+  return { dominant, dominantCount, total, consistencyScore: Math.round(share * 100) };
+}
+
+export function patternFindings(distributions: PatternDistribution[]): Finding[] {
+  const findings: Finding[] = [];
+
+  if (distributions.length < 2) return findings;
+
+  const { dominant: projectDominant, dominantCount: maxCount, total, consistencyScore } =
+    votePatternDominance(distributions);
 
   // Flag files that deviate from the project-wide dominant pattern
   for (const dist of distributions) {
@@ -253,12 +294,23 @@ export function patternFindings(distributions: PatternDistribution[]): Finding[]
         analyzerId: "codedna-pattern",
         severity: "warning",
         confidence: dist.confidence,
-        message: `Pattern drift: ${dist.relativePath} uses ${dist.dominantPattern} while ${maxCount}/${distributions.length} files use ${projectDominant}`,
+        message: `Pattern drift: ${dist.relativePath} uses ${dist.dominantPattern} while ${maxCount}/${total} files use ${projectDominant}`,
         locations: dist.signals.slice(0, 3).map((s) => ({
           file: dist.relativePath,
           line: s.line,
           snippet: s.signal,
         })),
+        // Carry the vote so the scoring engine weights this by HOW dominant the
+        // convention is, rather than reading a bare count through its
+        // size-normalized density branch. Deliberately NOT attached to the
+        // mixed-patterns finding below: that one is a within-file signal with no
+        // peer vote behind it, and stamping the project vote on it would let a
+        // 100%-consistent project zero out its damage.
+        driftSignal: {
+          consistencyScore,
+          dominantCount: maxCount,
+          totalRelevantFiles: total,
+        },
         tags: ["codedna", "pattern", "drift"],
       });
     }

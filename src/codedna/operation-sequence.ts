@@ -190,8 +190,31 @@ export function extractOperationSequences(functions: ExtractedFunction[]): Opera
   });
 }
 
+// LCS LENGTH only, in O(min(m,n)) space and with no backtracking table. Almost
+// every candidate pair fails the 0.80 ratio gate, and a pair that fails does not
+// need the shared run itself — only how long it is. Building the full DP table
+// for those was the bulk of this module's work.
+function lcsLength(a: Operation[], b: Operation[]): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0 || n === 0) return 0;
+  const [shorter, longer] = m <= n ? [a, b] : [b, a];
+  const prev = new Int32Array(shorter.length + 1);
+  const curr = new Int32Array(shorter.length + 1);
+  for (let i = 1; i <= longer.length; i++) {
+    for (let j = 1; j <= shorter.length; j++) {
+      curr[j] =
+        longer[i - 1] === shorter[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], curr[j - 1]);
+    }
+    prev.set(curr);
+  }
+  return prev[shorter.length];
+}
+
 // Longest Common Subsequence itself (the shared op run), so we can inspect what
 // the two functions actually agree on — not just how long the agreement is.
+// Needs the full table to backtrack, so it runs ONLY for pairs that already
+// cleared the ratio gate.
 function lcsSequence(a: Operation[], b: Operation[]): Operation[] {
   const m = a.length;
   const n = b.length;
@@ -256,6 +279,20 @@ function isSpecificMatch(lcsSeq: Operation[]): boolean {
   return lcsSeq.length >= MIN_GENERIC_LCS;
 }
 
+/**
+ * Upper bound on reported sequence similarities.
+ *
+ * The scan is quadratic in the number of comparable functions, and so is its
+ * OUTPUT: a repo of near-identical generated handlers can produce hundreds of
+ * thousands of pairs. Nothing downstream reads more than a small prefix —
+ * `sequenceSimilarities` feeds a drift signal and the deep-scan tease, never a
+ * per-pair report — so collecting the rest only costs memory.
+ */
+const MAX_SEQUENCE_SIMILARITIES = 500;
+
+/** Sequences are only ever compared within one domain category. */
+const EXCLUDED_DOMAINS = new Set(["general", "request_handling"]);
+
 export function findSequenceSimilarities(
   sequences: OperationSequence[],
   functions: ExtractedFunction[],
@@ -269,48 +306,57 @@ export function findSequenceSimilarities(
     domainMap.set(key, fn.domainCategory);
   }
 
-  // Only compare cross-file pairs in the same domain category
-  for (let i = 0; i < sequences.length; i++) {
-    const seqA = sequences[i];
-    if (seqA.sequence.length < 3) continue; // Too short to be meaningful
+  // Bucket by domain category FIRST. Only same-domain cross-file pairs can ever
+  // be reported, so the old all-pairs scan spent its whole quadratic budget
+  // forming pairs it was about to reject on a Map lookup. Bucketing makes the
+  // work Σ|bucket|² instead of n², which on a real repo (dozens of domains) is
+  // an order of magnitude less. Insertion order is preserved, so the emitted
+  // list stays deterministic.
+  const buckets = new Map<string, OperationSequence[]>();
+  for (const seq of sequences) {
+    if (seq.sequence.length < 3) continue; // Too short to be meaningful
+    const key = `${seq.functionRef.file}::${seq.functionRef.name}::${seq.functionRef.line}`;
+    const domain = domainMap.get(key);
+    if (!domain || EXCLUDED_DOMAINS.has(domain)) continue;
+    const bucket = buckets.get(domain);
+    if (bucket) bucket.push(seq);
+    else buckets.set(domain, [seq]);
+  }
 
-    const keyA = `${seqA.functionRef.file}::${seqA.functionRef.name}::${seqA.functionRef.line}`;
-    const domainA = domainMap.get(keyA);
+  for (const bucket of buckets.values()) {
+    for (let i = 0; i < bucket.length; i++) {
+      if (similarities.length >= MAX_SEQUENCE_SIMILARITIES) return similarities;
+      const seqA = bucket[i];
 
-    for (let j = i + 1; j < sequences.length; j++) {
-      const seqB = sequences[j];
-      if (seqB.sequence.length < 3) continue;
+      for (let j = i + 1; j < bucket.length; j++) {
+        const seqB = bucket[j];
 
-      // Must be in different files
-      if (seqA.functionRef.file === seqB.functionRef.file) continue;
+        // Must be in different files
+        if (seqA.functionRef.file === seqB.functionRef.file) continue;
 
-      // Skip pairs confined entirely to non-shippable code (tests, examples,
-      // fixtures, generated) — two test helpers sharing a workflow shape are
-      // not actionable. Mirrors the deep-scan pre-filter's all-sides rule.
-      if (
-        isNonShippablePath(seqA.functionRef.file) &&
-        isNonShippablePath(seqB.functionRef.file)
-      ) {
-        continue;
-      }
+        // Skip pairs confined entirely to non-shippable code (tests, examples,
+        // fixtures, generated) — two test helpers sharing a workflow shape are
+        // not actionable. Mirrors the deep-scan pre-filter's all-sides rule.
+        if (
+          isNonShippablePath(seqA.functionRef.file) &&
+          isNonShippablePath(seqB.functionRef.file)
+        ) {
+          continue;
+        }
 
-      // Must be in same domain category (skip "general" and "request_handling")
-      const keyB = `${seqB.functionRef.file}::${seqB.functionRef.name}::${seqB.functionRef.line}`;
-      const domainB = domainMap.get(keyB);
-      if (!domainA || !domainB || domainA !== domainB) continue;
-      if (domainA === "general" || domainA === "request_handling") continue;
+        const maxLen = Math.max(seqA.sequence.length, seqB.sequence.length);
+        const lcs = lcsLength(seqA.sequence, seqB.sequence);
+        const similarity = maxLen > 0 ? lcs / maxLen : 0;
+        if (similarity < 0.80) continue;
 
-      const lcsSeq = lcsSequence(seqA.sequence, seqB.sequence);
-      const lcs = lcsSeq.length;
-      const maxLen = Math.max(seqA.sequence.length, seqB.sequence.length);
-      const similarity = maxLen > 0 ? lcs / maxLen : 0;
+        // Gate on the shared subsequence, not just the ratio. A short shared run
+        // saturates the ratio to 1.0 on tiny functions, and a run made only of
+        // generic filler ops (TRANSFORM/BRANCH/LOOP) is the most common idiom in
+        // any codebase — neither is evidence that two functions share a workflow.
+        // Require the shared run to be specific before reporting a near-duplicate.
+        // Only now is the backtracking table worth building.
+        if (!isSpecificMatch(lcsSequence(seqA.sequence, seqB.sequence))) continue;
 
-      // Gate on the shared subsequence, not just the ratio. A short shared run
-      // saturates the ratio to 1.0 on tiny functions, and a run made only of
-      // generic filler ops (TRANSFORM/BRANCH/LOOP) is the most common idiom in
-      // any codebase — neither is evidence that two functions share a workflow.
-      // Require the shared run to be specific before reporting a near-duplicate.
-      if (similarity >= 0.80 && isSpecificMatch(lcsSeq)) {
         similarities.push({
           functionA: seqA.functionRef,
           functionB: seqB.functionRef,
@@ -318,6 +364,7 @@ export function findSequenceSimilarities(
           lcsLength: lcs,
           maxLength: maxLen,
         });
+        if (similarities.length >= MAX_SEQUENCE_SIMILARITIES) return similarities;
       }
     }
   }
