@@ -68,21 +68,34 @@ describe("findLshCandidatePairs guards", () => {
     expect(() => findLshCandidatePairs(sigs, 32, 8)).toThrow(/reads past the signature/);
   });
 
-  it("skips degenerate buckets instead of emitting O(n^2) pair strings", () => {
-    // One identical signature repeated: every band puts all members in one
-    // bucket, so the emitted pair count is m(m-1)/2 — 31,125 strings at 250
-    // members, and nothing in that bucket is discriminating.
+  it("emits O(m) star+chain pairs for a degenerate bucket instead of m(m-1)/2 or nothing", () => {
+    // One identical signature repeated: every band puts all members in the
+    // SAME oversized bucket, so skipping oversized buckets dropped the whole
+    // cluster (no other band could recover it). Exhaustive pairing is m(m-1)/2
+    // — 31,125 strings at 250 members. Star+chain keeps every member reachable
+    // at ~2·m pairs.
     const identical = sigOf("same");
     const small = Array.from({ length: 10 }, () => identical);
     expect(findLshCandidatePairs(small).size).toBe((10 * 9) / 2);
 
-    const huge = Array.from({ length: 250 }, () => identical);
-    expect(findLshCandidatePairs(huge).size).toBe(0);
+    const m = 250;
+    const huge = Array.from({ length: m }, () => identical);
+    const pairs = findLshCandidatePairs(huge);
+    expect(pairs.size).toBeGreaterThan(0);
+    expect(pairs.size).toBeLessThanOrEqual(2 * m);
+
+    const covered = new Set<number>();
+    for (const key of pairs) {
+      const [a, b] = key.split("-").map(Number);
+      covered.add(a);
+      covered.add(b);
+    }
+    expect(covered.size).toBe(m);
   });
 });
 
-describe("tokenize cleaning order", () => {
-  it("neutralizes string literals BEFORE line comments, so a URL does not swallow the file", () => {
+describe("tokenize strips strings and comments in one pass", () => {
+  it("a URL inside a string literal does not swallow the file", () => {
     // Stripping `//` first truncated the line inside the literal, leaving one
     // unbalanced quote that paired with the next quote further down and
     // collapsed everything between them into a single "STR".

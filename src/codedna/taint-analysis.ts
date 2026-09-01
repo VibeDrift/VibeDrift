@@ -107,6 +107,19 @@ interface SinkPattern {
  */
 const BARE = "(?<![\\w$.])";
 
+/**
+ * A dotted call is a sink too when the receiver is a known alias for the module
+ * or global that owns the real function: `cp.exec(cmd)` and `window.fetch(url)`
+ * are exactly the calls the bare anchor was never meant to exclude. The receiver
+ * must itself be bare, so `RE.cp.exec(` or `this.sh.exec(` — somebody's own
+ * object, not the module — still do not qualify.
+ */
+function bareOrOn(receivers: string): string {
+  return `(?:${BARE}|(?<=(?:^|[^\\w$.])(?:${receivers})\\.))`;
+}
+const EXEC_RECEIVERS = "child_process|childProcess|cp|proc|subprocess|shell|sh";
+const FETCH_RECEIVERS = "window|globalThis|self|global|node";
+
 const TAINT_SINKS: SinkPattern[] = [
   // SQL injection
   { regex: /db\.Query\s*\(/, label: "SQL query", severity: "error", category: "sql_injection" },
@@ -116,9 +129,12 @@ const TAINT_SINKS: SinkPattern[] = [
   { regex: /\.raw\s*\(/, label: "raw SQL query", severity: "error", category: "sql_injection" },
 
   // Command injection
-  { regex: new RegExp(`${BARE}exec\\s*\\(`), label: "command execution", severity: "error", category: "command_injection" },
-  { regex: new RegExp(`${BARE}execSync\\s*\\(`), label: "sync command execution", severity: "error", category: "command_injection" },
-  { regex: /child_process/, label: "child process", severity: "error", category: "command_injection" },
+  { regex: new RegExp(`${bareOrOn(EXEC_RECEIVERS)}exec\\s*\\(`), label: "command execution", severity: "error", category: "command_injection" },
+  { regex: new RegExp(`${bareOrOn(EXEC_RECEIVERS)}execSync\\s*\\(`), label: "sync command execution", severity: "error", category: "command_injection" },
+  // `child_process.exec(` / `.execSync(` belong to the two patterns above; they
+  // are excluded here so one call is not reported as two sinks. This entry still
+  // covers the module's other calls (spawn, execFile, fork, ...).
+  { regex: /child_process(?!\.exec(?:Sync)?\s*\()/, label: "child process", severity: "error", category: "command_injection" },
   { regex: /os\.system\s*\(/, label: "OS system call", severity: "error", category: "command_injection" },
   { regex: /subprocess\.(?:call|run|Popen)\s*\(/, label: "subprocess call", severity: "error", category: "command_injection" },
 
@@ -135,7 +151,7 @@ const TAINT_SINKS: SinkPattern[] = [
   { regex: new RegExp(`${BARE}Function\\s*\\(`), label: "dynamic function", severity: "error", category: "code_injection" },
 
   // Outbound (lower severity)
-  { regex: new RegExp(`${BARE}fetch\\s*\\(`), label: "outbound HTTP fetch", severity: "warning", category: "ssrf" },
+  { regex: new RegExp(`${bareOrOn(FETCH_RECEIVERS)}fetch\\s*\\(`), label: "outbound HTTP fetch", severity: "warning", category: "ssrf" },
   { regex: /http\.Get\s*\(/, label: "outbound HTTP GET", severity: "warning", category: "ssrf" },
   { regex: /axios\.\w+\s*\(/, label: "outbound HTTP request", severity: "warning", category: "ssrf" },
 ];

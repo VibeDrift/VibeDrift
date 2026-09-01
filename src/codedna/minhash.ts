@@ -28,24 +28,48 @@
 // ─── Tokenizer ────────────────────────────────────────────────────────
 
 /**
- * Order is load-bearing and mirrors `tokenizeBody` in function-extractor.ts:
- * string literals are neutralized FIRST, then block comments, then line
- * comments.
+ * Everything the tokenizer must NOT see — string literals and comments — as
+ * ONE left-to-right alternation. Group 1 captures a string literal; the
+ * comment alternatives capture nothing.
  *
- * Stripping line comments first desynchronizes quote pairing on any literal
- * containing `//` or `#` — a URL (`"https://api.example.com/v1"`), a regex
- * source, a CSS colour, a Python-style format string. The `//` truncated the
- * line mid-literal, leaving one unbalanced quote, and the next quote ANYWHERE
- * below paired with it, collapsing everything between them into a single `"STR"`
- * and leaking the prose of the following lines into the token stream.
+ * A single pass is the only correct shape; every sequential order has a bug.
+ * Neutralizing strings before comments lets an apostrophe inside a comment
+ * (`// don't do this`) open a "string" that runs to the next quote on a later
+ * line and swallows the real code between them. Neutralizing comments before
+ * strings lets a `//` inside a literal (`"https://api.example.com/v1"`)
+ * truncate the literal mid-line, leaving an unbalanced quote that pairs with
+ * the next one below. With one alternation the engine takes whichever
+ * construct STARTS first at the current position and skips past it whole, so a
+ * comment's apostrophe never opens a string and a literal's `//` never opens a
+ * comment.
+ *
+ * Quoted strings stop at end of line (JS/TS/Go/Rust/Python strings cannot span
+ * an unescaped newline, so a stray quote can damage at most one line);
+ * template literals and Python triple-quoted strings may span lines. `#` line
+ * comments are Python's; a `#` inside a JS string or comment has already been
+ * consumed by the alternative that started earlier.
+ *
+ * Shared with `tokenizeBody` in function-extractor.ts, which substitutes a
+ * different placeholder.
  */
+export const LITERALS_AND_COMMENTS =
+  /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*/g;
+
+/**
+ * Strip comments and collapse every string literal to `placeholder(quote)`,
+ * where `quote` is the literal's delimiter character (`"`, `'` or `` ` ``).
+ */
+export function stripLiteralsAndComments(
+  source: string,
+  placeholder: (quote: string) => string,
+): string {
+  return source.replace(LITERALS_AND_COMMENTS, (_match: string, literal: string | undefined) =>
+    literal === undefined ? "" : placeholder(literal[0]),
+  );
+}
+
 export function tokenize(source: string): string[] {
-  let cleaned = source.replace(/"(?:[^"\\]|\\.)*"/g, '"STR"');
-  cleaned = cleaned.replace(/'(?:[^'\\]|\\.)*'/g, "'STR'");
-  cleaned = cleaned.replace(/`(?:[^`\\]|\\.)*`/g, "`STR`");
-  cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
-  cleaned = cleaned.replace(/\/\/.*$/gm, "");
-  cleaned = cleaned.replace(/#.*$/gm, "");
+  const cleaned = stripLiteralsAndComments(source, (q) => `${q}STR${q}`);
   const tokens = cleaned.match(/[a-zA-Z_]\w*|[0-9]+(?:\.[0-9]+)?|[{}()[\];,.:=<>!+\-*/%&|^~?@#]/g);
   return tokens ?? [];
 }
@@ -242,16 +266,24 @@ function bandKey(sig: Uint32Array, bandIdx: number, rows: number): string {
 }
 
 /**
- * A band bucket this large is a degenerate collision, not a discovery.
+ * Above this bucket size, pairs are emitted sparsely instead of exhaustively.
  *
  * LSH is O(n) only while buckets stay small: one bucket of m members emits
  * m·(m-1)/2 candidate pair STRINGS, so a single bucket of 5,000 boilerplate
  * functions (generated CRUD, `export * from`, identical thin wrappers) produces
- * 12.5 million strings and dominates the whole scan's time and memory. A bucket
- * that big also carries no signal: everything in it is identical on that band,
- * so the pairs it proposes are the least discriminating ones available. Buckets
- * above this size are skipped; their members still pair through any other band
- * where they land in a small bucket.
+ * 12.5 million strings and dominates the whole scan's time and memory.
+ *
+ * Such a bucket cannot simply be skipped, though. Members that are identical on
+ * one band are usually identical on EVERY band (a 200-strong cluster of
+ * near-identical functions has near-identical signatures), so they land in the
+ * same oversized bucket in all 16 bands and would never pair anywhere — the
+ * whole cluster vanished from the report. Instead an oversized bucket emits
+ * ~2·m pairs that keep it connected for the caller's clustering: every member
+ * pairs with the bucket's first member (a star) and with its predecessor (a
+ * chain). The star reaches each member in one hop even if one chain link fails
+ * LCS verification; the chain gives each member a second, local witness. The
+ * ceiling is that not every pair inside a giant cluster is LCS-verified
+ * individually — the caller sees the cluster through its spanning pairs.
  */
 const MAX_LSH_BUCKET = 200;
 
@@ -277,6 +309,9 @@ export function findLshCandidatePairs(
       `LSH configuration reads past the signature: ${bands} bands × ${rows} rows = ${bands * rows} > ${sigLength} permutations`,
     );
   }
+  const addPair = (a: number, b2: number): void => {
+    candidates.add(a < b2 ? `${a}-${b2}` : `${b2}-${a}`);
+  };
   for (let b = 0; b < bands; b++) {
     const buckets = new Map<string, number[]>();
     for (let i = 0; i < signatures.length; i++) {
@@ -287,12 +322,18 @@ export function findLshCandidatePairs(
     }
     for (const bucket of buckets.values()) {
       if (bucket.length < 2) continue;
-      if (bucket.length > MAX_LSH_BUCKET) continue;
+      if (bucket.length > MAX_LSH_BUCKET) {
+        // Star + chain: O(m) pairs that keep the bucket connected. See MAX_LSH_BUCKET.
+        const hub = bucket[0];
+        for (let x = 1; x < bucket.length; x++) {
+          addPair(hub, bucket[x]);
+          addPair(bucket[x - 1], bucket[x]);
+        }
+        continue;
+      }
       for (let x = 0; x < bucket.length; x++) {
         for (let y = x + 1; y < bucket.length; y++) {
-          const a = bucket[x], b2 = bucket[y];
-          const key = a < b2 ? `${a}-${b2}` : `${b2}-${a}`;
-          candidates.add(key);
+          addPair(bucket[x], bucket[y]);
         }
       }
     }

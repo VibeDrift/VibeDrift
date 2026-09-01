@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Tree } from "web-tree-sitter";
 import { classifyRouteAuth } from "../../../../src/drift/route-auth-classify.js";
 
 // The deep path (unused here, but run() imports it) is stubbed so nothing hits
@@ -25,6 +26,22 @@ describe("classifyRouteAuth", () => {
   it("flags a mutating route with no visible auth guard", async () => {
     const r = await classifyRouteAuth('router.post("/x", (req, res) => { res.json({}); });', "a.ts");
     expect(r).toEqual({ isMutatingRoute: true, hasVisibleAuth: false });
+  });
+
+  it("frees the parsed tree after classifying (the MCP server is long-lived)", async () => {
+    // `parseFile` returns a tree nobody else owns; leaving it undeleted leaks
+    // one WASM tree per validate_change call for the life of the server.
+    const del = vi.spyOn(Tree.prototype, "delete");
+    try {
+      await classifyRouteAuth('router.post("/x", (req, res) => { res.json({}); });', "a.ts");
+      expect(del).toHaveBeenCalledTimes(1);
+      del.mockClear();
+      // The non-route body returns early from inside the try; the tree is still freed.
+      await classifyRouteAuth("export function add(a, b) { return a + b; }", "a.ts");
+      expect(del).toHaveBeenCalledTimes(1);
+    } finally {
+      del.mockRestore();
+    }
   });
 
   it("reports a visible auth guard on a mutating route", async () => {

@@ -8,6 +8,7 @@
 
 import type { SourceFile, SupportedLanguage } from "../core/types.js";
 import type { ExtractedFunction, FunctionRef } from "./types.js";
+import { stripLiteralsAndComments } from "./minhash.js";
 
 // Domain category detection based on function name and body content
 export function detectDomainCategory(name: string, body: string): string {
@@ -34,25 +35,20 @@ export function detectDomainCategory(name: string, body: string): string {
   return "general";
 }
 
-// Tokenize body for comparison (strip comments, normalize strings)
+// Tokenize body for comparison (strip comments, normalize strings).
 //
-// ORDER IS LOAD-BEARING: string literals are neutralized BEFORE comments.
-// A `//` inside a literal — `'https://example.invalid'` — would otherwise be
-// read as a comment start, deleting the closing quote and desynchronizing
-// quote pairing for the remainder of the body. Measured on the audited session
-// population: that leaked 45 distinct English words out of test-name literals
-// into one stored anchor, and swallowed 43% of another file's tokens.
-//
-// Block comments are stripped before line comments for the same reason in the
-// other direction: a `//` inside a block comment must not terminate scanning
-// early.
+// Strings and comments are recognised in ONE left-to-right pass
+// (`stripLiteralsAndComments` in minhash.ts): whichever construct starts first
+// wins. Stripping comments first read the `//` inside `'https://example.invalid'`
+// as a comment start, deleted the closing quote and desynchronized quote pairing
+// for the rest of the body (measured: 45 English words leaked out of test-name
+// literals into one stored anchor; 43% of another file's tokens swallowed).
+// Stripping strings first has the mirror bug: the apostrophe in `// don't`
+// paired with the next quote and swallowed the real code in between. Each
+// literal collapses to an empty pair of its own quotes, so the hash of a body
+// without string content is unchanged.
 export function tokenizeBody(body: string): string[] {
-  let cleaned = body
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
-  cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
-  cleaned = cleaned.replace(/\/\/.*$/gm, "").replace(/#.*$/gm, "");
+  const cleaned = stripLiteralsAndComments(body, (q) => q + q);
   return cleaned.match(/[a-zA-Z_]\w*|[0-9]+|[{}()[\];,.:=<>!+\-*/%&|^~?]/g) ?? [];
 }
 
