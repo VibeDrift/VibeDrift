@@ -6,6 +6,11 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Added — the Claude Code plugin ships the Drift Sessions hooks
+
+- **No repo-local install needed with the plugin.** `hooks/hooks.json` declares the same five hook groups `watch-session` installs, run through `hooks/vibedrift-hook` with `--source=plugin`. They stay inert until a repo is activated (`vibedrift enable` or `/vibedrift:setup`): a repo nobody activated is never captured, and a repo that also has the repo-local install is captured once, by that install. The wrapper uses a plugin-aware global CLI when present, skips an older one, otherwise runs `npx -y @vibedrift/cli session-hook` (a new hidden subcommand), and fails open.
+- `src/session/hook-entry.ts` is now a thin watchdog around `src/session/hook-main.ts`, which the CLI subcommand shares.
+
 ### Added — Drift Sessions see edits made through Bash
 
 - **A `PostToolUse` hook group for `Bash`.** An agent in Claude Code's bypass-permissions mode is steered to change files through Bash (python heredocs, `sed -i`, `cat >`) rather than the edit tools; on a recorded session that moved about two thirds of file changes out of the hook's sight, every fix made in answer to a flag included, so no re-check ever ran and no finding could resolve. After each Bash call the hook now finds checkable source files modified since its previous run (a per-session clock in a `.hookclock.json` sidecar; a bounded walk, no git dependency) and pushes each through the same path as an edit-tool write: inline check, an `edit` event with `toolName: "Bash"`, the finding-scoped re-check, dedupe, one advisory. Files byte-identical to the baseline's copy are skipped (a `touch`, a formatter that changed nothing). The per-file checks get a 1.2 s budget per Bash call; files past it are recorded as edits the check did not run on (`checked: false`), never dropped. The Bash command text is never recorded.

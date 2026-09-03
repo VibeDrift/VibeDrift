@@ -46,7 +46,8 @@ Then check all five, and present one short summary. Do not act on anything yet.
 3. `CLAUDE.md` (and `AGENTS.md`) — does either already contain
    `<!-- vibedrift:context:start` ? That is the managed context block.
 4. `.claude/settings.local.json` — does any hook command contain `#vibedrift-hook`?
-   That means Drift Sessions is already installed here.
+   That means a repo-local Drift Sessions install is here (it takes precedence
+   over the plugin's own hooks, which this plugin also ships).
 5. Run `claude mcp list` (skip this check if the `claude` CLI is not on PATH or
    the command errors). If it lists a second `vibedrift` server besides the
    plugin's (from the older `claude mcp add vibedrift -- npx -y @vibedrift/cli mcp`),
@@ -113,9 +114,12 @@ command, and do not hand-edit inside it.
 
 Offer it; do not assume yes. Explain honestly, in a few lines:
 
-- It installs Claude Code hooks in this project's `.claude/settings.local.json`
-  (session start, each prompt, after each edit, session stop) and writes a local
-  append-only ledger at `~/.vibedrift/sessions/<projectHash>/<sessionId>.jsonl`.
+- The plugin already ships the Claude Code hooks (session start, each prompt,
+  after each edit, after each Bash command, session stop); they stay inert until
+  the repo is activated. `enable` records the activation (and installs a
+  repo-local copy of the hooks in `.claude/settings.local.json`, which then owns
+  capture). Either way the ledger is local and append-only, at
+  `~/.vibedrift/sessions/<projectHash>/<sessionId>.jsonl`.
 - Recorded: prompts with secrets masked, edit metadata (repo-relative path plus a
   diffstat), drift flags and their outcomes. Never recorded: source code, the diff
   body, the agent's transcript file.
