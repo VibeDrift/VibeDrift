@@ -304,7 +304,12 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
       similarity: topDup.similarity,
     });
     flags.push(event);
-    const site = detected.dupSites.get(where);
+    // The query-site map is keyed on the line the counterpart had when it was
+    // INDEXED; `where` carries the line verifyCounterpart re-resolved. Look up
+    // by the indexed key, or a counterpart that merely moved would lose the
+    // site: the advisory would degrade to "this edit" and, worse, no anchor
+    // would be recorded, so the finding could never resolve.
+    const site = detected.dupSites.get(`${topDup.relativePath}:${topDup.line}`);
     if (site && event.findingId) anchors[event.findingId] = { ...site, observed: where };
     candidates.push({
       key: `${relPath}|redundancy`,

@@ -468,6 +468,36 @@ describe("runEditChecks duplicate counterpart verification", () => {
   }, 60_000);
 });
 
+describe("duplicate advisory when the counterpart moved since indexing", () => {
+  // The index records the counterpart at the line it had when the baseline was
+  // built; by flag time the file may have grown above it. verifyCounterpart
+  // re-resolves the line for the message, but the query site map is keyed on
+  // the INDEXED line, so the lookup for the agent's own function used to miss:
+  // the advisory fell back to "this edit" and, worse, no anchor was recorded,
+  // so the finding could never resolve. Both must survive a moved counterpart.
+  it("still names the agent's function and records an anchor", async () => {
+    const file = join(repo, "src", "lib", "backoff.ts");
+    const original = readFileSync(file, "utf8");
+    try {
+      writeFileSync(file, `// moved down
+// by three
+// lines
+${original}`);
+      const out = await runEditChecks(
+        opts({ sessionId: "s-dup-moved", file: join(repo, "src", "retry.ts"), body: HELPER_BODY }),
+      );
+      const dup = out.flags.find((f) => f.detail.category === "redundancy")!;
+      expect(dup.detail.similarTo).toBe("src/lib/backoff.ts:4");
+      expect(out.fyi).toContain(
+        "your exponentialBackoff (src/retry.ts:1) duplicates exponentialBackoff (src/lib/backoff.ts:4), 1.00 similar",
+      );
+      expect(out.anchors[dup.findingId!]).toMatchObject({ kind: "function", symbol: "exponentialBackoff", observed: "src/lib/backoff.ts:4" });
+    } finally {
+      writeFileSync(file, original);
+    }
+  });
+});
+
 describe("the ask for a call", () => {
   // The hook line used to end with a hint ("prefer importing it") and no
   // instruction. On a real session the agent declined two flags and accepted
