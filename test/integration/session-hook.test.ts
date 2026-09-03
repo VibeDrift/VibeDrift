@@ -484,3 +484,117 @@ describe("hook entry (integration)", () => {
     expect([0, 2]).toContain(r.status);
   });
 });
+
+describe("PostToolUse:Bash — files a Bash call changed are checked like edits", () => {
+  // On a recorded session every fix the agent made in answer to a flag went
+  // through a Bash heredoc, which the edit-tool matcher never saw, so no
+  // re-check ran and nothing could resolve; and a duplicate written the same
+  // way never raised a flag. These tests bind both directions.
+  const HELPER = [
+    "export function exponentialBackoff(attempt: number): number {",
+    "  const base = 250;",
+    "  const cap = 30_000;",
+    "  const jitter = Math.random() * 100;",
+    "  return Math.min(cap, base * 2 ** attempt) + jitter;",
+    "}",
+  ].join("\n");
+
+  function stageRepo(): { home: string; repo: string } {
+    const home = tmp("vd-home-");
+    const repo = tmp("vd-repo-");
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(join(repo, "src", "lib"), { recursive: true });
+    writeFileSync(join(repo, "CLAUDE.md"), "- Async: use async/await throughout. No .then() chains.\n");
+    for (const n of ["a", "b", "c"]) {
+      writeFileSync(join(repo, "src", `${n}.ts`), `export async function ${n}(){ return await fetch("/${n}"); }\n`);
+    }
+    writeFileSync(join(repo, "src", "lib", "backoff.ts"), `${HELPER}\n`);
+    const build = spawnSync(TSX, [BUILDER, repo], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      timeout: 60_000,
+    });
+    expect(build.status).toBe(0);
+    return { home, repo };
+  }
+
+  const bash = (repo: string, sid: string, command: string) => ({
+    session_id: sid,
+    cwd: repo,
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_input: { command },
+    tool_response: { stdout: "", stderr: "" },
+  });
+
+  it("first Bash call of a session records only a bodiless command event and detects nothing", () => {
+    const { home, repo } = stageRepo();
+    writeFileSync(join(repo, "src", "retry.ts"), `${HELPER}\n`);
+    const r = runHook(home, bash(repo, "it-bash-first", "cat > src/retry.ts <<'EOF' SECRET_CMD_TOKEN_77 EOF"));
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe("");
+    const lines = ledgerLines(home, "it-bash-first");
+    expect(lines.map((l) => JSON.parse(l).type)).toEqual(["command"]);
+    expect(lines[0]).not.toContain("SECRET_CMD_TOKEN_77");
+  });
+
+  it("flags a duplicate a Bash call wrote, naming the agent's function, via exit 2", () => {
+    const { home, repo } = stageRepo();
+    // any earlier hook run stamps the session clock
+    expect(runHook(home, { session_id: "it-bash-dup", cwd: repo, hook_event_name: "UserPromptSubmit", prompt: "add a retry helper" }).status).toBe(0);
+    // the "Bash call": a heredoc lands a near-clone on disk, then the hook fires
+    writeFileSync(join(repo, "src", "retry.ts"), `${HELPER}\n`);
+    const r = runHook(home, bash(repo, "it-bash-dup", "python3 - <<'PY' ... PY"));
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain(
+      "[vibedrift] flagged src/retry.ts (DF-1): your exponentialBackoff (src/retry.ts:1) duplicates exponentialBackoff (src/lib/backoff.ts:1), 1.00 similar",
+    );
+    const events = ledgerLines(home, "it-bash-dup").map((l) => JSON.parse(l));
+    const edit = events.find((e) => e.type === "edit");
+    expect(edit.detail).toMatchObject({ file: "src/retry.ts", toolName: "Bash", inRepo: true, checked: true });
+    expect(edit.detail.diffstat).toBeUndefined();
+    expect(edit.body).toBeUndefined();
+    expect(events.some((e) => e.type === "flag" && e.findingId === "DF-1")).toBe(true);
+  });
+
+  it("resolves a flag when a Bash call removes the flagged construct", () => {
+    const { home, repo } = stageRepo();
+    const sid = "it-bash-fix";
+    // the flag is raised through the edit tool, as on the recorded session
+    writeFileSync(join(repo, "src", "retry.ts"), `${HELPER}\n`);
+    const flagged = runHook(home, {
+      session_id: sid,
+      cwd: repo,
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: join(repo, "src", "retry.ts"), content: HELPER },
+    });
+    expect(flagged.status).toBe(2);
+    expect(flagged.stderr).toContain("(DF-1)");
+    // the fix lands through Bash: the clone is replaced by an import
+    writeFileSync(join(repo, "src", "retry.ts"), 'export { exponentialBackoff } from "./lib/backoff";\n');
+    const fixed = runHook(home, bash(repo, sid, "python3 - <<'PY' rewrite PY"));
+    expect(fixed.status).toBe(0);
+    const events = ledgerLines(home, sid).map((l) => JSON.parse(l));
+    const types = events.map((e) => e.type);
+    expect(types).toContain("command");
+    const bashEdit = events.find((e) => e.type === "edit" && e.detail.toolName === "Bash");
+    expect(bashEdit.detail.file).toBe("src/retry.ts");
+    const resolve = events.find((e) => e.type === "resolve");
+    expect(resolve).toBeTruthy();
+    expect(resolve.findingId).toBe("DF-1");
+    expect(resolve.outcome).toBe("resolved");
+  });
+
+  it("ignores a Bash call that changed nothing checkable", () => {
+    const { home, repo } = stageRepo();
+    const sid = "it-bash-noop";
+    expect(runHook(home, { session_id: sid, cwd: repo, hook_event_name: "UserPromptSubmit", prompt: "tidy" }).status).toBe(0);
+    writeFileSync(join(repo, "README.md"), "# notes\n"); // not code
+    writeFileSync(join(repo, "src", "x.test.ts"), "it('y', () => {});\n"); // excluded class
+    const r = runHook(home, bash(repo, sid, "ls"));
+    expect(r.status).toBe(0);
+    const types = ledgerLines(home, sid).map((l) => JSON.parse(l).type);
+    expect(types.filter((t) => t === "edit")).toEqual([]);
+  });
+});

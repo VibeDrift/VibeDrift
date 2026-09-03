@@ -180,7 +180,7 @@ async function writeState(opts: EditCheckOptions, state: CooldownState): Promise
  *  append and the 2s watchdog cannot preempt a synchronous JSON.parse, so an
  *  oversized cache is a skip (checked=false), never a session stall. Far
  *  above any baseline the inline entry gate would accept anyway. */
-const HOOK_BASELINE_MAX_BYTES = 8 * 1024 * 1024;
+export const HOOK_BASELINE_MAX_BYTES = 8 * 1024 * 1024;
 
 /** Read a file for counterpart verification. Null on any failure, which the
  *  verifier treats as fail-open. */
