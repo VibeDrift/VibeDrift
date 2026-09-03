@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# VibeDrift plugin hook runner. Claude Code invokes this for the five Drift
+# Sessions hook groups declared in hooks/hooks.json, with the hook payload on
+# stdin. It hands the payload to the CLI's session hook and passes the exit
+# code back (2 = an advisory to deliver, 0 = nothing to say).
+#
+# Resolution order:
+#   1. a globally installed @vibedrift/cli whose hook understands plugin mode
+#      (fast: the same entry a repo-local install runs, ~0.2s). An older
+#      global install is skipped rather than run: it would ignore
+#      --source=plugin and capture repos nobody activated.
+#   2. otherwise `npx -y @vibedrift/cli session-hook`, which fetches the
+#      package on first use and runs the same entry through the CLI.
+# Fail-open like the entry itself: only exit 2 (an advisory) is passed
+# through; any other failure here or in the fallback exits 0, so a hook
+# problem never interrupts the agent.
+set -u
+
+ENTRY=""
+if command -v npm >/dev/null 2>&1; then
+  ROOT="$(npm root -g 2>/dev/null || true)"
+  CANDIDATE="$ROOT/@vibedrift/cli/dist/session/hook-entry.js"
+  if [ -n "$ROOT" ] && [ -f "$CANDIDATE" ] && grep -q -- '--source=plugin' "$CANDIDATE" 2>/dev/null; then
+    ENTRY="$CANDIDATE"
+  fi
+fi
+
+if [ -n "$ENTRY" ]; then
+  node "$ENTRY" "$@"
+  code=$?
+  [ "$code" -eq 2 ] && exit 2
+  exit 0
+fi
+
+if command -v npx >/dev/null 2>&1; then
+  npx -y @vibedrift/cli session-hook "$@"
+  code=$?
+  [ "$code" -eq 2 ] && exit 2
+  exit 0
+fi
+
+exit 0
