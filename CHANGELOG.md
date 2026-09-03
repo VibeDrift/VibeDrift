@@ -4,6 +4,14 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## Unreleased
+
+### Changed — Drift Sessions advisories
+
+- **Every messaged advisory now ends with an ask.** "Fix it, or record your call with respond_to_flag (accept / park / decline) and one reason; if that tool is unavailable, say the reason in your reply." The line used to end with a hint and no instruction; in a recorded session the agent declined two flags and accepted two in plain chat and none of it reached the ledger. The recorded `msgToAgent` is the exact text delivered, ask included.
+- **Duplicate advisories name both functions with their lines.** `your ymOf (src/OpensOnCalendar.tsx:14) duplicates monthOf (src/calendar-utils.ts:8), 0.91 similar; prefer importing it.` The old line named only the counterpart, and an agent told "duplicates daysInMonth" removed a different function than the one the detector had matched. When only the whole-file query matched, the line says "this edit".
+- **Experimental scope flags are recorded but no longer messaged.** Measured on a real session: 22 scope flags in 7.5 hours, every one raised against an intent lock taken on a resume prompt with zero file anchors, 20 of them delivered on top of 21 real advisories. The flag stays in the ledger (the dashboard already excludes experimental flags); the agent-facing line is withheld until the check is calibrated.
+
 ## 0.20.2 — 2026-09-04
 
 **The Vibe Drift Score can no longer go up when a finding is added or down when one is fixed, and a whole-repo audit closes a set of privacy, detection and robustness gaps (#113).**
