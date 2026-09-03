@@ -15,7 +15,7 @@ import { join, relative } from "node:path";
 import { loadBaselineUnchecked, type RepoDriftBaseline } from "../core/baseline.js";
 import { detectLanguage } from "../core/language.js";
 import { detectDrift } from "./detect.js";
-import type { FindingAnchor } from "./finding-anchor.js";
+import type { AnchorSite, FindingAnchor } from "./finding-anchor.js";
 import { newActivityId, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
@@ -75,6 +75,32 @@ export function mergeCooldownState(local: CooldownState, onDisk: CooldownState):
     nextFindingSeq: Math.max(local.nextFindingSeq, onDisk.nextFindingSeq),
     lastFyi,
   };
+}
+
+/**
+ * The agent-facing line for a duplicate. Names BOTH sides: the function the
+ * agent just wrote (from the query site that saw the match) and the indexed
+ * counterpart. The old copy named only the counterpart; on a real session the
+ * agent, told "duplicates daysInMonth", removed a different function than the
+ * one the detector had anchored, and the finding could never close. When only
+ * the whole-file query matched there is no single construct to name, so the
+ * line says "this edit".
+ */
+export function formatDuplicateAdvisory(a: {
+  file: string;
+  findingId: string;
+  site: AnchorSite | undefined;
+  counterpart: { name: string; path: string; line: number };
+  similarity: number;
+}): string {
+  const mine =
+    a.site?.kind === "function" && a.site.symbol
+      ? `your ${a.site.symbol} (${a.file}${a.site.line !== undefined ? `:${a.site.line}` : ""})`
+      : "this edit";
+  return (
+    `[vibedrift] flagged ${a.file} (${a.findingId}): ${mine} duplicates ${a.counterpart.name} ` +
+    `(${a.counterpart.path}:${a.counterpart.line}), ${a.similarity.toFixed(2)} similar; prefer importing it.`
+  );
 }
 
 export interface EditCheckOptions {
@@ -271,7 +297,13 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     if (site && event.findingId) anchors[event.findingId] = { ...site, observed: where };
     candidates.push({
       key: `${relPath}|redundancy`,
-      message: `[vibedrift] flagged ${relPath} (${event.findingId}): new function duplicates ${topDup.name} at ${where} (${topDup.similarity.toFixed(2)} similar); prefer importing it.`,
+      message: formatDuplicateAdvisory({
+        file: relPath,
+        findingId: event.findingId ?? "DF-?",
+        site,
+        counterpart: { name: topDup.name, path: topDup.relativePath, line: dupStatus.line },
+        similarity: topDup.similarity,
+      }),
       event,
     });
   }
