@@ -71,6 +71,10 @@ export interface SessionEventDetail {
   decision?: "accept" | "park" | "decline";
   /** the agent's one-line reasoning for `decision`, masked + capped before write. */
   reason?: string;
+  /** resolve events only: "recheck" when `vibedrift recheck-session` cleared
+   *  the finding by re-checking it against the tree, rather than the hook's
+   *  own re-check on the agent's next edit. Consumers count those apart. */
+  via?: "recheck";
 }
 
 export interface SessionEvent {
