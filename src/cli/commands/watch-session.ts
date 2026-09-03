@@ -138,6 +138,12 @@ export async function runWatchSession(
         ? `${chalk.green("●")} Drift Sessions hooks installed (${s.file})`
         : `${chalk.dim("○")} Drift Sessions hooks not installed`,
     );
+    if (s.missing.length > 0) {
+      console.log(
+        chalk.yellow(`  missing hook group${s.missing.length === 1 ? "" : "s"}: ${s.missing.join(", ")}`) +
+          chalk.dim(" — run `vibedrift watch-session --yes --no-watch` to add"),
+      );
+    }
     console.log(chalk.dim(`  session ledger: ${ledgerDir}`));
     if (options.sync || options.names) {
       console.log(chalk.dim("  (--sync/--names not applied with --status; run them without --status)"));
@@ -236,7 +242,21 @@ export async function runWatchSession(
   // watching (consent gates INSTALLING hooks, not following an existing session).
   const already = await hooksStatus(rootDir);
   if (already.installed) {
-    console.log(`${chalk.green("●")} Drift Sessions hooks already installed (${already.file}).`);
+    if (already.missing.length > 0) {
+      // An install from before a hook group existed (the Bash group): add the
+      // missing groups in place. Consent was given at install time and the
+      // capture contract is unchanged, so no new prompt.
+      const up = await installHooks(rootDir, installOpts);
+      if (up.status === "installed") {
+        console.log(
+          `${chalk.green("●")} Drift Sessions hooks upgraded (${already.file}): added ${already.missing.join(", ")}.`,
+        );
+      } else {
+        console.log(`${chalk.green("●")} Drift Sessions hooks already installed (${already.file}).`);
+      }
+    } else {
+      console.log(`${chalk.green("●")} Drift Sessions hooks already installed (${already.file}).`);
+    }
     console.log(chalk.dim(`  session ledger: ${ledgerDir}`));
     if (options.watch) {
       await followLiveTape(projectHash, sessionsDir, rootDir, entDir, consumeCb, uploadPlan);

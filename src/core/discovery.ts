@@ -20,7 +20,7 @@ import type {
 import { detectLanguage } from "./language.js";
 import { loadGitignore } from "../utils/gitignore.js";
 
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", ".nuxt",
   "target", "vendor", "__pycache__", ".venv", "venv",
   "coverage", ".turbo", ".cache", ".idea", ".vscode",
