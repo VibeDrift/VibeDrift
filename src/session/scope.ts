@@ -63,8 +63,8 @@ export interface ScopeResult {
  * Measured on a real session (20cb5425, 2026-08-16): 22 scope flags in 7.5
  * hours, every one raised against an intent lock taken on a resume prompt
  * with zero file anchors, so every edit looked unrelated by construction. 20
- * of them were delivered into the agent's context, on top of 21 real
- * advisories, and the agent announced it would ignore them.
+ * of them were delivered into the agent's context alongside 14 real
+ * advisories in that window, and the agent announced it would ignore them.
  */
 export const SCOPE_MESSAGING = false;
 
