@@ -6,6 +6,11 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Added — Drift Sessions see edits made through Bash
+
+- **A `PostToolUse` hook group for `Bash`.** An agent in Claude Code's bypass-permissions mode is steered to change files through Bash (python heredocs, `sed -i`, `cat >`) rather than the edit tools; on a recorded session that moved about two thirds of file changes out of the hook's sight, every fix made in answer to a flag included, so no re-check ever ran and no finding could resolve. After each Bash call the hook now finds checkable source files modified since its previous run (a per-session clock in a `.hookclock.json` sidecar; a bounded walk, no git dependency) and pushes each through the same path as an edit-tool write: inline check, an `edit` event with `toolName: "Bash"`, the finding-scoped re-check, dedupe, one advisory. Files byte-identical to the baseline's copy are skipped, so a formatter run re-flags nothing. The Bash command text is never recorded.
+- **Existing installs upgrade in place.** `vibedrift watch-session --status` reports a missing hook group; a plain `vibedrift watch-session` (or `--yes --no-watch`) on an older install adds the `Bash` group without a new consent prompt.
+
 ### Changed — Drift Sessions advisories
 
 - **Every messaged advisory now ends with an ask.** "Fix it, or record your call with respond_to_flag (accept / park / decline) and one reason; if that tool is unavailable, say the reason in your reply." The line used to end with a hint and no instruction; in a recorded session the agent declined two flags and accepted two in plain chat and none of it reached the ledger. The recorded `msgToAgent` is the exact text delivered, ask included.
