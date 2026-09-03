@@ -66,6 +66,16 @@ describe("recheckProject", () => {
     expect(existsSync(sessionFilePath(sessionsDir, HASH, "s-still"))).toBe(false);
   });
 
+  it("dry run: a clearable finding is reported, nothing is appended, the sidecar is untouched", async () => {
+    const id = await raiseDup("s-dry-clearable");
+    writeFileSync(join(repo, "src", "retry.ts"), 'export { exponentialBackoff } from "./lib/backoff";\n');
+    const sidecarBefore = JSON.stringify(await readOutcomeState(sessionsDir, HASH, "s-dry-clearable"));
+    const res = await recheckProject({ rootDir: repo, projectHash: HASH, sessionsDir, baseline, sessionId: "s-dry-clearable", dryRun: true });
+    expect(res[0].resolved.map((f) => f.findingId)).toEqual([id]);
+    expect(existsSync(sessionFilePath(sessionsDir, HASH, "s-dry-clearable"))).toBe(false);
+    expect(JSON.stringify(await readOutcomeState(sessionsDir, HASH, "s-dry-clearable"))).toBe(sidecarBefore);
+  });
+
   it("resolves a finding whose construct is gone, tagging the resolve via=recheck", async () => {
     const id = await raiseDup("s-fixed");
     writeFileSync(join(repo, "src", "retry.ts"), 'export { exponentialBackoff } from "./lib/backoff";\n');

@@ -5,9 +5,11 @@
  * Why this exists: a finding resolves in-loop only when a later hook-visible
  * edit of the same file drops the anchored construct. On a recorded session
  * every fix went through Bash before the hook watched Bash, so 21 findings
- * sat "open, no call recorded" although the repo had moved on. This is the
- * honest close-out for that backlog: the same finding-scoped predicate the
- * hook uses (`recheckFile`), over each file's current content, never a guess.
+ * sat "open, no call recorded" whatever had happened to them since. This is
+ * the honest close-out for such a backlog: the same finding-scoped predicate
+ * the hook uses (`recheckFile`), over each file's current content, never a
+ * guess. Honest cuts both ways: on that session 2 of the 21 clear, and the
+ * other 19 stay open because their flagged code is still on disk.
  *
  * What it is NOT: an in-loop fix. Every resolve it appends carries
  * `detail.via = "recheck"`, and consumers count those apart from the hook's
