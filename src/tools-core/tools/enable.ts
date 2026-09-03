@@ -105,9 +105,11 @@ export async function run(args: EnableArgs): Promise<EnableResult> {
   let hooksInstalled = false;
   if (detectClaudeCode(rootDir, homedir())) {
     const existing = await hooksStatus(rootDir);
-    if (existing.installed) {
+    if (existing.installed && existing.missing.length === 0) {
       hooksInstalled = true;
     } else {
+      // Fresh install, or an older install missing a hook group (the Bash
+      // group): installHooks adds only what is absent.
       const res = await installHooks(rootDir, {
         hookCommand: resolveHookCommand(),
         sessionsDir,

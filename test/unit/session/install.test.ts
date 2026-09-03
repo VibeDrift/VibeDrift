@@ -17,7 +17,7 @@ function makeOpts(sessionsDir: string) {
 const settingsPath = (repo: string) => join(repo, ".claude", "settings.local.json");
 
 describe("installHooks", () => {
-  it("creates settings.local.json with marker-tagged hooks for all four events", async () => {
+  it("creates settings.local.json with marker-tagged hooks for every hook group", async () => {
     const repo = tmp("vd-inst-");
     const res = await installHooks(repo, makeOpts(tmp("vd-sess-")));
     expect(res.status).toBe("installed");
