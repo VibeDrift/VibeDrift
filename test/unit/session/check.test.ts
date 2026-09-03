@@ -14,7 +14,7 @@ import {
   type CooldownState,
 } from "@/session/check";
 import type { SessionEvent } from "@/session/types";
-import { formatDuplicateAdvisory } from "@/session/check";
+import { formatDuplicateAdvisory, ADVISORY_ASK } from "@/session/check";
 
 const HELPER_BODY = `export function exponentialBackoff(attempt: number): number {
   const base = 250;
@@ -466,6 +466,26 @@ describe("runEditChecks duplicate counterpart verification", () => {
     rmSync(repo3, { recursive: true, force: true });
     rmSync(sessionsDir3, { recursive: true, force: true });
   }, 60_000);
+});
+
+describe("the ask for a call", () => {
+  // The hook line used to end with a hint ("prefer importing it") and no
+  // instruction. On a real session the agent declined two flags and accepted
+  // two in plain chat, and none of it reached the ledger, because nothing
+  // told it to record a call. Every MESSAGED advisory now ends with the ask;
+  // the recorded msgToAgent is the exact text delivered.
+  it("ends a conflict advisory with the ask and records it verbatim", async () => {
+    const out = await runEditChecks(opts({ sessionId: "s-ask-conflict" }));
+    expect(out.fyi!.endsWith(ADVISORY_ASK)).toBe(true);
+    expect(out.flags.find((f) => f.msgToAgent)!.msgToAgent).toBe(out.fyi);
+  });
+  it("ends a duplicate advisory with the ask", async () => {
+    const out = await runEditChecks(
+      opts({ sessionId: "s-ask-dup", file: join(repo, "src", "retry.ts"), body: HELPER_BODY }),
+    );
+    expect(out.fyi!.endsWith(ADVISORY_ASK)).toBe(true);
+    expect(out.fyi).toContain("prefer importing it. Fix it, or record your call with respond_to_flag");
+  });
 });
 
 describe("formatDuplicateAdvisory", () => {

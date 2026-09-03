@@ -32,6 +32,17 @@ export const COOLDOWN_MS = 5 * 60_000;
  *  (at lower similarity the convention conflict is usually the better call). */
 export const STRONG_DUP_SIMILARITY = 0.9;
 
+/**
+ * Appended to every MESSAGED advisory. The line used to end with a hint and no
+ * instruction; on a real session the agent declined two flags and accepted two
+ * in plain chat and none of it reached the ledger, because nothing told it to
+ * record a call. `respond_to_flag` is the MCP tool that writes the decision;
+ * where the MCP server is not connected the fallback keeps the reason at least
+ * visible in the reply.
+ */
+export const ADVISORY_ASK =
+  " Fix it, or record your call with respond_to_flag (accept / park / decline) and one reason; if that tool is unavailable, say the reason in your reply.";
+
 /** One advisory candidate for the single-message pick: the cooldown key, the
  *  agent-facing line, and the recorded flag event it belongs to. */
 export interface AdvisoryCandidate {
@@ -314,8 +325,9 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     const last = state.lastFyi[cand.key];
     if (last !== undefined && t - last < COOLDOWN_MS) continue;
     state.lastFyi[cand.key] = t;
-    cand.event.msgToAgent = cand.message;
-    fyi = cand.message;
+    // The recorded msgToAgent is the exact text delivered, ask included.
+    cand.event.msgToAgent = cand.message + ADVISORY_ASK;
+    fyi = cand.event.msgToAgent;
     break;
   }
 
