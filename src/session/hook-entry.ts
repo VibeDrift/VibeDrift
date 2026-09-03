@@ -31,6 +31,10 @@ import type { SessionEvent } from "./types.js";
 import type { RepoDriftBaseline } from "../core/baseline.js";
 
 const SELF_TIMEOUT_MS = 2000;
+/** Wall-time budget for the per-file checks after one Bash call; the rest of
+ *  the batch is recorded unchecked. Sized to leave the watchdog headroom for
+ *  process start (~80 ms), the baseline read and the ledger writes. */
+export const BASH_CHECK_BUDGET_MS = 1200;
 
 // Arm the fail-open guard first, before the dynamic imports below run.
 const timer = setTimeout(() => {
@@ -277,6 +281,16 @@ async function main(): Promise<number> {
 
   const sessionsDir = defaultSessionsDir();
 
+  // The per-session clock the Bash path compares mtimes against. Read the
+  // previous stamp, then stamp NOW before any work: every file the tool call
+  // that triggered this run wrote already has an earlier mtime, and a
+  // self-timeout later in this run must not leave the old stamp behind, or
+  // every following Bash call would repeat the same batch and append the same
+  // edits again until some other hook event stamped the clock.
+  const previousClock = await readHookClock(sessionsDir, projectHash, event.sid);
+  const stampMs = Date.now();
+  await writeHookClock(sessionsDir, projectHash, event.sid, stampMs, previousClock.recorded);
+
   /**
    * One in-repo edit, whatever tool made it: run the inline check BEFORE the
    * ledger write so the recorded event carries the check's real outcome (the
@@ -405,20 +419,41 @@ async function main(): Promise<number> {
    * edit. The hook keeps a per-session clock (when its previous run finished);
    * checkable source files with a newer mtime are read from disk and pushed
    * through processEdit with toolName "Bash" and no diffstat (there is no hunk,
-   * the whole file is the body). The first run of a session has no clock and
-   * detects nothing. The baseline is loaded once for the whole batch.
+   * the whole file is the body). The clock is stamped at the START of every
+   * hook run, so only a Bash call that is the first hook event of a session
+   * finds none and detects nothing. The baseline is loaded once for the batch.
    *
    * A touched file whose content is byte-identical to the baseline's copy is
-   * skipped: a formatter or a `touch` moves mtimes without writing anything
-   * new, and re-checking an unchanged templated file against the index would
-   * flag it as a duplicate of its own siblings. Only content the baseline has
-   * not seen is checked.
+   * skipped: a `touch`, or a formatter that changed nothing, moves the mtime
+   * without writing anything new, and re-checking an unchanged templated file
+   * against the index would flag it as a duplicate of its own siblings. A file
+   * whose bytes did change is checked whole, as a Write of it would be.
    */
-  async function processBashChanges(sid: string, v: SessionEvent["v"]): Promise<string | null> {
-    const clock = await readHookClock(sessionsDir, projectHash, sid);
+  async function processBashChanges(
+    sid: string,
+    v: SessionEvent["v"],
+    clock: { lastMs?: number; recorded?: Record<string, number> },
+  ): Promise<string | null> {
     if (clock.lastMs === undefined) return null;
-    const { files } = await changedSourceFiles(rootDir, clock.lastMs);
+    const walk = await changedSourceFiles(rootDir, clock.lastMs);
+    // A file the previous Bash run already recorded, at the same mtime, is
+    // not an edit again: the mtime slack would otherwise re-detect a file
+    // written just before the previous stamp on every quick follow-up call.
+    const files = walk.files.filter((rel) => clock.recorded?.[rel] !== walk.mtimes[rel]);
+    // Remember what THIS run saw, whatever happens to it below, so the next
+    // run can skip it. Best-effort, like the stamp itself.
+    const seen: Record<string, number> = {};
+    for (const rel of walk.files) seen[rel] = walk.mtimes[rel];
+    await writeHookClock(sessionsDir, projectHash, sid, stampMs, seen);
     if (files.length === 0) return null;
+    // Time budget for the per-file checks. The walk is cheap (single-digit
+    // milliseconds); the checks it feeds are not: measured 65 to 70 ms per
+    // file on a 458-entry index and about 180 ms on a 1,600-entry one, so a
+    // 20-file batch can outrun the 2s self-timeout. Files past the budget are
+    // still recorded, as edits the check did NOT run on (checked: false), so
+    // the ledger stays complete and the density denominator stays honest.
+    const budgetMs = Number(process.env.VIBEDRIFT_BASH_CHECK_BUDGET_MS ?? BASH_CHECK_BUDGET_MS);
+    const batchStart = Date.now();
     let cached: Promise<RepoDriftBaseline | null> | undefined;
     const loadBaselineFor = (root: string): Promise<RepoDriftBaseline | null> =>
       (cached ??= loadBaselineUnchecked(root, HOOK_BASELINE_MAX_BYTES));
@@ -451,6 +486,12 @@ async function main(): Promise<number> {
         mode: "passive",
         detail: { file: rel, toolName: "Bash", inRepo: true },
       };
+      if (Date.now() - batchStart >= budgetMs) {
+        // Over budget: recorded, not checked. Never a fabricated `checked`.
+        ev.detail.checked = false;
+        await appendEvent(sessionsDir, projectHash, sid, ev);
+        continue;
+      }
       const f = await processEdit(ev, content, abs, loadBaselineFor);
       if (!fyi && f) fyi = f;
     }
@@ -477,13 +518,9 @@ async function main(): Promise<number> {
     }
 
     if (event.type === "command") {
-      fyi = await processBashChanges(event.sid, event.v);
+      fyi = await processBashChanges(event.sid, event.v, previousClock);
     }
   }
-
-  // Stamp the clock LAST, after every read of the tree this run made, so the
-  // next Bash-path run compares against a time no edit of ours postdates.
-  await writeHookClock(sessionsDir, projectHash, event.sid, Date.now());
 
   if (fyi) {
     process.stderr.write(`${fyi}\n`);

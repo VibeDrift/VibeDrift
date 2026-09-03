@@ -39,8 +39,13 @@ export const BASH_CHANGES_MAX_FILE_BYTES = 1024 * 1024;
 export const MTIME_SLACK_MS = 1000;
 
 export interface HookClock {
-  /** Wall time (ms since epoch) the previous hook run finished. */
+  /** Wall time (ms since epoch) the previous hook run stamped at its start. */
   lastMs?: number;
+  /** Files the previous Bash-path run recorded, with the mtime each had. A
+   *  file whose mtime is unchanged since then was already recorded once and
+   *  is not an edit again, however close to the clock it sits (the mtime
+   *  slack would otherwise re-detect it on the next Bash call). */
+  recorded?: Record<string, number>;
 }
 
 export function hookClockPath(sessionsDir: string, projectHash: string, sessionId: string): string {
@@ -55,9 +60,14 @@ export async function readHookClock(
   try {
     const raw = await readFile(hookClockPath(sessionsDir, projectHash, sessionId), "utf8");
     const parsed = JSON.parse(raw) as Partial<HookClock>;
-    return typeof parsed.lastMs === "number" && Number.isFinite(parsed.lastMs)
-      ? { lastMs: parsed.lastMs }
-      : {};
+    if (typeof parsed.lastMs !== "number" || !Number.isFinite(parsed.lastMs)) return {};
+    const recorded: Record<string, number> = {};
+    if (parsed.recorded && typeof parsed.recorded === "object") {
+      for (const [k, v] of Object.entries(parsed.recorded)) {
+        if (typeof v === "number" && Number.isFinite(v)) recorded[k] = v;
+      }
+    }
+    return { lastMs: parsed.lastMs, recorded };
   } catch {
     return {};
   }
@@ -68,10 +78,11 @@ export async function writeHookClock(
   projectHash: string,
   sessionId: string,
   lastMs: number,
+  recorded: Record<string, number> = {},
 ): Promise<void> {
   try {
     await mkdir(join(sessionsDir, safeSegment(projectHash)), { recursive: true, mode: 0o700 });
-    await writeFile(hookClockPath(sessionsDir, projectHash, sessionId), JSON.stringify({ lastMs }), {
+    await writeFile(hookClockPath(sessionsDir, projectHash, sessionId), JSON.stringify({ lastMs, recorded }), {
       mode: 0o600,
     });
   } catch {
@@ -89,6 +100,8 @@ export interface ChangedFilesOptions {
 export interface ChangedFilesResult {
   /** repo-relative, forward slashes, code-unit sorted */
   files: string[];
+  /** mtime (ms) of each file in `files`, for the caller to remember */
+  mtimes: Record<string, number>;
   /** true when a bound (files, visited, deadline) cut the walk short */
   truncated: boolean;
 }
@@ -111,6 +124,7 @@ export async function changedSourceFiles(
   const threshold = sinceMs - MTIME_SLACK_MS;
 
   const found: string[] = [];
+  const mtimes: Record<string, number> = {};
   let visited = 0;
   let truncated = false;
   const stack: string[] = [rootDir];
@@ -151,6 +165,7 @@ export async function changedSourceFiles(
       if (info.size > BASH_CHANGES_MAX_FILE_BYTES) continue;
       if (info.mtimeMs < threshold) continue;
       found.push(rel);
+      mtimes[rel] = info.mtimeMs;
       if (found.length >= maxFiles) {
         truncated = true;
         break;
@@ -162,5 +177,5 @@ export async function changedSourceFiles(
   // Code-unit order, never localeCompare: the same tree must yield the same
   // order on every machine.
   found.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return { files: found, truncated };
+  return { files: found, mtimes, truncated };
 }

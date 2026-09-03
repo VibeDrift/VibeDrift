@@ -40,6 +40,7 @@ describe("changedSourceFiles", () => {
     writeAt(root, ".hidden/h.ts", "export const h = 1;\n", NEW); // dot dir
     const r = await changedSourceFiles(root, CLOCK);
     expect(r.files).toEqual(["src/alpha.ts", "src/zeta.ts"]);
+    expect(r.mtimes["src/alpha.ts"]).toBe(NEW);
     expect(r.truncated).toBe(false);
   });
 
@@ -84,7 +85,7 @@ describe("changedSourceFiles", () => {
 
   it("never throws on an unreadable root", async () => {
     const r = await changedSourceFiles(join(tmp("vd-bash-none-"), "does-not-exist"), CLOCK);
-    expect(r).toEqual({ files: [], truncated: false });
+    expect(r).toEqual({ files: [], mtimes: {}, truncated: false });
   });
 });
 
@@ -93,8 +94,10 @@ describe("hook clock", () => {
     const sessions = tmp("vd-clock-");
     expect(await readHookClock(sessions, "hash1", "s1")).toEqual({});
     await writeHookClock(sessions, "hash1", "s1", 1234);
-    expect(await readHookClock(sessions, "hash1", "s1")).toEqual({ lastMs: 1234 });
-    expect(JSON.parse(readFileSync(hookClockPath(sessions, "hash1", "s1"), "utf8"))).toEqual({ lastMs: 1234 });
+    expect(await readHookClock(sessions, "hash1", "s1")).toEqual({ lastMs: 1234, recorded: {} });
+    expect(JSON.parse(readFileSync(hookClockPath(sessions, "hash1", "s1"), "utf8"))).toEqual({ lastMs: 1234, recorded: {} });
+    await writeHookClock(sessions, "hash1", "s1", 1234, { "src/a.ts": 99, "src/b.ts": Number.NaN });
+    expect(await readHookClock(sessions, "hash1", "s1")).toEqual({ lastMs: 1234, recorded: { "src/a.ts": 99 } });
     writeFileSync(hookClockPath(sessions, "hash1", "s1"), "{ nope");
     expect(await readHookClock(sessions, "hash1", "s1")).toEqual({});
     writeFileSync(hookClockPath(sessions, "hash1", "s1"), JSON.stringify({ lastMs: "soon" }));

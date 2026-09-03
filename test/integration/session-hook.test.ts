@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectFileNames } from "@/session/file-names";
@@ -12,11 +12,11 @@ const ENTRY = join(process.cwd(), "src", "session", "hook-entry.ts");
 const BUILDER = join(process.cwd(), "test", "helpers", "session-build-baseline.ts");
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 
-function runHook(home: string, payload: unknown, rawInput?: string) {
+function runHook(home: string, payload: unknown, rawInput?: string, extraEnv: Record<string, string> = {}) {
   return spawnSync(TSX, [ENTRY], {
     input: rawInput ?? JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "" },
+    env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "", ...extraEnv },
     timeout: 30_000,
   });
 }
@@ -584,6 +584,64 @@ describe("PostToolUse:Bash — files a Bash call changed are checked like edits"
     expect(resolve).toBeTruthy();
     expect(resolve.findingId).toBe("DF-1");
     expect(resolve.outcome).toBe("resolved");
+  });
+
+  it("skips a touched file whose bytes match the baseline, checks it once the bytes change", () => {
+    const { home, repo } = stageRepo();
+    const sid = "it-bash-touch";
+    expect(runHook(home, { session_id: sid, cwd: repo, hook_event_name: "UserPromptSubmit", prompt: "tidy" }).status).toBe(0);
+    // `touch`: the mtime moves, the bytes do not — nothing to check
+    const a = join(repo, "src", "a.ts");
+    const now = new Date();
+    utimesSync(a, now, now);
+    const touched = runHook(home, bash(repo, sid, "touch src/a.ts"));
+    expect(touched.status).toBe(0);
+    expect(ledgerLines(home, sid).map((l) => JSON.parse(l)).filter((e) => e.type === "edit")).toEqual([]);
+    // a real (whitespace) change: checked whole, as a Write would be
+    writeFileSync(a, readFileSync(a, "utf8").replace("return await", "return  await"));
+    const changed = runHook(home, bash(repo, sid, "prettier --write src/a.ts"));
+    const edits = ledgerLines(home, sid).map((l) => JSON.parse(l)).filter((e) => e.type === "edit");
+    expect(edits.map((e) => [e.detail.file, e.detail.toolName, e.detail.checked])).toEqual([["src/a.ts", "Bash", true]]);
+    expect([0, 2]).toContain(changed.status);
+  });
+
+  it("stamps the session clock BEFORE the per-file checks run", () => {
+    // A self-timeout inside the batch must not leave the previous stamp
+    // behind, or every following Bash call would re-detect and re-append the
+    // same edits. The stamp therefore precedes the checks: the clock file's
+    // time is at or before the Bash-derived edit event's timestamp.
+    const { home, repo } = stageRepo();
+    const sid = "it-bash-clock";
+    expect(runHook(home, { session_id: sid, cwd: repo, hook_event_name: "UserPromptSubmit", prompt: "add a retry helper" }).status).toBe(0);
+    writeFileSync(join(repo, "src", "retry.ts"), `${HELPER}\n`);
+    expect(runHook(home, bash(repo, sid, "cat > src/retry.ts")).status).toBe(2);
+    const sessions = join(home, ".vibedrift", "sessions");
+    const hashDir = readdirSync(sessions)[0];
+    const clock = JSON.parse(readFileSync(join(sessions, hashDir, `${sid}.hookclock.json`), "utf8"));
+    const edit = ledgerLines(home, sid).map((l) => JSON.parse(l)).find((e) => e.type === "edit");
+    expect(clock.lastMs).toBeLessThanOrEqual(Date.parse(edit.ts));
+    // and the very next Bash call, with nothing new on disk, detects nothing
+    const again = runHook(home, bash(repo, sid, "ls"));
+    expect(again.status).toBe(0);
+    expect(ledgerLines(home, sid).map((l) => JSON.parse(l)).filter((e) => e.type === "edit")).toHaveLength(1);
+  });
+
+  it("records files past the check budget as unchecked edits instead of outrunning the watchdog", () => {
+    const { home, repo } = stageRepo();
+    const sid = "it-bash-budget";
+    expect(runHook(home, { session_id: sid, cwd: repo, hook_event_name: "UserPromptSubmit", prompt: "add helpers" }).status).toBe(0);
+    writeFileSync(join(repo, "src", "one.ts"), `${HELPER}\n`);
+    writeFileSync(join(repo, "src", "two.ts"), `${HELPER.replace("exponentialBackoff", "linearBackoff")}\n`);
+    const r = runHook(home, bash(repo, sid, "python3 - <<'PY' ... PY"), undefined, { VIBEDRIFT_BASH_CHECK_BUDGET_MS: "0" });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe("");
+    const events = ledgerLines(home, sid).map((l) => JSON.parse(l));
+    const edits = events.filter((e) => e.type === "edit");
+    expect(edits.map((e) => [e.detail.file, e.detail.toolName, e.detail.checked])).toEqual([
+      ["src/one.ts", "Bash", false],
+      ["src/two.ts", "Bash", false],
+    ]);
+    expect(events.some((e) => e.type === "flag")).toBe(false);
   });
 
   it("ignores a Bash call that changed nothing checkable", () => {
