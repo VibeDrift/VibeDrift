@@ -55,19 +55,24 @@ packages:
     proxy: npmjs
 log: { type: stdout, level: warn }
 EOF
-# Fetch verdaccio into the npx cache FIRST, in the foreground, with short fetch
-# timeouts and a retry loop, so the start-up wait below never includes the
-# download. npm's default fetch timeout is five minutes, so a stalled registry
-# connection sits there silently: nine rehearsal runs on 2026-09-03 died with
-# "verdaccio did not start" and nothing but npm's deprecation warnings in the
-# log, even with a 120 s wait. Measured locally: a warm npx cache answers in
-# 1 s, a cold fetch takes about 25 s, a hung connection under npm defaults is
-# still hanging at 90 s, and with the bounds below a dead registry fails an
-# attempt in about 75 s. CI keeps ~/.npm/_npx across runs (see ci.yml), so the
-# common case is the 1 s one.
+# Fetch verdaccio into the npx cache FIRST, in the foreground and bounded, so
+# the start-up wait below never includes the download. Eight rehearsal runs on
+# 2026-09-03 died with "verdaccio did not start" and nothing in verdaccio's own
+# log, first at a 30 s wait and then at 120 s; verdaccio never ran, npx was
+# still downloading it. npm's fetch-timeout bounds an IDLE socket only, and its
+# default is five minutes, so a registry that accepts a connection and then
+# stalls hangs almost indefinitely (measured: still hanging at 90 s under npm
+# defaults, 11 s with the bound below). npm does not bound TCP connect at all,
+# so an unreachable registry costs the OS connect timeout instead, about 75 s
+# on macOS and longer on Linux; `timeout` caps that when it is installed.
+#
+# Measured cold fetch times ranged from 14 s to over 120 s, and that tail is
+# the bug; a warm npx cache answers in 1 s. Three attempts, because partial
+# progress stays in the npm cache and a retry resumes from it.
 VERDACCIO_SPEC="${REHEARSAL_VERDACCIO_SPEC:-verdaccio@5.33.0}"
+FETCH_CAP=""; command -v timeout >/dev/null 2>&1 && FETCH_CAP="timeout ${REHEARSAL_FETCH_CAP_S:-90}"
 fetch_verdaccio() {
-  npm_config_fetch_timeout=10000 npm_config_fetch_retries=0 \
+  $FETCH_CAP env npm_config_fetch_timeout=10000 npm_config_fetch_retries=0 \
     npx --yes "$VERDACCIO_SPEC" --version >"$WORK/verdaccio-fetch.log" 2>&1
 }
 for attempt in 1 2 3; do

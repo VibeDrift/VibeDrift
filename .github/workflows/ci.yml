@@ -44,12 +44,16 @@ jobs:
           cache: npm
       - run: npm ci
       # The rehearsal runs Verdaccio through npx, which installs it under the
-      # npm cache in _npx (73 MB). Keeping that across runs makes the common
-      # case no download at all: measured locally, a warm _npx answers in 1 s
-      # against 26 s cold. setup-node's own npm cache is keyed on the lockfile
-      # and saved only on a miss, so it cannot be relied on to hold _npx.
-      # Keep the version in the key in step with REHEARSAL_VERDACCIO_SPEC in
-      # scripts/release-rehearsal.sh.
+      # npm cache in _npx. A warm _npx answers in 1 s against 14 s or more
+      # cold. GitHub scopes caches by ref, so a pull request's first run is
+      # always a miss and downloads cold; this pays off once main has run CI
+      # with the step and pull requests can restore from the default branch.
+      # The bounded fetch in scripts/release-rehearsal.sh, not this cache, is
+      # what makes a cold run reliable. setup-node's own npm cache is keyed on
+      # the lockfile and saved only on a miss, so it cannot be relied on to
+      # hold _npx. Keep the version in the key in step with
+      # REHEARSAL_VERDACCIO_SPEC in scripts/release-rehearsal.sh; a corrupt
+      # _npx would persist under a static key until the key is bumped.
       - uses: actions/cache@v4
         with:
           path: ~/.npm/_npx
