@@ -6,6 +6,16 @@ import { run } from "@/tools-core/tools/enable";
 import { loadActivation, projectStatus } from "@/session/activation";
 import { repoIdentity } from "@/session/repo";
 
+/** A plugin install directory that actually carries the hooks, which is what
+ *  vibedriftPluginActive now requires: an older cached copy is installed and
+ *  enabled yet ships none, and must NOT suppress the repo-local install. */
+function pluginInstallWithHooks(homeDir: string): string {
+  const dir = join(homeDir, ".claude", "plugins", "cache", "vibedrift", "vibedrift", "0.21.0");
+  mkdirSync(join(dir, "hooks"), { recursive: true });
+  writeFileSync(join(dir, "hooks", "hooks.json"), JSON.stringify({ hooks: {} }));
+  return dir;
+}
+
 const prev = process.env.VIBEDRIFT_HOME;
 afterEach(() => {
   if (prev === undefined) delete process.env.VIBEDRIFT_HOME;
@@ -54,7 +64,7 @@ describe("enable tool core (O18)", () => {
     writeFileSync(join(homeDir, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "vibedrift@vibedrift": true } }));
     writeFileSync(
       join(homeDir, ".claude", "plugins", "installed_plugins.json"),
-      JSON.stringify({ version: 2, plugins: { "vibedrift@vibedrift": [{ scope: "user", installPath: "/x", version: "0.21.0" }] } }),
+      JSON.stringify({ version: 2, plugins: { "vibedrift@vibedrift": [{ scope: "user", installPath: pluginInstallWithHooks(homeDir), version: "0.21.0" }] } }),
     );
     const res = await run({ rootDir: repo, confirm: "yes", homeDir });
     expect(res.action).toBe("enabled");
