@@ -6,6 +6,11 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Added — the in-loop duplicate check sees what the session wrote
+
+- **A session overlay index.** The baseline's duplicate index is built at scan time and never grew during a session; on a recorded session two byte-identical functions written fifteen minutes apart raised no flag, and a real duplicate was paired with the wrong counterpart because the right one was written after the scan. After every checked edit the file's functions are now signed like the baseline's and kept in a per-session `.overlay.json` sidecar (500 functions, oldest file evicted first); every other file's entries join the queried index, so a duplicate of something written minutes ago is flagged and named with where it was first written. A file never matches itself; re-check semantics are unchanged.
+- **A stale baseline rebuilds itself at Stop.** When a session has written code the persisted baseline never saw and no rebuild ran in the last ten minutes, the Stop hook spawns a detached full rebuild, so the next session's checks compare against the current tree.
+
 ### Added — the Claude Code plugin ships the Drift Sessions hooks
 
 - **No repo-local install needed with the plugin.** `hooks/hooks.json` declares the same five hook groups `watch-session` installs, run through `hooks/vibedrift-hook` with `--source=plugin`. They capture nothing until a repo is activated (`vibedrift enable` or `/vibedrift:setup`; only the one-time SessionStart nudge speaks before that). With the plugin installed and enabled, `enable` and the MCP `enable` tool record the activation without writing a repo-local hook install (result field `hooksVia: "plugin"`); an existing repo-local install is kept, upgraded, and owns capture, so a repo is never captured twice. The wrapper uses a plugin-aware global CLI when present, skips an older one, otherwise runs `npx -y @vibedrift/cli session-hook` (a new hidden subcommand), and fails open.
