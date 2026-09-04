@@ -191,6 +191,7 @@ vibedrift watch-session --status      # is it installed for this repo?
 vibedrift watch-session --no-watch    # install without following the tape
 vibedrift watch-session --uninstall   # remove the agent hooks
 vibedrift watch-session --sync on     # opt in to the hosted dashboard
+vibedrift recheck-session             # clear open findings whose flagged code is gone (recorded apart from in-loop fixes)
 ```
 
 Sync is off by default. Turning it on uploads a derived projection only, meaning findings, outcomes, and metadata, to [vibedrift.ai/dashboard/sessions](https://vibedrift.ai/dashboard/sessions). Never your code or your prompts, and file paths travel as per-repo hashes rather than real paths.
@@ -317,6 +318,7 @@ To gate locally instead, `vibedrift hook install` writes a git pre-push hook tha
 | `vibedrift watch-session [path]` | [Drift Sessions](#drift-sessions-preview), the live agent tape (preview) |
 | `vibedrift enable [path]` | [Drift Sessions](#drift-sessions-preview): activate this repo — typing this is the consent; records prompts (secrets masked) + edit metadata to a local ledger |
 | `vibedrift decline [path]` | [Drift Sessions](#drift-sessions-preview): decline for this repo — never asked again, capture stays off (reverse anytime with `vibedrift enable`) |
+| `vibedrift recheck-session [path]` | Re-check open Drift Session findings against the tree; clears are recorded apart from in-loop fixes (`--dry-run`, `--session`, `--json`) |
 | `vibedrift mcp` | Run the [MCP server](#the-mcp-server-your-agent-asks) over stdio |
 | `vibedrift hook <action>` | Manage the **git** pre-push drift gate, not the agent hooks (install is Pro) |
 | `vibedrift login` / `logout` | Account auth |

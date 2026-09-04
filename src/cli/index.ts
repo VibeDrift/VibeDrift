@@ -305,6 +305,25 @@ program
     });
   });
 
+program
+  .command("recheck-session")
+  .description(
+    "Drift Sessions: re-check this repo's open findings against the tree as it stands and clear the ones whose flagged construct is gone (recorded as cleared on re-check, apart from in-loop fixes)",
+  )
+  .argument("[path]", "path to project directory", ".")
+  .option("--session <id>", "only this session id (default: every session with open findings)")
+  .option("--dry-run", "report what would clear; write nothing")
+  .option("--json", "machine-readable output")
+  .action(async (path: string, options) => {
+    const { runRecheckSession } = await import("./commands/recheck-session.js");
+    const status = await runRecheckSession(path, {
+      sessionId: options.session,
+      dryRun: options.dryRun === true,
+      json: options.json === true,
+    });
+    if (status === "no_baseline") process.exitCode = 1;
+  });
+
 // ──── Drift Sessions activation answers ────
 program
   .command("enable")

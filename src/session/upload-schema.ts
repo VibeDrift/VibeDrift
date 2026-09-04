@@ -66,6 +66,10 @@ export interface UploadEvent {
   outcome?: "resolved" | "open" | "held";
   mode?: "passive" | "blocking";
   experimental?: boolean;
+  /** resolve events only: "recheck" when the CLI's recheck-session command
+   *  produced the resolve (a re-check against the tree, not the agent's next
+   *  edit). Absent on hook resolves. */
+  via?: "recheck";
   /** the +N line count only, never the diff. */
   diffLines?: number;
   /** edit events only: whether the inline drift check actually ran on this
@@ -166,6 +170,9 @@ export function toUploadEvent(ev: SessionEvent, opts: UploadMapOptions = {}): Up
       if (ev.findingId) u.findingId = ev.findingId;
       if (d.file) u.fileHash = hashPath(ev.projectHash, d.file);
       u.outcome = ev.type === "resolve" ? "resolved" : "held";
+      // A bounded label, never free text: the dashboard counts a re-check
+      // clear apart from the hook's own resolve.
+      if (ev.type === "resolve" && d.via === "recheck") u.via = "recheck";
       break;
     }
     case "mcp_verdict": {

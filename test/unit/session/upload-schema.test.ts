@@ -191,3 +191,36 @@ describe("toUploadEvent — derived-only invariant", () => {
     expect(on.taskLabel).toBeDefined();
   });
 });
+
+describe("resolve via recheck", () => {
+  const base = {
+    v: 1 as const,
+    sid: "s1",
+    aid: "a1",
+    ts: "2026-09-03T12:00:00.000Z",
+    agent: "claude-code" as const,
+    projectHash: "feedfacefeedface",
+    channel: "hook" as const,
+    mode: "passive" as const,
+  };
+  it("carries the bounded via label on a recheck resolve, and nothing else", () => {
+    const u = toUploadEvent({
+      ...base,
+      type: "resolve",
+      findingId: "DF-2",
+      detail: { file: "src/x.ts", category: "redundancy", via: "recheck" },
+      outcome: "resolved",
+    });
+    expect(u).toMatchObject({ type: "resolve", findingId: "DF-2", outcome: "resolved", via: "recheck" });
+    expect(JSON.stringify(u)).not.toContain("src/x.ts");
+  });
+  it("leaves via absent on a hook resolve and on a flag", () => {
+    const r = toUploadEvent({ ...base, type: "resolve", findingId: "DF-3", detail: { file: "src/y.ts", category: "redundancy" }, outcome: "resolved" });
+    expect(r).toBeTruthy();
+    expect("via" in r!).toBe(false);
+    const f = toUploadEvent({ ...base, type: "flag", findingId: "DF-4", detail: { file: "src/y.ts", category: "redundancy", via: "recheck" }, outcome: null });
+    expect(f).toBeTruthy();
+    expect("via" in f!).toBe(false);
+  });
+});
+
