@@ -118,6 +118,42 @@ func do() {
       });
     }
 
+    it("does NOT flag Go's named-return idiom: assign the named result, then return", async () => {
+      // `func (r Render) Render(w) (err error) { _, err = w.Write(b); return }`
+      // assigns the NAMED result and returns it — that is how the error
+      // propagates, not a dropped error. The original heuristic excluded an
+      // immediately-following `return` for exactly this; the rework dropped
+      // that exclusion. Measured on three real Go repos: 12 lines flagged
+      // this way, 9 of them in gin, where they were half the whole flag set.
+      const content = `package main
+
+func write(w io.Writer, b []byte) (err error) {
+	_, err = w.Write(b)
+	return
+}
+`;
+      const ctx = makeCtx([{ relativePath: "render.go", content }]);
+      const findings = await languageSpecificAnalyzer.analyze(ctx);
+      expect(findings.find((f) => f.tags.includes("unchecked-error"))).toBeUndefined();
+    });
+
+    it("still flags a dropped err when the return is NOT the immediately following line", async () => {
+      // Non-vacuity for the case above: only the FIRST following line counts
+      // as the named-return shape. A `return` further down the window is a
+      // different statement and must not silence a genuinely dropped error.
+      const content = `package main
+
+func bad() error {
+	err := f()
+	fmt.Println("done")
+	return nil
+}
+`;
+      const ctx = makeCtx([{ relativePath: "bad2.go", content }]);
+      const findings = await languageSpecificAnalyzer.analyze(ctx);
+      expect(findings.find((f) => f.tags.includes("unchecked-error"))).toBeDefined();
+    });
+
     it("flags a genuinely unchecked err (assigned, then never referenced again)", async () => {
       const content = `package main
 

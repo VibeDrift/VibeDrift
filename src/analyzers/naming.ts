@@ -23,6 +23,15 @@ type Convention = "camelCase" | "snake_case" | "PascalCase" | "SCREAMING_SNAKE";
 function detectConvention(name: string): Convention | null {
   if (/^[A-Z][A-Z0-9_]+$/.test(name)) return "SCREAMING_SNAKE";
   if (/^[A-Z][a-zA-Z0-9]*$/.test(name)) return "PascalCase";
+  // A single all-lowercase word (`main`, `config`, `run`) is valid in BOTH
+  // camelCase and snake_case, so it carries no convention signal and must not
+  // vote. The camelCase test below would otherwise claim it, because it is
+  // tried first — the cause of issue #114. That misclassification only
+  // mattered for languages whose identifiers reached this function; adding
+  // Python `function_definition` to the extractor above brings in a large
+  // population of exactly this shape (`def main`, `def run`, `def health`),
+  // which flipped whole Python repos to a "camelCase majority".
+  if (/^[a-z][a-z0-9]*$/.test(name)) return null;
   if (/^[a-z][a-zA-Z0-9]*$/.test(name)) return "camelCase";
   if (/^[a-z][a-z0-9_]*$/.test(name)) return "snake_case";
   return null;

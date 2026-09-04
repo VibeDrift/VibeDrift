@@ -139,4 +139,33 @@ describe("naming analyzer (entropy gate)", () => {
     expect(dev).toBeDefined();
     expect(dev!.message).toMatch(/snake_case|camelCase/);
   });
+
+  it("a single all-lowercase word votes for neither convention (issue #114 root cause)", async () => {
+    // `main`, `run`, `config` are valid in BOTH camelCase and snake_case, so
+    // they carry no convention signal. The camelCase regex is tried first, so
+    // without this they all counted as camelCase. That only started to matter
+    // once Python `function_definition` entered the extractor above: `def
+    // main` / `def run` / `def health` are overwhelmingly common, and on real
+    // repos they flipped the whole vote — measured on
+    // full-stack-fastapi-template, the analyzer reported "25 files use
+    // snake_case while majority uses camelCase" for a Python project, which is
+    // backwards.
+    //
+    // Binds: let a one-word name count as camelCase again and the eight
+    // one-word files below become a camelCase "majority" that flags the three
+    // genuinely snake_case ones.
+    const oneWord = Array.from({ length: 8 }, (_, i) => ({
+      relativePath: `one_word_${i}.py`,
+      content: "def main():\n    pass\n\ndef run():\n    pass\n\ndef health():\n    pass\n",
+      language: "python" as const,
+    }));
+    const snake = Array.from({ length: 3 }, (_, i) => ({
+      relativePath: `snake_${i}.py`,
+      content: "def load_user_profile():\n    pass\n\ndef save_user_profile():\n    pass\n",
+      language: "python" as const,
+    }));
+    const findings = await namingAnalyzer.analyze(makeCtx([...oneWord, ...snake]));
+    const naming = findings.find((f) => f.analyzerId === "naming");
+    expect(naming?.message ?? "").not.toMatch(/majority uses camelCase/);
+  });
 });

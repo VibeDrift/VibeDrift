@@ -53,7 +53,8 @@ function detectGoUncheckedErrors(
       //      and requiring the handling line to START with if/switch/return
       //      false-flagged every one of them (measured +41% flags on real Go
       //      code, all false). This is the original "does a later line mention
-      //      err" rule; we intentionally add no new flag conditions.
+      //      err, or is an immediately-following return" rule; we
+      //      intentionally add no new flag conditions.
       //
       // The only change from the old single-line lookahead is the window:
       // scanning ~5 lines instead of 1 stops the common
@@ -63,6 +64,7 @@ function detectGoUncheckedErrors(
         if (/\berr\s*[!=]=\s*nil\b/.test(trimmed)) continue;
         let checked = false;
         let hasFollowingContent = false;
+        let isFirstFollowingLine = true;
         for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
           const next = lines[j].trim();
           if (!next || next.startsWith("//")) continue;
@@ -71,6 +73,24 @@ function detectGoUncheckedErrors(
             checked = true;
             break;
           }
+          // An IMMEDIATELY following `return` counts as handling, which is
+          // what the original heuristic's `!nextLine.startsWith("return")`
+          // exclusion did. It covers Go's named-return idiom —
+          // `func f() (err error) { _, err = w.Write(b); return }` — where
+          // assigning the named result and returning IS how the error
+          // propagates. Only the FIRST following line, deliberately: a
+          // `return` further down the window is a different statement, and
+          // treating it as handling would silence a genuinely dropped error
+          // (`err := f(); fmt.Println("done"); return nil`).
+          //
+          // Measured on three real Go repos (gin, consul-template, and a gin
+          // example app): this removes 12 flags, all of them the named-return
+          // idiom, 9 of which were half of gin's entire flag set.
+          if (isFirstFollowingLine && next.startsWith("return")) {
+            checked = true;
+            break;
+          }
+          isFirstFollowingLine = false;
         }
         if (hasFollowingContent && !checked) {
           count++;
