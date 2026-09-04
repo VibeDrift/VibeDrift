@@ -43,6 +43,17 @@ jobs:
           node-version: "22.x"
           cache: npm
       - run: npm ci
+      # The rehearsal runs Verdaccio through npx, which installs it under the
+      # npm cache in _npx (73 MB). Keeping that across runs makes the common
+      # case no download at all: measured locally, a warm _npx answers in 1 s
+      # against 26 s cold. setup-node's own npm cache is keyed on the lockfile
+      # and saved only on a miss, so it cannot be relied on to hold _npx.
+      # Keep the version in the key in step with REHEARSAL_VERDACCIO_SPEC in
+      # scripts/release-rehearsal.sh.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm/_npx
+          key: npx-verdaccio-5.33.0-${{ runner.os }}
       - run: bash scripts/release-rehearsal.sh
 
   # Dogfooding: VibeDrift scans itself. The fail threshold is DISABLED for now —

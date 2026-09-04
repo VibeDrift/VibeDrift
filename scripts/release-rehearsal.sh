@@ -55,16 +55,35 @@ packages:
     proxy: npmjs
 log: { type: stdout, level: warn }
 EOF
-# `npx --yes verdaccio@5` downloads verdaccio cold on every CI run (setup-node's
-# cache only covers the lockfile), which alone can take longer than 30 s on a
-# slow registry day: 6 of 8 runs on 2026-09-03 died here at 29 s with npm still
-# printing download warnings. Give it two minutes; a healthy start takes ~10 s.
-npx --yes verdaccio@5 --config "$WORK/verdaccio.yaml" --listen "$PORT" >"$WORK/verdaccio.log" 2>&1 &
+# Fetch verdaccio into the npx cache FIRST, in the foreground, with short fetch
+# timeouts and a retry loop, so the start-up wait below never includes the
+# download. npm's default fetch timeout is five minutes, so a stalled registry
+# connection sits there silently: nine rehearsal runs on 2026-09-03 died with
+# "verdaccio did not start" and nothing but npm's deprecation warnings in the
+# log, even with a 120 s wait. Measured locally: a warm npx cache answers in
+# 1 s, a cold fetch takes about 25 s, a hung connection under npm defaults is
+# still hanging at 90 s, and with the bounds below a dead registry fails an
+# attempt in about 75 s. CI keeps ~/.npm/_npx across runs (see ci.yml), so the
+# common case is the 1 s one.
+VERDACCIO_SPEC="${REHEARSAL_VERDACCIO_SPEC:-verdaccio@5.33.0}"
+fetch_verdaccio() {
+  npm_config_fetch_timeout=10000 npm_config_fetch_retries=0 \
+    npx --yes "$VERDACCIO_SPEC" --version >"$WORK/verdaccio-fetch.log" 2>&1
+}
+for attempt in 1 2 3; do
+  fetch_verdaccio && break
+  [ "$attempt" = 3 ] && { echo "could not fetch $VERDACCIO_SPEC in 3 attempts"; tail -20 "$WORK/verdaccio-fetch.log"; exit 1; }
+  echo "fetching $VERDACCIO_SPEC failed or stalled (attempt $attempt), retrying"
+  sleep 5
+done
+echo "  ✓ $VERDACCIO_SPEC fetched"
+
+npx --yes "$VERDACCIO_SPEC" --config "$WORK/verdaccio.yaml" --listen "$PORT" >"$WORK/verdaccio.log" 2>&1 &
 VERDACCIO_PID=$!
-START_BUDGET_S="${REHEARSAL_START_BUDGET_S:-120}"
+START_BUDGET_S="${REHEARSAL_START_BUDGET_S:-60}"
 for i in $(seq 1 "$START_BUDGET_S"); do
   curl -sf "$REG/-/ping" >/dev/null 2>&1 && break
-  [ "$i" = "$START_BUDGET_S" ] && { echo "verdaccio did not start within ${START_BUDGET_S}s"; tail -5 "$WORK/verdaccio.log"; exit 1; }
+  [ "$i" = "$START_BUDGET_S" ] && { echo "verdaccio did not start within ${START_BUDGET_S}s"; tail -20 "$WORK/verdaccio.log"; exit 1; }
   sleep 1
 done
 say "registry up (pid $VERDACCIO_PID)"
