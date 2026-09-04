@@ -8,7 +8,7 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ### Added — the Claude Code plugin ships the Drift Sessions hooks
 
-- **No repo-local install needed with the plugin.** `hooks/hooks.json` declares the same five hook groups `watch-session` installs, run through `hooks/vibedrift-hook` with `--source=plugin`. They stay inert until a repo is activated (`vibedrift enable` or `/vibedrift:setup`): a repo nobody activated is never captured, and a repo that also has the repo-local install is captured once, by that install. The wrapper uses a plugin-aware global CLI when present, skips an older one, otherwise runs `npx -y @vibedrift/cli session-hook` (a new hidden subcommand), and fails open.
+- **No repo-local install needed with the plugin.** `hooks/hooks.json` declares the same five hook groups `watch-session` installs, run through `hooks/vibedrift-hook` with `--source=plugin`. They capture nothing until a repo is activated (`vibedrift enable` or `/vibedrift:setup`; only the one-time SessionStart nudge speaks before that). With the plugin installed and enabled, `enable` and the MCP `enable` tool record the activation without writing a repo-local hook install (result field `hooksVia: "plugin"`); an existing repo-local install is kept, upgraded, and owns capture, so a repo is never captured twice. The wrapper uses a plugin-aware global CLI when present, skips an older one, otherwise runs `npx -y @vibedrift/cli session-hook` (a new hidden subcommand), and fails open.
 - `src/session/hook-entry.ts` is now a thin watchdog around `src/session/hook-main.ts`, which the CLI subcommand shares.
 
 ### Added — Drift Sessions see edits made through Bash

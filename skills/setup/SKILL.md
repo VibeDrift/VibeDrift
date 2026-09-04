@@ -115,10 +115,11 @@ command, and do not hand-edit inside it.
 Offer it; do not assume yes. Explain honestly, in a few lines:
 
 - The plugin already ships the Claude Code hooks (session start, each prompt,
-  after each edit, after each Bash command, session stop); they stay inert until
-  the repo is activated. `enable` records the activation (and installs a
-  repo-local copy of the hooks in `.claude/settings.local.json`, which then owns
-  capture). Either way the ledger is local and append-only, at
+  after each edit, after each Bash command, session stop); they capture nothing
+  until the repo is activated. `enable` records the activation and, because the
+  plugin is installed, writes no repo-local hook copy (`hooksVia: "plugin"` in
+  the result); a repo-local install that already exists is kept and owns
+  capture. Either way the ledger is local and append-only, at
   `~/.vibedrift/sessions/<projectHash>/<sessionId>.jsonl`.
 - Recorded: prompts with secrets masked, edit metadata (repo-relative path plus a
   diffstat), drift flags and their outcomes. Never recorded: source code, the diff

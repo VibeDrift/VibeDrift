@@ -53,7 +53,7 @@ npx @vibedrift/cli
 /plugin install vibedrift@vibedrift
 ```
 
-The plugin bundles the [MCP server](#the-mcp-server-your-agent-asks) — wired in for you, no `claude mcp add` needed — plus the in-loop drift-check skill, the `/vibedrift:setup` command below, and the [Drift Sessions](#drift-sessions-preview) hooks. The hooks stay inert until you activate a repo (`/vibedrift:setup` or `vibedrift enable`): a repo nobody activated is never captured, and a repo that also has `vibedrift watch-session` installed is captured once, by that install. The community-marketplace listing is pending, so that's the install path today; once it lands, a plain `claude plugins install vibedrift` will also work, but it does not yet.
+The plugin bundles the [MCP server](#the-mcp-server-your-agent-asks) — wired in for you, no `claude mcp add` needed — plus the in-loop drift-check skill, the `/vibedrift:setup` command below, and the [Drift Sessions](#drift-sessions-preview) hooks. The hooks capture nothing until you activate a repo (`/vibedrift:setup` or `vibedrift enable`; only the one-time activation nudge speaks before that), and with the plugin installed, activation is the whole step: no repo-local hook install is written. A repo that already has `vibedrift watch-session` installed is captured once, by that install. The community-marketplace listing is pending, so that's the install path today; once it lands, a plain `claude plugins install vibedrift` will also work, but it does not yet.
 
 Already have `claude mcp add vibedrift` set up from before? Run `claude mcp remove vibedrift` after installing the plugin, so you are not left with two copies of the server wired in.
 
@@ -156,7 +156,7 @@ No MCP client? The five query tools above, everything except `init`, `enable`, a
 
 **VibeDrift pushes.** A scan finds drift after the code exists, and MCP only helps when the agent thinks to ask. Drift Sessions flags a drifting edit while your agent is still typing, asked or not.
 
-`vibedrift watch-session` rides inside a Claude Code session through the agent's own hooks, which Claude Code runs at session start, on each prompt, after each edit, after each Bash command, and when the session stops. With the plugin installed the hooks are already there and `vibedrift enable` (or `/vibedrift:setup`) is all it takes; `watch-session` installs them repo-locally for anyone without the plugin, and follows the live tape either way. When an edit diverges from the patterns your repo already follows, VibeDrift writes a one line advisory straight into the agent's context, so the agent can correct itself on the spot instead of waiting for a review it will never see.
+`vibedrift watch-session` rides inside a Claude Code session through the agent's own hooks, which Claude Code runs at session start, on each prompt, after each edit, after each Bash command, and when the session stops. With the plugin installed the hooks are already there and `vibedrift enable` (or `/vibedrift:setup`) is all it takes, writing no repo-local copy; `watch-session` installs them repo-locally for anyone without the plugin, and follows the live tape either way. When an edit diverges from the patterns your repo already follows, VibeDrift writes a one line advisory straight into the agent's context, so the agent can correct itself on the spot instead of waiting for a review it will never see.
 
 ```bash
 vibedrift watch-session
