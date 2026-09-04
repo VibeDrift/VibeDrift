@@ -1,0 +1,60 @@
+{
+  "description": "VibeDrift Drift Sessions: record prompts and edits to a local ledger and advise on drift in-loop. Captures nothing until the repo is activated with `vibedrift enable` (or the setup skill); before that only the one-time SessionStart activation nudge speaks. A repo-local install in .claude/settings.local.json takes precedence.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/vibedrift-hook\" --source=plugin",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/vibedrift-hook\" --source=plugin",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/vibedrift-hook\" --source=plugin",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/vibedrift-hook\" --source=plugin",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/vibedrift-hook\" --source=plugin",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

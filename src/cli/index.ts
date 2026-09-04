@@ -324,6 +324,22 @@ program
     if (status === "no_baseline") process.exitCode = 1;
   });
 
+program
+  .command("session-hook", { hidden: true })
+  .description("(internal) run the Drift Sessions hook on a Claude Code hook payload from stdin; the plugin's fallback when no global install exists")
+  // Hook flags (`--source=plugin`) are passed through verbatim to the hook,
+  // not parsed as CLI options: Commander leaves unknown options in the
+  // positional list, and the variadic argument collects them.
+  .argument("[flags...]", "hook flags, passed through (e.g. --source=plugin)")
+  .allowUnknownOption(true)
+  .action(async (flags: string[]) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const { runHook } = await import("../session/hook-main.js");
+    const code = await runHook(Buffer.concat(chunks).toString("utf8"), flags ?? []);
+    process.exit(code);
+  });
+
 // ──── Drift Sessions activation answers ────
 program
   .command("enable")

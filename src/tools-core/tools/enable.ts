@@ -20,6 +20,7 @@
  */
 
 import { homedir } from "node:os";
+import { vibedriftPluginActive } from "../../session/plugin-detect.js";
 import { join, resolve } from "node:path";
 import { repoIdentity, defaultSessionsDir } from "../../session/repo.js";
 import {
@@ -54,6 +55,8 @@ export interface EnableArgs {
   rootDir: string;
   confirm?: string;
   decline?: boolean;
+  /** Test seam: the user home Claude Code's config lives under. */
+  homeDir?: string;
 }
 
 export interface EnableResult extends StructuredBase {
@@ -61,6 +64,10 @@ export interface EnableResult extends StructuredBase {
   projectHash: string;
   rootDir: string;
   hooksInstalled?: boolean;
+  /** Where the hooks that will capture this repo come from: the repo-local
+   *  install in .claude/settings.local.json, or the Claude Code plugin's own
+   *  hooks (present, no repo-local copy written). */
+  hooksVia?: "repo-local" | "plugin";
 }
 
 export async function run(args: EnableArgs): Promise<EnableResult> {
@@ -103,10 +110,18 @@ export async function run(args: EnableArgs): Promise<EnableResult> {
   appendConsentReceipt(ledgerDir, { v: 1, at, action: "enable", surface: "mcp-enable", projectHash, rootDir });
 
   let hooksInstalled = false;
-  if (detectClaudeCode(rootDir, homedir())) {
+  let hooksVia: "repo-local" | "plugin" | undefined;
+  const home = args.homeDir ?? homedir();
+  if (detectClaudeCode(rootDir, home)) {
     const existing = await hooksStatus(rootDir);
     if (existing.installed && existing.missing.length === 0) {
       hooksInstalled = true;
+      hooksVia = "repo-local";
+    } else if (!existing.installed && vibedriftPluginActive(home)) {
+      // The plugin ships the hooks; now that the repo is active they capture
+      // it. A repo-local copy would only make both fire and the plugin yield.
+      hooksInstalled = true;
+      hooksVia = "plugin";
     } else {
       // Fresh install, or an older install missing a hook group (the Bash
       // group): installHooks adds only what is absent.
@@ -116,6 +131,7 @@ export async function run(args: EnableArgs): Promise<EnableResult> {
         projectHash,
       });
       hooksInstalled = res.status === "installed" || res.status === "already";
+      if (hooksInstalled) hooksVia = "repo-local";
     }
   }
 
@@ -125,6 +141,7 @@ export async function run(args: EnableArgs): Promise<EnableResult> {
     projectHash,
     rootDir,
     hooksInstalled,
+    ...(hooksVia ? { hooksVia } : {}),
     message: hooksInstalled
       ? "Drift Sessions active for this repo. Capture begins on the next edit; the drift baseline builds on the first scan or edit-check."
       : "Drift Sessions active for this repo (answer recorded). No supported agent hook detected yet, so capture starts once Claude Code hooks are installed.",
