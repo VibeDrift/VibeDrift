@@ -123,9 +123,14 @@ export async function recheckProject(opts: RecheckProjectOptions): Promise<Reche
         await appendEvent(opts.sessionsDir, opts.projectHash, sid, ev);
       }
       if (resolved.length > 0) {
+        // Tombstone every clear, the same as the hook's own resolve path: the
+        // read-merge-write in writeOutcomeState unions `open` with the copy on
+        // disk, so without a tombstone this very write would resurrect the
+        // finding it is meant to remove.
         await writeOutcomeState(opts.sessionsDir, opts.projectHash, sid, {
           ...state,
           open: state.open.filter((f) => !resolvedIds.has(f.findingId)),
+          resolved: [...state.resolved, ...resolvedIds],
         });
       }
     }

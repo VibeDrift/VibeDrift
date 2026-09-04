@@ -52,6 +52,7 @@ async function raiseDup(sid: string): Promise<string> {
   await writeOutcomeState(sessionsDir, HASH, sid, {
     open: [{ findingId: flag.findingId!, file: "src/retry.ts", category: "redundancy", anchor: out.anchors[flag.findingId!] }],
     hashes: {},
+    resolved: [],
   });
   return flag.findingId!;
 }
