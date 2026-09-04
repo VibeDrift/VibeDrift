@@ -11,20 +11,24 @@ explicitly under **Breaking** so CI users can recalibrate.
 ### Changed — scoring
 
 - **The score is now monotone in the finding set.** Adding a finding can never raise it and closing one can never lower it. Three inversions were removed: a security or intent finding landing in a previously empty category could pull the headline up (measured 65.0 to 74.9 from one real security finding, and a Fix Plan that projected a lower score after a fix); a category with one faint finding could score above the same category with none; and detector confidence was averaged, so a low-confidence finding diluted its group's damage. `SCORING_VERSION` advances to v18.
-- **Scores move on upgrade.** The direction is down or unchanged, except where a repo that was previously over-penalised recovers. Measured against the previous release on nine real repositories:
+- **Most repositories will score lower, and many will change letter grade.** Measured on nine real repositories, scanning each with 0.20.1 and with this release:
 
-  | Repo | before | after |
-  |---|---|---|
-  | moment | 68.2 | 56.6 |
-  | date-fns | 67.0 | 56.7 |
-  | zod | 75.7 | 67.4 |
-  | htmx | 76.4 | 68.4 |
-  | eslint | 85.2 | 79.4 |
-  | VibeDrift | 86.2 | 81.5 |
-  | starship | 71.7 | 97.2 |
-  | dayjs | 80.6 | 80.6 |
-  | underscore | 54.5 | 54.5 |
+  | Repo | 0.20.1 | this release | grade |
+  |---|---|---|---|
+  | moment | 68.0 | 56.3 | D → F |
+  | date-fns | 67.2 | 56.7 | D → F |
+  | zod | 75.7 | 67.4 | C → D |
+  | htmx | 76.4 | 68.4 | C → D |
+  | eslint | 84.8 | 79.1 | B → C |
+  | starship | 96.2 | 97.2 | A |
+  | dayjs | 80.9 | 80.9 | B |
+  | underscore | 54.4 | 54.4 | F |
+  | VibeDrift | 79.9 | 80.2 | C → B |
 
+  Seven of the nine move, five down and two up, and six change letter grade.
+
+- **Why a score falls.** The old composite let a category that found almost nothing pull the headline *up*. `moment` is the clearest case: Redundancy 7.2/20, Architectural Consistency 17.7/20, and Intent Clarity 19.7/20 precisely because that detector had little to report. Averaging all three produced 68. The new composite will not let a near-empty category lift the headline above what the categories that actually measured something say, so it produces 56. A score can now fall even when a category score rises.
+- **A consequence worth stating plainly.** Intent Clarity and Security Consistency can lower the headline or leave it alone, but they can no longer raise it. Consistent, well-applied auth earns no credit in the composite; it only avoids a penalty.
 - Existing stored scores are kept as they were; the update applies to new scans, and the CLI shows the one-time "scoring refined" notice after upgrading.
 
 ### Fixed — security & privacy
@@ -38,11 +42,14 @@ explicitly under **Breaking** so CI users can recalibrate.
 ### Fixed — detection accuracy
 
 - **Analyzers:** Python functions are now visible to the naming analyzer and arrow functions to long-function detection; Go else-if chains no longer inflate cognitive complexity; mock and todo objects no longer escalate implementation-gap findings. One analyzer throwing no longer aborts the scan: it is skipped with a warning and the result is marked degraded.
-- **Security lane:** authorisation exceptions, a handler's own response body and static routers no longer bless a route as authenticated; Actix reject idioms, resolved cross-file middleware and a 3-of-4 authed-routes case no longer flag authenticated routes.
+- **Naming no longer calls a Python project camelCase.** A single all-lowercase word (`main`, `run`, `config`) is valid in both camelCase and snake_case, so it now votes for neither. It previously counted as camelCase, which was harmless until Python function names entered the vote and flipped whole projects to a camelCase "majority".
+- **Go's named-return idiom is no longer reported as an unchecked error.** `func f() (err error) { _, err = w.Write(b); return }` assigns the named result and returns it, which is how the error propagates. Unchecked-error flags fall substantially overall: 39 to 9 on `gin` and 161 to 42 on `consul-template`, while a genuinely dropped error two statements before a `return` still flags.
+- **Security lane:** authorisation exceptions, a handler's own response body and static routers no longer bless a route as authenticated; Actix reject idioms and resolved cross-file middleware no longer flag authenticated routes. Request-size, body, upload and connection limit middleware are no longer counted as rate limiting, which was flagging route groups that had none. The dominance vote still needs *more* than 75% of a group to agree, so a group of four routes with one deviator stays silent; opening that boundary was tried and reverted, because it flagged route stubs inside test files.
 - **Drift classification** ranks by evidence rather than declaration order, the raw-SQL pattern actually matches `SELECT ... FROM`, and intent-hint seeding fails closed on unknown vocabulary and is scoped per language.
 - **Code DNA:** taint sanitisers and sinks anchor on identifier boundaries; the LCS length gate no longer zeroes pairs up to 0.645 similarity; pattern drift requires a dominant pattern (60% and 3+ peers) and a deviating file is no longer counted twice.
 - **Sessions:** sidecar state is written atomically, so resolves and cooldowns persist across concurrent hooks.
 - **Robustness:** the offline telemetry beacon no longer holds a scan open for up to 3s when the network is down, and a stalled fix-prompts connection no longer hangs a `--deep` scan indefinitely.
+- **`--fail-on-score` still exits immediately when nothing is watching.** The unauthenticated HTML path serves a local report and now keeps the process alive for it, so an interactive run can actually open the report before the exit code lands. A CI job or a piped invocation is waiting on the exit code, not a browser, and exits at once as before.
 - **A malformed `VIBEDRIFT_API_URL` or config `apiUrl` can no longer crash a scan.** The anonymous scan beacon is best-effort end to end and never rejects; a bad URL now means "beacon skipped", including for signed-out and `--local-only` runs. Analyzer crashes are no longer silent either: a failing analyzer prints a warning and the result carries `degradedAnalyzers` (also in `--format json`), so a score computed without that analyzer is never mistaken for a clean one.
 - **`--format json` now includes cross-file drift findings** and reimplementation candidates. The raw Code DNA result is deliberately not included: it embeds every extracted function's full source body.
 

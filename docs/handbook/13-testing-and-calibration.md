@@ -37,14 +37,18 @@ Some tests are guard tests for architectural invariants rather than behavior: `t
 
 Results land in `test/calibration/reports/latest.json`. The README calls these per-category rows "trend rows": they are compared across runs to catch accuracy regressions, which makes the file the before/after artifact for any detector change. Categories that fire on the templated baseline's own structure (`semantic_duplication`, dead code, `phantom_scaffolding`; the near-identical, consumer-less generated handlers legitimately trip them) are reported separately as un-measured rather than pretending the synthetic corpus can score them. The README also records a known finding from the first baseline honestly: `naming_conventions` scores F1 1.00, but `architectural_consistency` recall is 0.00 on the synthetic corpus, flagged for follow-up rather than hidden.
 
-### npm run calibrate:monotonic: the responsiveness gate
+### npm run calibrate:monotonic: the monotonicity gate
 
-`test/calibration/run.ts` generates the baseline, injects drift at rates 0, 10, 25, 50, 75, and 90 percent, and pushes each variant through the real pipeline: context building, parsing, analyzers, drift detectors, and `computeScores`, not a mock of any stage. It then asserts two properties and exits 1 on violation:
+`test/calibration/run.ts` generates the baseline, injects drift at rates 0, 10, 25, 50, 75, and 90 percent, and pushes each variant through the real pipeline: context building, parsing, analyzers, drift detectors, and `computeScores`, not a mock of any stage. It measures two properties, and since 0.20.2 they are reported separately because only one of them is a correctness claim:
 
-- **Monotonicity**: the composite score never rises as injection increases (tolerance 0.5 points).
-- **Responsiveness**: each 25-percentage-point injection step, 25 to 50 and 50 to 75, must drop the composite by at least `REQUIRED_DROP_PER_25PCT = 3.0` points.
+- **Monotonicity (gates, exits 1)**: the composite never rises as injection increases, within a 0.5-point tolerance. A score that goes up when a problem is added contradicts the premise of the tool, so this blocks.
+- **Responsiveness (report-only)**: each 25-percentage-point step, 25 to 50 and 50 to 75, should drop the composite by at least `REQUIRED_DROP_PER_25PCT = 3.0` points. This is a sensitivity target, not a correctness one; a score can be perfectly honest about direction and still too flat to be useful.
 
-The README is candid that this is the weaker of the two harnesses (almost any threshold choice passes a monotonicity check), which is why it is kept as a pre-publish smoke test while the precision/recall harness is the accuracy authority. It exists to catch scoring regressions of the shape "one category silently dominates another", which shipped once before this gate existed.
+They were behind one exit code until 0.20.2, which is why the command sat red for months with neither property getting attention: the exit code could not distinguish "the score lies" from "the score is compressed". The responsiveness threshold predates the v18 formula and stays report-only until the scoring-algorithm work sets it deliberately; raising or lowering it to make a run pass is fitting the gate to the test.
+
+Every run prints the **monotonicity margin**. It currently reads 0.0, which is understood rather than alarming: injecting drift grows the fixture from 369 to 374 lines, which lifts every category's evidence-weighted clean credit slightly, and `securityPosture` enters at exactly the base mean and contributes nothing. That is the fixture changing size between rates, not a scoring inversion, and it is why the tolerance is not zero. The fixed-corpus property — removing any finding never lowers the composite — is pinned separately by `test/unit/scoring/monotonicity.test.ts` across 200 randomized trials.
+
+The precision/recall harness remains the accuracy authority; this one exists to catch scoring regressions of the shape "one category silently dominates another", which shipped once before the gate existed.
 
 ## The S0-S11 security fixture families
 
@@ -92,7 +96,7 @@ The workflow that follows from these layers, for anyone modifying a detector, cl
 1. **Write or update the unit tests first.** Every detector has a suite under `test/unit/drift/` or `test/unit/analyzers/`; a behavior change without a test change is a red flag in review.
 2. **Run `npm test`.** This already includes the S0-S11 security grids, the guard tests, and the integration scans of the fixture repos.
 3. **Run `npm run calibrate` and diff the trend rows** in `test/calibration/reports/latest.json` against the previous run. Precision or recall dropping on a category you did not intend to touch is the regression signal this harness exists to catch. The security-floor precision gate must hold at 0.95 or the run fails on its own.
-4. **Run `npm run calibrate:monotonic`** if the change touches scoring or finding weights: the composite must still fall at least 3 points per 25% injected drift.
+4. **Run `npm run calibrate:monotonic`** if the change touches scoring or finding weights: the composite must never rise as injected drift rises (this gates). The responsiveness line is reported but does not block; do not tune its threshold to make a run pass.
 5. **For changes that could shift real-repo scores**, run the discrimination harness and check that clean/messy separation did not narrow.
 6. If the change alters documented behavior, fix the affected handbook chapter in the same PR.
 

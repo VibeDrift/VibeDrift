@@ -68,7 +68,7 @@ Every term of art used across this handbook, alphabetized. Each entry names the 
 
 **produce-position**: the Rust-specific hardening of "verified reject": a 401 counts only where it is produced as a value (a return, a `?` operand, a block tail, `Err(...)`, `.ok_or(...)`, or a match/if branch tail). A 401 mentioned in a comparison, call argument, or discarded binding is a mention, not a reject, and never blesses (`src/drift/security-ast-rust.ts`).
 
-**SCORING_VERSION**: the scoring methodology tag (currently `"v11"`), persisted with every scan. When the stored version differs from the current one, score deltas are refused rather than computed, and the user sees a single one-time "scoring refined" notice instead of per-scan banners (`src/scoring/engine.ts`, `src/core/scoring-notice.ts`).
+**SCORING_VERSION**: the scoring methodology tag (currently `"v18"`), persisted with every scan. When the stored version differs from the current one, score deltas are refused rather than computed, and the user sees a single one-time "scoring refined" notice instead of per-scan banners (`src/scoring/engine.ts`, `src/core/scoring-notice.ts`).
 
 **security floor**: the small set of highest-precision security rules (committed secrets, cloud keys, disabled TLS verification) emitted under the distinct analyzer id `security-floor`. They drive a render-only "fix before shipping" badge that never changes the score, and they carry an enforced calibration gate of at least 0.95 precision (`src/analyzers/security.ts`, `src/output/floor-badge.ts`).
 

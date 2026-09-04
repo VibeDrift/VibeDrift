@@ -80,7 +80,7 @@ Committing `context.md` only helps agents that go looking for it. `--inject-cont
 Scan history lives in `~/.vibedrift/scans/<projectHash>/scan-<timestamp>.json` (`src/core/history.ts`), with retention capped at 10 scans per project. The schema is versioned separately from the scoring methodology:
 
 - `schemaVersion` (`HISTORY_SCHEMA_VERSION = 3`) describes the structural shape. v1 mixed scores, v2 split drift from hygiene, v3 added finding digests, which is what makes diffing possible.
-- `scoringVersion` (currently `"v11"`, exported from `src/scoring/engine.ts`) describes the methodology the numbers were computed under.
+- `scoringVersion` (currently `"v18"`, exported from `src/scoring/engine.ts`) describes the methodology the numbers were computed under.
 
 ### Digest stability
 

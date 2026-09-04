@@ -67,7 +67,7 @@ Every tool except `init` and `get_intent_hints` answers from the persisted `Repo
 
 ![The agent loop: tool calls answered from the cached baseline](assets/09-mcp-loop.svg)
 
-On disk it lives at `~/.vibedrift/baseline-cache/<sha256(rootDir)[:16]>.json`, never inside the project. `BASELINE_VERSION` is currently 3 and is bumped whenever vote logic, the detector set, or the signature format changes. The cache key is a content merkle: SHA-256 over `BASELINE_VERSION\n` plus the sorted `path:hash` lines of every scanned file, so a version bump invalidates every cache at once.
+On disk it lives at `~/.vibedrift/baseline-cache/<sha256(rootDir)[:16]>.json`, never inside the project. `BASELINE_VERSION` is currently 7 and is bumped whenever vote logic, the detector set, or the signature format changes. The cache key is a content merkle: SHA-256 over `BASELINE_VERSION\n` plus the sorted `path:hash` lines of every scanned file, so a version bump invalidates every cache at once.
 
 `getBaseline(rootDir)` in `src/mcp/baseline-provider.ts` implements the serving policy:
 

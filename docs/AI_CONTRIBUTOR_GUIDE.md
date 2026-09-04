@@ -285,18 +285,18 @@ A few other scoring behaviors that make naive magnitude claims wrong:
 Current version fields (verified by enumerating `src/analyzers/*.ts`):
 
 ```
-complexity 3   config-drift 2   dead-code 7   dependencies 3   duplicates 3
-implementation-gap 1   imports 2   intent-clarity 2   naming 2   security 3
-todo-density 2   error-handling NO VERSION FIELD   language-specific NO VERSION FIELD
+complexity 4   config-drift 3   dead-code 7   dependencies 3   duplicates 3
+error-handling 2   implementation-gap 2   imports 4   intent-clarity 3
+language-specific 2   naming 3   security 4   todo-density 2
 ```
 
-Those last two are permanently keyed at 1. Editing either one **requires** adding the field.
+Every analyzer now carries a `version` field. `error-handling` and `language-specific` gained theirs in 0.20.2; before that they were permanently keyed at 1, so a logic change to either was invisible to anyone with a warm cache.
 
 Only the analyzer layer is cached. Drift detectors and Code DNA run uncached every scan, so `Analyzer.version` is irrelevant to them. The cache that can mask a drift-detector change is the MCP baseline: `BASELINE_VERSION = 3` in `src/core/baseline.ts:34`, which prefixes the content merkle in the cache key. Bump it when vote logic, the detector set, or the signature format changes.
 
 ### Version bumps and stale docs
 
-`SCORING_VERSION` is `"v14"` (`src/scoring/engine.ts:95`). Any change to scoring math, a constant, a factor, or a gate threshold requires bumping it and adding a history entry to the comment block above it. Note the history block documents v1-v7 and v10-v13 only, with no v8, v9, or v14 entry, so do not treat that block as a complete changelog.
+`SCORING_VERSION` is `"v18"` (`src/scoring/engine.ts`). Any change to scoring math, a constant, a factor, or a gate threshold requires bumping it and adding a history entry to the comment block above it. The history block has gaps (no v8, v9 or v14 entry), so do not treat it as a complete changelog.
 
 Cross-version scan diffs are refused on purpose. A cross-version delta once reached the diff surfaces and was committed into `.vibedrift/context.md` with resolved and new claims it could not support (CHANGELOG 0.16.2). The engine now suppresses the score delta and the whole "since last scan" section on a version mismatch, in the terminal banner and in the committed `context.md` alike.
 
@@ -432,22 +432,31 @@ If your change touches **scoring or finding weights**, the handbook says to run:
 npm run calibrate:monotonic
 ```
 
-**This is currently red on `main` and it is not your fault.** Running it on this tree:
+**It checks two independent properties and only one of them gates.** Running it on this tree:
 
 ```
 inject     composite    drift    findings   Δ comp
-0%         83.2         83.2     11         n/a
-10%        85.0         85.0     15         1.8
-25%        83.9         83.9     16         -1.1
-50%        78.3         78.3     17         -5.6
-75%        71.1         71.1     21         -7.2
-90%        69.3         69.3     21         -1.8
+0%         82.5         82.5     11         —
+10%        83.0         83.0     15         0.5
+25%        83.0         83.0     16         0.0
+50%        81.6         81.6     17         -1.4
+75%        75.3         75.3     21         -6.3
+90%        73.4         73.4     21         -1.9
 
-monotonicity:   ✗ composite non-monotonic: 0% (83.2) → 10% (85.0)
-responsiveness: ✓ each 25% → ≥3pt drop confirmed
+monotonicity   (GATE):        ✓
+responsiveness (report-only): ! each 25% injection should drop score ≥3pt; saw 1.4 (25→50) and 6.3 (50→75)
+  monotonicity margin: 0.0pt (largest rise 0.5, tolerance 0.5)
 ```
 
-The composite rises from 83.2 to 85.0 between 0% and 10% injection, so `checkMonotonic` fails and the script exits non-zero. Responsiveness still passes. This is a known pre-existing failure, tracked by the maintainers with the scoring-formula responsiveness work. **Capture a before and after rather than chasing it**, and say in your PR that the 0-to-10 violation was present before your change. This harness writes only to a tmpdir, so it is safe to run repeatedly.
+**Monotonicity gates** — more injected drift must never raise the composite. If you break that, the script exits 1 and your change is wrong: a score that rises when a problem is added contradicts the tool.
+
+**Responsiveness does not gate.** Its 3-point bar was calibrated against pre-v18 scoring and has not been re-derived for the current formula. It is reported and tracked so the compression stays visible. **Do not adjust that threshold to make a run pass** — that is fitting the gate to the test. It is a backlog item to derive deliberately with the scoring-algorithm work.
+
+Until 0.20.2 both properties shared one exit code, so the command sat red for months and neither got fixed. Read the two lines separately.
+
+**The margin line matters.** It is currently 0.0, meaning the run passes with nothing to spare, and that is understood rather than alarming: injecting drift grows the fixture from 369 to 374 lines, which lifts every category's evidence-weighted clean credit by 0.005, and `securityPosture` enters at exactly the base mean contributing nothing. That is the fixture changing size, not a scoring inversion. The real fixed-corpus property is pinned by `test/unit/scoring/monotonicity.test.ts` over 200 randomized trials. If you change the baseline fixture's size, re-instrument before touching `MONOTONIC_TOLERANCE`.
+
+This harness writes only to a tmpdir, so it is safe to run repeatedly.
 
 ---
 
