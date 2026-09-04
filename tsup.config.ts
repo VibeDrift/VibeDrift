@@ -8,6 +8,7 @@ export default defineConfig({
     "src/tools-core/index.ts",
     "src/session/hook-entry.ts",
     "src/session/session-flush.ts",
+    "src/session/baseline-rebuild.ts",
   ],
   format: ["esm"],
   target: "node18",
