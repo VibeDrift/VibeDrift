@@ -48,7 +48,7 @@ describe("enable tool core (O18)", () => {
   });
 
   it("with the plugin installed and enabled: hooks come from the plugin, no repo-local copy", async () => {
-    const { home, repo } = sandbox();
+    const { repo } = sandbox();
     const homeDir = realpathSync(mkdtempSync(join(tmpdir(), "vd-en-core-plug-")));
     mkdirSync(join(homeDir, ".claude", "plugins"), { recursive: true });
     writeFileSync(join(homeDir, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "vibedrift@vibedrift": true } }));
