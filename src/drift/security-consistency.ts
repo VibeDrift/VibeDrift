@@ -112,7 +112,7 @@ function repoHasAuthMachinery(files: DriftFile[]): boolean {
 /**
  * Absolute baseline for the uniform-wrongness blind spot: the dominance vote
  * (analyzeSecurityProperty) goes SILENT when 0% of routes have auth (ratio=0
- * fails the ratio>=0.75 gate), so an AI that wrote every mutating endpoint
+ * fails the ratio>0.75 gate), so an AI that wrote every mutating endpoint
  * without auth produced a clean grade. This fires on uniformly-unauthed
  * MUTATING routes — but only with a baseline reason: either the repo uses auth
  * elsewhere, or a CLAUDE.md/AGENTS.md hint declares auth required. With neither,
@@ -343,13 +343,13 @@ function analyzeSecurityProperty(
   const withoutProperty = applicableRoutes.filter((r) => !getter(r));
   const ratio = withProperty.length / applicableRoutes.length;
 
-  // ">= 75% of routes have it, some do not" is the documented dominance gate.
-  // `<=` silenced the boundary case it is meant to catch: a 3-of-4 group is
-  // exactly 0.75, a clear dominant pattern with one deviator, and it reported
-  // nothing. Uniform-wrongness (ratio 0) still falls through to
-  // analyzeUniformAuthGap, and a 100%-covered group is excluded by the
-  // withoutProperty check, not by the ratio.
-  if (ratio < 0.75 || withoutProperty.length === 0) return null;
+  // Dominance gate: MORE than 75% of the group has the property and at least
+  // one route does not (handbook ch. 06: "exceeds 0.75"). Exactly 3 of 4 stays
+  // silent on purpose: the smallest group that can fire is 4 of 5, which keeps a
+  // single stray route in a tiny group (a test fixture, a one-off script) from
+  // producing a warning. Uniform-wrongness (ratio 0) is handled separately by
+  // analyzeUniformAuthGap.
+  if (ratio <= 0.75 || withoutProperty.length === 0) return null;
 
   return {
     detector: "security_posture",
