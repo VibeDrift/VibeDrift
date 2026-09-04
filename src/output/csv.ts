@@ -10,11 +10,24 @@
 import type { ScanResult } from "../core/types.js";
 import type { CodeDnaResult } from "../codedna/types.js";
 
+// Formula-injection guard (CWE-1236): a cell whose first character is one of
+// = + - @ or a leading tab/CR can be interpreted by Excel/Sheets as a formula
+// when the CSV is opened, letting repo-controlled text (paths, TODO text,
+// finding messages) execute. Prefixing a single quote neutralizes it while
+// keeping the value readable. This applies to every leading '-' cell,
+// including ordinary negative numbers rendered as strings — intentionally
+// erring safe over preserving numeric formula-free ergonomics.
+const FORMULA_LEADING_CHARS = /^[=+\-@\t\r]/;
+
 function csvEscape(val: string): string {
-  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-    return '"' + val.replace(/"/g, '""') + '"';
+  let out = val;
+  if (FORMULA_LEADING_CHARS.test(out)) {
+    out = "'" + out;
   }
-  return val;
+  if (out.includes(",") || out.includes('"') || out.includes("\n")) {
+    return '"' + out.replace(/"/g, '""') + '"';
+  }
+  return out;
 }
 
 function row(...cells: (string | number)[]): string {

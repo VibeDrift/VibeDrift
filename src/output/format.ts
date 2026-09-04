@@ -1,5 +1,9 @@
 export function scoreBar(score: number, max: number, width = 20): string {
-  const filled = Math.round((score / max) * width);
+  const raw = Math.round((score / max) * width);
+  // Clamp: score > max (or max <= 0) would otherwise produce a filled count
+  // outside [0, width], and String#repeat throws a RangeError on a negative
+  // count.
+  const filled = Math.min(width, Math.max(0, raw));
   return "\u2588".repeat(filled) + "\u2591".repeat(width - filled);
 }
 
