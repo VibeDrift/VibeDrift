@@ -4,7 +4,7 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
-## [Unreleased]
+## 0.20.2 — 2026-09-04
 
 **The Vibe Drift Score can no longer go up when a finding is added or down when one is fixed, and a whole-repo audit closes a set of privacy, detection and robustness gaps (#113).**
 
