@@ -1,8 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Every test here spawns tsx processes (hook entry, baseline builder, CLI);
+// on a CI runner one test takes 4 to 8 s, past vitest's default 5 s.
+vi.setConfig({ testTimeout: 60_000 });
 
 // The baseline's duplicate index is built at scan time and never grows during
 // a session. On a recorded session two byte-identical `monthTitle` functions
