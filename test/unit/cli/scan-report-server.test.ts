@@ -110,14 +110,23 @@ describe("serveHtmlReportOnLocalhost — binds loopback only", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
-// Regression: --fail-on-score used to call process.exit(1) unconditionally,
-// tearing the just-started local report server down before the browser
-// could load it. On the local-server path, the server's own lifecycle must
-// own process termination; logAndRender should only set process.exitCode.
+// --fail-on-score used to call process.exit(1) unconditionally, tearing the
+// just-started local report server down before the browser could load it.
+// On the local-server path the server's lifecycle owns process termination,
+// so logAndRender only sets process.exitCode — but ONLY for an interactive
+// terminal session. A CI job or a piped invocation is waiting on the exit
+// code, not on a browser, and must still exit immediately: measured
+// 2026-09-03, gating on the path alone made `vibedrift . --fail-on-score N`
+// block for the server's full 10-minute lifetime instead of failing in ~1s.
 // ────────────────────────────────────────────────────────────────────
 describe("logAndRender — --fail-on-score on the local report server path", () => {
+  let prevTTY: boolean | undefined;
+  let prevCI: string | undefined;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    prevTTY = process.stdout.isTTY;
+    prevCI = process.env.CI;
   });
 
   afterEach(() => {
@@ -125,9 +134,20 @@ describe("logAndRender — --fail-on-score on the local report server path", () 
     vi.restoreAllMocks();
     process.removeAllListeners("SIGINT");
     process.exitCode = undefined;
+    (process.stdout as unknown as { isTTY?: boolean }).isTTY = prevTTY;
+    if (prevCI === undefined) delete process.env.CI;
+    else process.env.CI = prevCI;
   });
 
-  it("does not call process.exit and instead sets process.exitCode when the score fails the threshold", async () => {
+  /** Pretend to be (or not be) a human at a terminal. */
+  function setInteractive(interactive: boolean) {
+    (process.stdout as unknown as { isTTY?: boolean }).isTTY = interactive;
+    if (interactive) delete process.env.CI;
+    else process.env.CI = "true";
+  }
+
+  it("interactive terminal: does not call process.exit, sets process.exitCode so the served report survives", async () => {
+    setInteractive(true);
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -151,6 +171,27 @@ describe("logAndRender — --fail-on-score on the local report server path", () 
 
     expect(exitSpy).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+  });
+
+  it("non-interactive (CI or piped): still exits immediately, so a scripted gate does not block on the server", async () => {
+    setInteractive(false);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+
+    const { logAndRender } = await import("../../../src/cli/commands/scan.js");
+
+    await logAndRender(
+      makeResult(10),
+      { format: "html", failOnScore: 90 } as ScanOptions,
+      null, // unauthenticated → local-server path
+      undefined,
+      "/tmp/demo",
+      undefined,
+      false,
+    );
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it("still calls process.exit(1) immediately for a non-server format (e.g. json)", async () => {
