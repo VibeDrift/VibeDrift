@@ -49,6 +49,11 @@ export interface AnchorSite {
    *  keys on it, because a line moves the moment anything above it changes. */
   line?: number;
   tokenHash: string;
+  /** which tokenizer vocabulary produced `tokenHash` and `tokens`. Stamped
+   *  when the anchor is written; ABSENT on sidecars written before this
+   *  existed, which is exactly the case that must not be trusted. See
+   *  ANCHOR_VOCAB. */
+  vocab?: number;
   /** the construct's normalized tokens, capped at ANCHOR_MAX_TOKENS. Optional
    *  because the sidecar is parsed without field validation, so a truncated or
    *  hand-edited one can arrive without it. */
@@ -67,6 +72,33 @@ function hashTokens(tokens: string[]): string {
 
 /** Identity of a construct by its NORMALIZED tokens, so a reformat, a comment
  *  edit, or a rename of the function itself does not lose the anchor. */
+/**
+ * The tokenizer vocabulary an anchor was written under. `anchorTokenHash` and
+ * `anchorTokens` both run `tokenizeBody`, so a change to that function makes
+ * every PERSISTED anchor incomparable with a body it once matched exactly:
+ * the same unchanged code now normalizes to a different token stream. Within
+ * one session that never matters, because the anchor and the re-check run in
+ * the same build. Across an upgrade it does, and the only path that re-checks
+ * anchors written by an older build is `recheckProject` (the `recheck-session`
+ * command), which sweeps every session sidecar in the project.
+ *
+ * Measured on this repo at the 0.20.1 to 0.20.2 upgrade, where the tokenizer
+ * moved to a single left-to-right string-and-comment pass: 54 of 1135
+ * functions (4.8%) tokenize differently, 57 anchors (5.0%) stop matching their
+ * own unchanged body, 4 fall under REDUNDANCY_CONTAINMENT, and a full sweep
+ * with cross-build anchors falsely cleared 1 finding whose code had not
+ * changed at all. A false clear is the expensive direction here: it tells the
+ * user something was fixed when nothing was.
+ *
+ * BUMP THIS whenever `tokenizeBody` changes.
+ */
+export const ANCHOR_VOCAB = 1;
+
+/** Whether an anchor's tokens can be compared with tokens computed now. */
+export function anchorVocabCurrent(anchor: { vocab?: number } | undefined): boolean {
+  return anchor?.vocab === ANCHOR_VOCAB;
+}
+
 export function anchorTokenHash(body: string): string {
   return hashTokens(tokenizeBody(body));
 }

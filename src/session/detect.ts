@@ -11,7 +11,7 @@
 import { validateChangeAgainstBaseline } from "../tools-core/index.js";
 import { extractAllFunctions } from "../codedna/function-extractor.js";
 import { detectLanguage } from "../core/language.js";
-import { anchorTokenHash, anchorTokens, type AnchorSite } from "./finding-anchor.js";
+import { ANCHOR_VOCAB, anchorTokenHash, anchorTokens, type AnchorSite } from "./finding-anchor.js";
 import type { RepoDriftBaseline } from "../core/baseline.js";
 
 const MAX_FUNCTIONS = 5;
@@ -71,7 +71,12 @@ export function detectDrift(
   const queries: Query[] = [
     {
       body: content,
-      site: { kind: "file", tokenHash: anchorTokenHash(content), tokens: anchorTokens(content) },
+      site: {
+        kind: "file",
+        tokenHash: anchorTokenHash(content),
+        tokens: anchorTokens(content),
+        vocab: ANCHOR_VOCAB,
+      },
     },
   ];
   try {
@@ -89,6 +94,7 @@ export function detectDrift(
             line: fn.line,
             tokenHash: anchorTokenHash(fn.rawBody),
             tokens: anchorTokens(fn.rawBody),
+            vocab: ANCHOR_VOCAB,
           },
         });
       }

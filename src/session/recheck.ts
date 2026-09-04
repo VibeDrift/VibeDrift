@@ -24,6 +24,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RepoDriftBaseline } from "../core/baseline.js";
 import { appendEvent, newActivityId, safeSegment } from "./ledger.js";
+import { anchorVocabCurrent } from "./finding-anchor.js";
 import { readOutcomeState, recheckFile, writeOutcomeState, type OpenFinding } from "./outcomes.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
@@ -36,6 +37,10 @@ export interface RecheckSessionResult {
   stillOpen: OpenFinding[];
   /** files an open finding points at that could not be read (left open) */
   missingFiles: string[];
+  /** findings whose anchor was written by a build with a different tokenizer
+   *  vocabulary, so its tokens cannot be compared with tokens computed now.
+   *  Left open and reported rather than guessed at; see ANCHOR_VOCAB. */
+  staleAnchors: OpenFinding[];
 }
 
 export interface RecheckProjectOptions {
@@ -76,8 +81,21 @@ export async function recheckProject(opts: RecheckProjectOptions): Promise<Reche
   const out: RecheckSessionResult[] = [];
   for (const sid of ids) {
     const state = await readOutcomeState(opts.sessionsDir, opts.projectHash, sid);
-    const open = state.open.filter((f) => f.category !== "scope");
-    if (open.length === 0) continue;
+    const checkable = state.open.filter((f) => f.category !== "scope");
+    // An anchor written under a different tokenizer vocabulary cannot be
+    // compared with tokens computed now: the same unchanged code normalizes
+    // differently, the presence predicate reads that as "the flagged construct
+    // is gone", and a finding clears although nothing was fixed. This command
+    // is the only path that reaches anchors from an earlier build, because it
+    // sweeps every session sidecar in the project including ones recorded
+    // before an upgrade; the hook only ever re-checks the session it is running
+    // in, where the anchor and the re-check share a build. Measured across the
+    // 0.20.1 to 0.20.2 tokenizer change on this repo: 5% of anchors stopped
+    // matching their own unchanged body and a full sweep falsely cleared one.
+    // Reported, never silently dropped.
+    const staleAnchors = checkable.filter((f) => !anchorVocabCurrent(f.anchor));
+    const open = checkable.filter((f) => anchorVocabCurrent(f.anchor));
+    if (open.length === 0 && staleAnchors.length === 0) continue;
 
     const byFile = new Map<string, OpenFinding[]>();
     for (const f of open) {
@@ -99,7 +117,7 @@ export async function recheckProject(opts: RecheckProjectOptions): Promise<Reche
       }
       // The whole open set is passed, as the hook does; recheckFile filters
       // to this file itself and applies the positive-absence predicate.
-      const r = recheckFile(opts.baseline, relFile, content, state.open);
+      const r = recheckFile(opts.baseline, relFile, content, open);
       resolved.push(...r.resolved);
     }
 
@@ -140,6 +158,7 @@ export async function recheckProject(opts: RecheckProjectOptions): Promise<Reche
       resolved,
       stillOpen: open.filter((f) => !resolvedIds.has(f.findingId)),
       missingFiles,
+      staleAnchors,
     });
   }
   return out;

@@ -76,6 +76,31 @@ describe("vibedrift recheck-session (integration)", () => {
     expect(r.stdout).toContain("No drift baseline");
   });
 
+  // The duplicate arm of the presence predicate queries the baseline's
+  // minhash index. A version bump means those persisted token streams came
+  // from a different tokenizer, so a clone that is still there can look
+  // absent. Every arm is OR'd, so a weaker one can only CLEAR findings, which
+  // is the wrong direction for a command whose job is deciding what is fixed.
+  it("refuses a baseline built by another version rather than clearing against it", () => {
+    const { home, repo } = stage();
+    const cacheDir = join(home, ".vibedrift", "baseline-cache");
+    const cached = join(cacheDir, readdirSync(cacheDir)[0]);
+    const b = JSON.parse(readFileSync(cached, "utf8"));
+    const realVersion = b.version;
+    b.version = realVersion - 1;
+    writeFileSync(cached, JSON.stringify(b));
+    const r = run(home, ["recheck-session", repo]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("built by another version of VibeDrift");
+    expect(r.stdout).toContain("vibedrift scan");
+    // nothing was appended to the ledger: no resolve, no clear
+    expect(ledger(home, "s-stale").some((e) => e.type === "resolve")).toBe(false);
+    // and with the real version restored it runs normally again
+    b.version = realVersion;
+    writeFileSync(cached, JSON.stringify(b));
+    expect(run(home, ["recheck-session", repo, "--dry-run"]).stdout).not.toContain("built by another version");
+  });
+
   it("dry run reports what it would clear and writes nothing", () => {
     const { home, repo } = stage();
     writeFileSync(join(repo, "src", "retry.ts"), 'export { exponentialBackoff } from "./lib/backoff";\n');
