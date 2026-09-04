@@ -57,7 +57,7 @@ log: { type: stdout, level: warn }
 EOF
 # Fetch verdaccio into the npx cache FIRST, in the foreground and bounded, so
 # the start-up wait below never includes the download. Eight rehearsal runs on
-# 2026-09-03 died with "verdaccio did not start" and nothing in verdaccio's own
+# 2026-09-04 UTC died with "verdaccio did not start" and nothing in verdaccio's own
 # log, first at a 30 s wait and then at 120 s; verdaccio never ran, npx was
 # still downloading it. npm's fetch-timeout bounds an IDLE socket only, and its
 # default is five minutes, so a registry that accepts a connection and then
