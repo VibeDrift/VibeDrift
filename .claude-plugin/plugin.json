@@ -1,7 +1,7 @@
 {
   "name": "vibedrift",
   "displayName": "VibeDrift",
-  "version": "0.20.2",
+  "version": "0.20.3",
   "description": "Drift detection for AI-generated codebases: in-loop MCP tools that keep new code consistent with the repo's own patterns, plus a run-once /vibedrift:setup.",
   "author": { "name": "VibeDrift", "url": "https://vibedrift.ai" },
   "homepage": "https://vibedrift.ai",
