@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, realpathSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, realpathSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -102,5 +102,27 @@ describe("hook clock", () => {
     expect(await readHookClock(sessions, "hash1", "s1")).toEqual({});
     writeFileSync(hookClockPath(sessions, "hash1", "s1"), JSON.stringify({ lastMs: "soon" }));
     expect(await readHookClock(sessions, "hash1", "s1")).toEqual({});
+  });
+});
+
+describe("the clock sidecar is written atomically", () => {
+  // Main's #122 made every per-session sidecar tmp+rename because the hook arms
+  // a 2 s self-timeout and a plain writeFile truncates the target in place. The
+  // clock is the sidecar with the sharpest failure: a half-written one parses as
+  // no clock, and the next Bash call then detects nothing at all.
+  it("never leaves the clock file truncated, and writes through a temp file", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "vd-clock-atomic-")));
+    const hash = "feedfacefeedface";
+    await writeHookClock(dir, hash, "s-atomic", 1_000, { "src/a.ts": 5 });
+    const projectDir = join(dir, hash);
+    // tmp+rename leaves no residue behind
+    expect(readdirSync(projectDir).filter((n) => n.includes(".tmp"))).toEqual([]);
+    expect(await readHookClock(dir, hash, "s-atomic")).toMatchObject({ lastMs: 1_000 });
+    // a second write of a SHORTER payload must not leave the longer tail behind,
+    // which is exactly what an in-place truncating write risks under a kill
+    await writeHookClock(dir, hash, "s-atomic", 2_000, {});
+    const raw = readFileSync(join(projectDir, "s-atomic.hookclock.json"), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(JSON.parse(raw)).toEqual({ lastMs: 2_000, recorded: {} });
   });
 });

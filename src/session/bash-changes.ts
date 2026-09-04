@@ -20,7 +20,8 @@
  * failing. Everything here is fail-open: a read error is a skip, never a throw.
  */
 
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { writeFileAtomic } from "./atomic-write.js";
 import { join, relative } from "node:path";
 import { SKIP_DIRS } from "../core/discovery.js";
 import { detectLanguage } from "../core/language.js";
@@ -82,9 +83,16 @@ export async function writeHookClock(
 ): Promise<void> {
   try {
     await mkdir(join(sessionsDir, safeSegment(projectHash)), { recursive: true, mode: 0o700 });
-    await writeFile(hookClockPath(sessionsDir, projectHash, sessionId), JSON.stringify({ lastMs, recorded }), {
-      mode: 0o600,
-    });
+    // Atomic, like every other per-session sidecar (see ./atomic-write.ts): the
+    // hook arms a 2 s self-timeout and can be killed mid-write, and a plain
+    // writeFile truncates in place, so a kill at the wrong moment would leave a
+    // half-written clock that parses as no clock at all. Losing the clock is
+    // not free here: the next Bash call then detects nothing at all.
+    await writeFileAtomic(
+      hookClockPath(sessionsDir, projectHash, sessionId),
+      JSON.stringify({ lastMs, recorded }),
+      { mode: 0o600 },
+    );
   } catch {
     // best-effort: a lost clock means the next Bash call detects nothing, never a failure
   }
