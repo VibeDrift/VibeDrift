@@ -27,13 +27,49 @@
 
 // ─── Tokenizer ────────────────────────────────────────────────────────
 
+/**
+ * Everything the tokenizer must NOT see — string literals and comments — as
+ * ONE left-to-right alternation. Group 1 captures a string literal; the
+ * comment alternatives capture nothing.
+ *
+ * A single pass is the only correct shape; every sequential order has a bug.
+ * Neutralizing strings before comments lets an apostrophe inside a comment
+ * (`// don't do this`) open a "string" that runs to the next quote on a later
+ * line and swallows the real code between them. Neutralizing comments before
+ * strings lets a `//` inside a literal (`"https://api.example.com/v1"`)
+ * truncate the literal mid-line, leaving an unbalanced quote that pairs with
+ * the next one below. With one alternation the engine takes whichever
+ * construct STARTS first at the current position and skips past it whole, so a
+ * comment's apostrophe never opens a string and a literal's `//` never opens a
+ * comment.
+ *
+ * Quoted strings stop at end of line (JS/TS/Go/Rust/Python strings cannot span
+ * an unescaped newline, so a stray quote can damage at most one line);
+ * template literals and Python triple-quoted strings may span lines. `#` line
+ * comments are Python's; a `#` inside a JS string or comment has already been
+ * consumed by the alternative that started earlier.
+ *
+ * Shared with `tokenizeBody` in function-extractor.ts, which substitutes a
+ * different placeholder.
+ */
+export const LITERALS_AND_COMMENTS =
+  /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*/g;
+
+/**
+ * Strip comments and collapse every string literal to `placeholder(quote)`,
+ * where `quote` is the literal's delimiter character (`"`, `'` or `` ` ``).
+ */
+export function stripLiteralsAndComments(
+  source: string,
+  placeholder: (quote: string) => string,
+): string {
+  return source.replace(LITERALS_AND_COMMENTS, (_match: string, literal: string | undefined) =>
+    literal === undefined ? "" : placeholder(literal[0]),
+  );
+}
+
 export function tokenize(source: string): string[] {
-  let cleaned = source.replace(/\/\/.*$/gm, "");
-  cleaned = cleaned.replace(/#.*$/gm, "");
-  cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
-  cleaned = cleaned.replace(/"(?:[^"\\]|\\.)*"/g, '"STR"');
-  cleaned = cleaned.replace(/'(?:[^'\\]|\\.)*'/g, "'STR'");
-  cleaned = cleaned.replace(/`(?:[^`\\]|\\.)*`/g, "`STR`");
+  const cleaned = stripLiteralsAndComments(source, (q) => `${q}STR${q}`);
   const tokens = cleaned.match(/[a-zA-Z_]\w*|[0-9]+(?:\.[0-9]+)?|[{}()[\];,.:=<>!+\-*/%&|^~?@#]/g);
   return tokens ?? [];
 }
@@ -173,13 +209,30 @@ export function buildShingles(tokens: string[], size = DEFAULT_SHINGLE_SIZE): st
  * linear independence isn't guaranteed — but the deviation from ideal
  * collision probability is <1% for well-mixed inputs (shingle strings).
  */
-const PERM_SEEDS: Uint32Array = (() => {
-  const arr = new Uint32Array(DEFAULT_PERMUTATIONS);
-  for (let i = 0; i < DEFAULT_PERMUTATIONS; i++) {
+function makePermSeeds(count: number): Uint32Array {
+  const arr = new Uint32Array(count);
+  for (let i = 0; i < count; i++) {
     arr[i] = Math.imul(0x811c9dc5 ^ (i * 0x9e3779b9), 16777619) >>> 0;
   }
   return arr;
-})();
+}
+
+let PERM_SEEDS: Uint32Array = makePermSeeds(DEFAULT_PERMUTATIONS);
+
+/**
+ * Seeds for `perms` permutations, grown on demand.
+ *
+ * The table used to be a fixed 128 entries indexed `p % 128`, so any caller
+ * asking for more than 128 permutations silently got DUPLICATE hash rows: row
+ * 128 was byte-identical to row 0. Duplicated rows are perfectly correlated, so
+ * the extra bands carried no independent evidence while the LSH math assumed
+ * they did — more permutations bought collision probability the signature could
+ * not actually deliver. Growing the table keeps every row distinct.
+ */
+function permSeeds(count: number): Uint32Array {
+  if (PERM_SEEDS.length < count) PERM_SEEDS = makePermSeeds(count);
+  return PERM_SEEDS;
+}
 
 function fnv1aWithSeed(str: string, seed: number): number {
   let h = seed >>> 0;
@@ -191,11 +244,12 @@ function fnv1aWithSeed(str: string, seed: number): number {
 }
 
 export function minHashSignature(shingles: string[], perms = DEFAULT_PERMUTATIONS): Uint32Array {
+  const seeds = permSeeds(perms);
   const sig = new Uint32Array(perms);
   sig.fill(0xffffffff);
   for (const shingle of shingles) {
     for (let p = 0; p < perms; p++) {
-      const h = fnv1aWithSeed(shingle, PERM_SEEDS[p % PERM_SEEDS.length]);
+      const h = fnv1aWithSeed(shingle, seeds[p]);
       if (h < sig[p]) sig[p] = h;
     }
   }
@@ -212,9 +266,36 @@ function bandKey(sig: Uint32Array, bandIdx: number, rows: number): string {
 }
 
 /**
+ * Above this bucket size, pairs are emitted sparsely instead of exhaustively.
+ *
+ * LSH is O(n) only while buckets stay small: one bucket of m members emits
+ * m·(m-1)/2 candidate pair STRINGS, so a single bucket of 5,000 boilerplate
+ * functions (generated CRUD, `export * from`, identical thin wrappers) produces
+ * 12.5 million strings and dominates the whole scan's time and memory.
+ *
+ * Such a bucket cannot simply be skipped, though. Members that are identical on
+ * one band are usually identical on EVERY band (a 200-strong cluster of
+ * near-identical functions has near-identical signatures), so they land in the
+ * same oversized bucket in all 16 bands and would never pair anywhere — the
+ * whole cluster vanished from the report. Instead an oversized bucket emits
+ * ~2·m pairs that keep it connected for the caller's clustering: every member
+ * pairs with the bucket's first member (a star) and with its predecessor (a
+ * chain). The star reaches each member in one hop even if one chain link fails
+ * LCS verification; the chain gives each member a second, local witness. The
+ * ceiling is that not every pair inside a giant cluster is LCS-verified
+ * individually — the caller sees the cluster through its spanning pairs.
+ */
+const MAX_LSH_BUCKET = 200;
+
+/**
  * Find all pairs of signatures that collide in at least one LSH band.
  * Candidates are indices into the passed array. Caller decides what to do
  * with them (typically: pass to `lcsSimilarity` for verification).
+ *
+ * @throws when `bands × rows` exceeds the signature length — the extra rows
+ *         would read `undefined` off the end of the signature and every band key
+ *         past the end would be the same string, silently bucketing everything
+ *         together.
  */
 export function findLshCandidatePairs(
   signatures: Uint32Array[],
@@ -222,6 +303,15 @@ export function findLshCandidatePairs(
   rows = DEFAULT_LSH_ROWS,
 ): Set<string> {
   const candidates = new Set<string>();
+  const sigLength = signatures[0]?.length ?? 0;
+  if (signatures.length > 0 && bands * rows > sigLength) {
+    throw new Error(
+      `LSH configuration reads past the signature: ${bands} bands × ${rows} rows = ${bands * rows} > ${sigLength} permutations`,
+    );
+  }
+  const addPair = (a: number, b2: number): void => {
+    candidates.add(a < b2 ? `${a}-${b2}` : `${b2}-${a}`);
+  };
   for (let b = 0; b < bands; b++) {
     const buckets = new Map<string, number[]>();
     for (let i = 0; i < signatures.length; i++) {
@@ -232,11 +322,18 @@ export function findLshCandidatePairs(
     }
     for (const bucket of buckets.values()) {
       if (bucket.length < 2) continue;
+      if (bucket.length > MAX_LSH_BUCKET) {
+        // Star + chain: O(m) pairs that keep the bucket connected. See MAX_LSH_BUCKET.
+        const hub = bucket[0];
+        for (let x = 1; x < bucket.length; x++) {
+          addPair(hub, bucket[x]);
+          addPair(bucket[x - 1], bucket[x]);
+        }
+        continue;
+      }
       for (let x = 0; x < bucket.length; x++) {
         for (let y = x + 1; y < bucket.length; y++) {
-          const a = bucket[x], b2 = bucket[y];
-          const key = a < b2 ? `${a}-${b2}` : `${b2}-${a}`;
-          candidates.add(key);
+          addPair(bucket[x], bucket[y]);
         }
       }
     }
@@ -247,17 +344,47 @@ export function findLshCandidatePairs(
 // ─── LCS similarity ───────────────────────────────────────────────────
 
 /**
+ * The lowest similarity any caller of `lcsSimilarity` flags at. The length-ratio
+ * pre-filter is safe only below the threshold the caller will actually apply, so
+ * the default has to sit at or under the most permissive one in the tree: the
+ * deep-scan sampler's 0.55 borderline band, then 0.60 discovery
+ * (find-similar-function), 0.70 flagging, 0.80 change validation.
+ */
+export const LCS_DEFAULT_MIN_SIMILARITY = 0.5;
+
+/**
  * Longest-common-subsequence similarity between two token streams,
  * normalized to [0, 1] as `2 · LCS(a,b) / (|a| + |b|)`.
- * Rejects with 0 when lengths differ by more than 2× (impossible for
- * LCS similarity to exceed 0.5 when that's the case).
  * O(|a|·|b|) time, O(min(|a|,|b|)) space.
+ *
+ * Skips the DP entirely when the length ratio makes `minSimilarity`
+ * unreachable. With `r = min/max`, the best possible score is a full
+ * containment — LCS = min — which normalizes to `2·min/(min+max) = 2r/(1+r)`.
+ * So the cheap test is `2r/(1+r) < minSimilarity`.
+ *
+ * The old form of this gate was `r < 0.5`, justified in its comment as
+ * "impossible for LCS similarity to exceed 0.5". That is the wrong bound: at
+ * r = 0.5 the ceiling is 2(0.5)/1.5 = 0.667, not 0.5. Everything from r = 1/3
+ * (ceiling 0.5) up to r = 0.5 was returned as 0 despite a true similarity of up
+ * to 0.645 — a 100-token function fully contained in a 210-token one scored 0
+ * instead of 0.645, above BOTH the 0.60 discovery threshold and the sampler's
+ * 0.55 band floor. Wrapper-and-inline and extract-a-helper duplication is
+ * exactly the shape that lands in that ratio window, so the detector was blind
+ * to the duplication class it most needs to see.
+ *
+ * @param minSimilarity the caller's own flagging threshold. Pass it to skip more
+ *        DP work; the default is safe for every caller in the tree.
  */
-export function lcsSimilarity(a: string[], b: string[]): number {
+export function lcsSimilarity(
+  a: string[],
+  b: string[],
+  minSimilarity = LCS_DEFAULT_MIN_SIMILARITY,
+): number {
   if (a.length === 0 || b.length === 0) return 0;
   const minLen = Math.min(a.length, b.length);
   const maxLen = Math.max(a.length, b.length);
-  if (minLen / maxLen < 0.5) return 0;
+  const ratio = minLen / maxLen;
+  if ((2 * ratio) / (1 + ratio) < minSimilarity) return 0;
 
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   const prev = new Int32Array(shorter.length + 1);

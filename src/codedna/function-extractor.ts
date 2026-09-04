@@ -8,6 +8,7 @@
 
 import type { SourceFile, SupportedLanguage } from "../core/types.js";
 import type { ExtractedFunction, FunctionRef } from "./types.js";
+import { stripLiteralsAndComments } from "./minhash.js";
 
 // Domain category detection based on function name and body content
 export function detectDomainCategory(name: string, body: string): string {
@@ -34,25 +35,20 @@ export function detectDomainCategory(name: string, body: string): string {
   return "general";
 }
 
-// Tokenize body for comparison (strip comments, normalize strings)
+// Tokenize body for comparison (strip comments, normalize strings).
 //
-// ORDER IS LOAD-BEARING: string literals are neutralized BEFORE comments.
-// A `//` inside a literal — `'https://example.invalid'` — would otherwise be
-// read as a comment start, deleting the closing quote and desynchronizing
-// quote pairing for the remainder of the body. Measured on the audited session
-// population: that leaked 45 distinct English words out of test-name literals
-// into one stored anchor, and swallowed 43% of another file's tokens.
-//
-// Block comments are stripped before line comments for the same reason in the
-// other direction: a `//` inside a block comment must not terminate scanning
-// early.
+// Strings and comments are recognised in ONE left-to-right pass
+// (`stripLiteralsAndComments` in minhash.ts): whichever construct starts first
+// wins. Stripping comments first read the `//` inside `'https://example.invalid'`
+// as a comment start, deleted the closing quote and desynchronized quote pairing
+// for the rest of the body (measured: 45 English words leaked out of test-name
+// literals into one stored anchor; 43% of another file's tokens swallowed).
+// Stripping strings first has the mirror bug: the apostrophe in `// don't`
+// paired with the next quote and swallowed the real code in between. Each
+// literal collapses to an empty pair of its own quotes, so the hash of a body
+// without string content is unchanged.
 export function tokenizeBody(body: string): string[] {
-  let cleaned = body
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
-  cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
-  cleaned = cleaned.replace(/\/\/.*$/gm, "").replace(/#.*$/gm, "");
+  const cleaned = stripLiteralsAndComments(body, (q) => q + q);
   return cleaned.match(/[a-zA-Z_]\w*|[0-9]+|[{}()[\];,.:=<>!+\-*/%&|^~?]/g) ?? [];
 }
 
@@ -359,12 +355,42 @@ function hasRealParamList(content: string, matchStart: number, matched: string):
   return content[j] === "{";
 }
 
+/**
+ * Recover the bare NAME of one parameter from its raw source text.
+ *
+ * `params` is `paramsStr.split(",")`, so in every typed language an entry
+ * carries its type: `"id: string"`, `"ctx context.Context"`, `"mut id: u32"`,
+ * `"limit = 10"`. Anything matching a parameter against identifiers in the body
+ * — the taint summary's synthetic param sources, one-hop call-site argument
+ * matching — compared those raw strings and therefore never matched on TS, Go or
+ * Rust, silently disabling interprocedural taint everywhere but plain JS.
+ *
+ * Go puts the name FIRST (`ctx context.Context`); every other supported language
+ * puts modifiers first and the name last once the annotation is cut
+ * (`public readonly id: string` → `public readonly id` → `id`). A destructuring
+ * or tuple pattern has no single name and yields `""` rather than a guess.
+ */
+function toParamName(raw: string, language: SupportedLanguage): string {
+  let p = raw.trim();
+  if (!p) return "";
+  p = p.replace(/^\.\.\./, "").replace(/^[&*]+/, "").trim();
+  if (/^[[{(]/.test(p)) return ""; // destructuring / tuple pattern
+  p = p.split(/[:=]/)[0].trim();
+  const words = p.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "";
+  const name = language === "go" ? words[0] : words[words.length - 1];
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? name : "";
+}
+
 // Extract all functions from a single source file
 export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] {
   const functions: ExtractedFunction[] = [];
   if (!file.language) return functions;
+  // Bound to a local so the narrowing survives into the callbacks below
+  // (`file.language` is a mutable property, so TS re-widens it inside a closure).
+  const language = file.language;
 
-  const patterns = getLanguagePatterns(file.language);
+  const patterns = getLanguagePatterns(language);
 
   for (const { re, bodyAfterMatch, isArrow, realParamList } of patterns) {
     const regex = new RegExp(re.source, re.flags);
@@ -388,6 +414,7 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
       if (body.length < 10) continue;
 
       const params = paramsStr.trim() ? paramsStr.split(",").map((p) => p.trim()) : [];
+      const paramNames = params.map((p) => toParamName(p, language));
       const declarationCode = (file.content.split("\n")[line - 1] ?? "").trim();
       const tokens = tokenizeBody(body);
       if (tokens.length < 5) continue;
@@ -400,6 +427,7 @@ export function extractFunctionsFromFile(file: SourceFile): ExtractedFunction[] 
         line,
         language: file.language,
         params,
+        paramNames,
         paramCount: params.length,
         rawBody: body,
         declarationCode,

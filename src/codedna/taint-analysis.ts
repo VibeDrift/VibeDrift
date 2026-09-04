@@ -35,6 +35,7 @@
 import type { TaintFlow, TaintSource } from "./types.js";
 import type { Finding } from "../core/types.js";
 import type { ExtractedFunction } from "./types.js";
+import { escapeRegex } from "../core/regex.js";
 
 // ──── Taint Sources (user input entry points) ────
 
@@ -91,6 +92,34 @@ interface SinkPattern {
   category: string;
 }
 
+/**
+ * Left boundary for a bare (undotted) call name.
+ *
+ * A sink regex like `/exec\s*\(/` has no left boundary at all, so it matched the
+ * SUFFIX of every longer identifier and every member call. `RE.exec(userInput)`
+ * — a RegExp match, the single most common `exec` in any JS/TS codebase —
+ * reported an ERROR-severity command injection, `parseFunction(x)` reported
+ * dynamic code evaluation, and `reopen(path)` reported path traversal. Requiring
+ * that the name not be preceded by an identifier character OR a `.` restricts
+ * these to genuine bare calls; the module forms (`child_process`, `os.Open`,
+ * `subprocess.run`) have their own dotted patterns below, so the real sinks are
+ * still reached.
+ */
+const BARE = "(?<![\\w$.])";
+
+/**
+ * A dotted call is a sink too when the receiver is a known alias for the module
+ * or global that owns the real function: `cp.exec(cmd)` and `window.fetch(url)`
+ * are exactly the calls the bare anchor was never meant to exclude. The receiver
+ * must itself be bare, so `RE.cp.exec(` or `this.sh.exec(` — somebody's own
+ * object, not the module — still do not qualify.
+ */
+function bareOrOn(receivers: string): string {
+  return `(?:${BARE}|(?<=(?:^|[^\\w$.])(?:${receivers})\\.))`;
+}
+const EXEC_RECEIVERS = "child_process|childProcess|cp|proc|subprocess|shell|sh";
+const FETCH_RECEIVERS = "window|globalThis|self|global|node";
+
 const TAINT_SINKS: SinkPattern[] = [
   // SQL injection
   { regex: /db\.Query\s*\(/, label: "SQL query", severity: "error", category: "sql_injection" },
@@ -100,9 +129,12 @@ const TAINT_SINKS: SinkPattern[] = [
   { regex: /\.raw\s*\(/, label: "raw SQL query", severity: "error", category: "sql_injection" },
 
   // Command injection
-  { regex: /exec\s*\(/, label: "command execution", severity: "error", category: "command_injection" },
-  { regex: /execSync\s*\(/, label: "sync command execution", severity: "error", category: "command_injection" },
-  { regex: /child_process/, label: "child process", severity: "error", category: "command_injection" },
+  { regex: new RegExp(`${bareOrOn(EXEC_RECEIVERS)}exec\\s*\\(`), label: "command execution", severity: "error", category: "command_injection" },
+  { regex: new RegExp(`${bareOrOn(EXEC_RECEIVERS)}execSync\\s*\\(`), label: "sync command execution", severity: "error", category: "command_injection" },
+  // `child_process.exec(` / `.execSync(` belong to the two patterns above; they
+  // are excluded here so one call is not reported as two sinks. This entry still
+  // covers the module's other calls (spawn, execFile, fork, ...).
+  { regex: /child_process(?!\.exec(?:Sync)?\s*\()/, label: "child process", severity: "error", category: "command_injection" },
   { regex: /os\.system\s*\(/, label: "OS system call", severity: "error", category: "command_injection" },
   { regex: /subprocess\.(?:call|run|Popen)\s*\(/, label: "subprocess call", severity: "error", category: "command_injection" },
 
@@ -110,16 +142,16 @@ const TAINT_SINKS: SinkPattern[] = [
   { regex: /fs\.readFile\s*\(/, label: "file read", severity: "warning", category: "path_traversal" },
   { regex: /fs\.writeFile\s*\(/, label: "file write", severity: "warning", category: "path_traversal" },
   { regex: /os\.Open\s*\(/, label: "file open", severity: "warning", category: "path_traversal" },
-  { regex: /open\s*\(/, label: "file open", severity: "warning", category: "path_traversal" },
+  { regex: new RegExp(`${BARE}open\\s*\\(`), label: "file open", severity: "warning", category: "path_traversal" },
 
   // XSS
   { regex: /innerHTML\s*=/, label: "HTML injection", severity: "error", category: "xss" },
   { regex: /dangerouslySetInnerHTML/, label: "React HTML injection", severity: "error", category: "xss" },
-  { regex: /eval\s*\(/, label: "code evaluation", severity: "error", category: "code_injection" },
-  { regex: /Function\s*\(/, label: "dynamic function", severity: "error", category: "code_injection" },
+  { regex: new RegExp(`${BARE}eval\\s*\\(`), label: "code evaluation", severity: "error", category: "code_injection" },
+  { regex: new RegExp(`${BARE}Function\\s*\\(`), label: "dynamic function", severity: "error", category: "code_injection" },
 
   // Outbound (lower severity)
-  { regex: /fetch\s*\(/, label: "outbound HTTP fetch", severity: "warning", category: "ssrf" },
+  { regex: new RegExp(`${bareOrOn(FETCH_RECEIVERS)}fetch\\s*\\(`), label: "outbound HTTP fetch", severity: "warning", category: "ssrf" },
   { regex: /http\.Get\s*\(/, label: "outbound HTTP GET", severity: "warning", category: "ssrf" },
   { regex: /axios\.\w+\s*\(/, label: "outbound HTTP request", severity: "warning", category: "ssrf" },
 ];
@@ -146,14 +178,30 @@ interface SanitizerPattern {
   removes: string | "all";
 }
 
+/**
+ * Left boundary for a sanitizer's call name.
+ *
+ * A false sanitizer is worse than a false sink: it SILENCES a real flow, and it
+ * silences it for the rest of the function. Unanchored, `/int\s*\(/` was
+ * satisfied by `print(`, `/Number\s*\(/` by `PhoneNumber(`, and `/escape\s*\(/`
+ * by `unescape(` — the exact function that REINTRODUCES the characters escaping
+ * removed. One `print(user)` for debugging, anywhere above a SQL sink, cleared
+ * the taint on that variable and the injection went unreported.
+ *
+ * A preceding `.` is allowed (unlike sinks): `Number.parseInt(x)`,
+ * `_.escape(x)` and `validator.escape(x)` are the idiomatic spellings and are
+ * genuine sanitizers.
+ */
+const SAN = "(?<![\\w$])";
+
 const SANITIZERS: SanitizerPattern[] = [
   // Type coercion (removes SQL injection for numbers)
-  { regex: /parseInt\s*\(/, label: "parseInt", removes: "sql_injection" },
-  { regex: /parseFloat\s*\(/, label: "parseFloat", removes: "sql_injection" },
-  { regex: /Number\s*\(/, label: "Number()", removes: "sql_injection" },
-  { regex: /strconv\.Atoi\s*\(/, label: "strconv.Atoi", removes: "sql_injection" },
-  { regex: /strconv\.Parse\w+\s*\(/, label: "strconv.Parse*", removes: "sql_injection" },
-  { regex: /int\s*\(/, label: "int()", removes: "sql_injection" },
+  { regex: new RegExp(`${SAN}parseInt\\s*\\(`), label: "parseInt", removes: "sql_injection" },
+  { regex: new RegExp(`${SAN}parseFloat\\s*\\(`), label: "parseFloat", removes: "sql_injection" },
+  { regex: new RegExp(`${SAN}Number\\s*\\(`), label: "Number()", removes: "sql_injection" },
+  { regex: new RegExp(`${SAN}strconv\\.Atoi\\s*\\(`), label: "strconv.Atoi", removes: "sql_injection" },
+  { regex: new RegExp(`${SAN}strconv\\.Parse\\w+\\s*\\(`), label: "strconv.Parse*", removes: "sql_injection" },
+  { regex: new RegExp(`${SAN}int\\s*\\(`), label: "int()", removes: "sql_injection" },
 
   // Parameterized queries
   { regex: /\$\d+/, label: "parameterized query ($N)", removes: "sql_injection" },
@@ -162,12 +210,12 @@ const SANITIZERS: SanitizerPattern[] = [
   // Schema validation (removes all taint)
   { regex: /schema\.parse\s*\(/, label: "schema.parse()", removes: "all" },
   { regex: /\.validate\s*\(/, label: ".validate()", removes: "all" },
-  { regex: /zod\./i, label: "Zod validation", removes: "all" },
-  { regex: /joi\./i, label: "Joi validation", removes: "all" },
+  { regex: new RegExp(`${SAN}zod\\.`, "i"), label: "Zod validation", removes: "all" },
+  { regex: new RegExp(`${SAN}joi\\.`, "i"), label: "Joi validation", removes: "all" },
 
   // HTML escaping
-  { regex: /escape\s*\(/, label: "escape()", removes: "xss" },
-  { regex: /sanitize\s*\(/, label: "sanitize()", removes: "xss" },
+  { regex: new RegExp(`${SAN}escape\\s*\\(`), label: "escape()", removes: "xss" },
+  { regex: new RegExp(`${SAN}sanitize\\s*\\(`), label: "sanitize()", removes: "xss" },
   { regex: /DOMPurify/i, label: "DOMPurify", removes: "xss" },
   { regex: /html\.EscapeString/i, label: "html.EscapeString", removes: "xss" },
 
@@ -182,6 +230,31 @@ interface TaintedVar {
   name: string;
   source: TaintSource;
   sanitizedFor: Set<string>; // categories sanitized
+  /** Whole-identifier match for `name`; see `makeTaintedVar`. */
+  mention: RegExp;
+}
+
+/**
+ * Build a tainted-variable record, with its whole-identifier matcher compiled
+ * ONCE at the point the variable becomes tainted (it is then tested against
+ * every remaining line of the function).
+ *
+ * "Is this variable mentioned on this line" used to be `line.includes(name)`,
+ * a raw substring test. A tainted `id` was therefore "present" on
+ * `db.query("SELECT * FROM invalid_rows")` (inside `invalid`), on `validate(x)`,
+ * on `width`, and on `userId` — so an unrelated line carrying a sink reported an
+ * injection sourced from a variable that never reaches it, and an unrelated line
+ * carrying a sanitizer cleared taint that was never sanitized. Short names (`id`,
+ * `q`, `p`, `db`) are both the most common taint carriers and the most common
+ * substrings of other identifiers.
+ */
+function makeTaintedVar(name: string, source: TaintSource): TaintedVar {
+  return {
+    name,
+    source,
+    sanitizedFor: new Set(),
+    mention: new RegExp(`(?<![\\w$])${escapeRegex(name)}(?![\\w$])`),
+  };
 }
 
 function extractAssignedVariable(line: string): string | null {
@@ -215,11 +288,10 @@ function identifySources(
     if (src.regex.test(trimmed)) {
       const varName = extractAssignedVariable(trimmed);
       if (varName) {
-        taintedVars.set(varName, {
-          name: varName,
-          source: { type: src.label, variable: varName, line: lineNumber },
-          sanitizedFor: new Set(),
-        });
+        taintedVars.set(
+          varName,
+          makeTaintedVar(varName, { type: src.label, variable: varName, line: lineNumber }),
+        );
       }
     }
   }
@@ -229,8 +301,8 @@ function checkSanitizers(
   trimmed: string,
   taintedVars: Map<string, TaintedVar>,
 ): void {
-  for (const [varName, tainted] of taintedVars) {
-    if (!trimmed.includes(varName)) continue;
+  for (const [, tainted] of taintedVars) {
+    if (!tainted.mention.test(trimmed)) continue;
     for (const san of SANITIZERS) {
       if (san.regex.test(trimmed)) {
         if (san.removes === "all") {
@@ -253,8 +325,8 @@ function identifySinks(
   for (const sink of TAINT_SINKS) {
     if (!sink.regex.test(trimmed)) continue;
 
-    for (const [varName, tainted] of taintedVars) {
-      if (!trimmed.includes(varName)) continue;
+    for (const [, tainted] of taintedVars) {
+      if (!tainted.mention.test(trimmed)) continue;
       if (tainted.sanitizedFor.has(sink.category)) continue;
 
       // Check inline sanitization on the same line
@@ -317,18 +389,20 @@ interface FunctionSummary {
 function buildSummary(fn: ExtractedFunction): FunctionSummary {
   const paramsTainted = new Set<number>();
   const sinkCategories = new Set<string>();
-  if (fn.params.length === 0) return { fn, paramsTainted, sinkCategories };
+  // Bare parameter NAMES, index-aligned with `params`. Reading `fn.params`
+  // directly (which is what this did) compared `"id: string"` against
+  // identifiers in the body, so no parameter ever matched in TypeScript, Go or
+  // Rust and Phase 2 was silently dead outside plain JavaScript.
+  const paramNames = fn.paramNames ?? fn.params;
+  if (paramNames.length === 0) return { fn, paramsTainted, sinkCategories };
 
   // Treat every parameter as a synthetic taint source at function entry.
   const taintedVars = new Map<string, TaintedVar>();
-  fn.params.forEach((p, idx) => {
+  paramNames.forEach((p, idx) => {
     if (!p) return;
-    taintedVars.set(p, {
-      name: p,
-      source: { type: `param[${idx}]`, variable: p, line: fn.line },
-      sanitizedFor: new Set(),
-    });
+    taintedVars.set(p, makeTaintedVar(p, { type: `param[${idx}]`, variable: p, line: fn.line }));
   });
+  if (taintedVars.size === 0) return { fn, paramsTainted, sinkCategories };
 
   const lines = fn.rawBody.split("\n");
   for (let i = 0; i < lines.length; i++) {
@@ -339,9 +413,9 @@ function buildSummary(fn: ExtractedFunction): FunctionSummary {
     for (const sink of TAINT_SINKS) {
       if (!sink.regex.test(trimmed)) continue;
       for (const [varName, tainted] of taintedVars) {
-        if (!trimmed.includes(varName)) continue;
+        if (!tainted.mention.test(trimmed)) continue;
         if (tainted.sanitizedFor.has(sink.category)) continue;
-        const idx = fn.params.indexOf(varName);
+        const idx = paramNames.indexOf(varName);
         if (idx >= 0) {
           paramsTainted.add(idx);
           sinkCategories.add(sink.category);

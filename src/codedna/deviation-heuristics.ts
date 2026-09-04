@@ -14,10 +14,10 @@
  * Signals (with default weights):
  *   +0.15  complex SQL indicators (GROUP BY, HAVING, CTE, 3+ JOIN, etc.)
  *   +0.20  explanatory comment near the deviation site
+ *   −0.10  no explanatory comment anywhere near the deviation
  *   +0.20  file is in a "special" directory (reporting, admin, migrations)
  *   −0.30  simple CRUD SQL with no complexity
  *   −0.20  same directory as dominant-pattern files
- *   +0.15  git recency — file modified in the last 30 days (intentional)
  *   +0.15  adjacent test file exists (someone thought about this)
  *   +0.25  ADR / decision doc mentions the pattern or filename
  */
@@ -27,8 +27,18 @@ import type { PatternDistribution, DeviationJustification, JustificationSignal, 
 import type { Finding } from "../core/types.js";
 import { DEFAULT_DEVIATION_WEIGHTS } from "../core/config.js";
 import { escapeRegex } from "../core/regex.js";
+import { votePatternDominance } from "./pattern-classifier.js";
 
-type Weights = typeof DEFAULT_DEVIATION_WEIGHTS;
+/**
+ * Deviation weights that are NOT in `core/config.ts`'s DEFAULT_DEVIATION_WEIGHTS
+ * table. `no_comment` was applied as a bare inline `-0.1` literal: the one
+ * signal that fires on EVERY unexplained deviation was the only one missing
+ * from the weight table this module documents. All weights are code constants —
+ * the old `.vibedrift.json` override loader was dead code and has been removed.
+ */
+const LOCAL_DEVIATION_WEIGHTS = { no_comment: -0.1 };
+
+type Weights = typeof DEFAULT_DEVIATION_WEIGHTS & Partial<typeof LOCAL_DEVIATION_WEIGHTS>;
 
 // Special directories where deviations are more likely justified
 const SPECIAL_DIRS = /(?:reporting|analytics|admin|migration|scripts|tools|benchmark|seed|fixtures|test)/i;
@@ -84,8 +94,12 @@ function dirOf(p: string): string {
 function hasAdjacentTest(devPath: string, allFiles: SourceFile[]): boolean {
   const base = devPath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
   if (!base) return false;
+  // escapeRegex, not a hand-rolled character class: the inline one here had a
+  // broken class (`[.*+?^${}()|[\\]\\\\]` closes at the `\\]`), so it escaped
+  // nothing and a filename containing `(` or `[` compiled to an invalid RegExp
+  // and THREW mid-scan.
   return allFiles.some((f) =>
-    new RegExp(`(?:^|/)${base.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\.(?:test|spec)\\.[a-z]+$`).test(f.relativePath),
+    new RegExp(`(?:^|/)${escapeRegex(base)}\\.(?:test|spec)\\.[a-z]+$`).test(f.relativePath),
   );
 }
 
@@ -107,7 +121,6 @@ function computeSignalScore(
   projectDominant: ArchPattern,
   weights: Weights,
   allFiles: SourceFile[],
-  recentFiles: Set<string>,
 ): { signals: JustificationSignal[]; totalWeight: number } {
   const lines = file.content.split("\n");
   const signals: JustificationSignal[] = [];
@@ -127,8 +140,9 @@ function computeSignalScore(
     signals.push({ type: "explanatory_comment", present: true, weight: weights.explanatory_comment, evidence: "comment explains deviation" });
     totalWeight += weights.explanatory_comment;
   } else {
-    signals.push({ type: "no_comment", present: true, weight: -0.1, evidence: "no explanatory comment" });
-    totalWeight -= 0.1;
+    const w = weights.no_comment ?? LOCAL_DEVIATION_WEIGHTS.no_comment;
+    signals.push({ type: "no_comment", present: true, weight: w, evidence: "no explanatory comment" });
+    totalWeight += w;
   }
 
   // Special directory
@@ -154,13 +168,7 @@ function computeSignalScore(
     totalWeight += weights.same_directory_penalty;
   }
 
-  // NEW: git recency
-  if (recentFiles.has(file.relativePath)) {
-    signals.push({ type: "git_recency", present: true, weight: weights.git_recency, evidence: "modified within the last 30 days" });
-    totalWeight += weights.git_recency;
-  }
-
-  // NEW: adjacent test file
+  // Adjacent test file
   if (hasAdjacentTest(devDist.relativePath, allFiles)) {
     signals.push({ type: "adjacent_test", present: true, weight: weights.adjacent_test, evidence: "matching test file exists" });
     totalWeight += weights.adjacent_test;
@@ -189,8 +197,6 @@ function classifyDeviation(totalWeight: number): { justificationScore: number; v
 
 export interface ScoreDeviationsOptions {
   weights?: Weights;
-  /** Set of relativePaths considered "recently modified" (top 10% by mtime). */
-  recentFiles?: Set<string>;
 }
 
 export function scoreDeviations(
@@ -200,23 +206,13 @@ export function scoreDeviations(
 ): DeviationJustification[] {
   if (distributions.length < 2) return [];
   const weights = options.weights ?? DEFAULT_DEVIATION_WEIGHTS;
-  const recentFiles = options.recentFiles ?? new Set<string>();
 
-  // Find project-wide dominant pattern
-  const patternCounts = new Map<ArchPattern, number>();
-  for (const dist of distributions) {
-    patternCounts.set(dist.dominantPattern, (patternCounts.get(dist.dominantPattern) ?? 0) + 1);
-  }
-
-  let projectDominant: ArchPattern = "none";
-  let maxCount = 0;
-  for (const [pattern, count] of patternCounts) {
-    if (count > maxCount) {
-      maxCount = count;
-      projectDominant = pattern;
-    }
-  }
-
+  // Same dominance gate `patternFindings` uses, from the same helper: a
+  // deviation is only a deviation when there is a convention to deviate FROM.
+  // A plurality winner (a 3/3/3 split) is not one, and scoring justification
+  // against it manufactures "likely accidental" verdicts for files that simply
+  // belong to another equally-common approach.
+  const { dominant: projectDominant } = votePatternDominance(distributions);
   if (projectDominant === "none") return [];
 
   const justifications: DeviationJustification[] = [];
@@ -228,7 +224,7 @@ export function scoreDeviations(
     if (!file) continue;
 
     const { signals, totalWeight } = computeSignalScore(
-      file, devDist, dominantFiles, projectDominant, weights, files, recentFiles,
+      file, devDist, dominantFiles, projectDominant, weights, files,
     );
     const { justificationScore, verdict } = classifyDeviation(totalWeight);
 

@@ -64,18 +64,26 @@ export async function classifyRouteAuth(
   const tree = await parseFile(file);
   if (!tree) return null;
 
-  // No file-middleware arg: router-scope `router.use()` auth is deliberately not
-  // visible from a single proposed body, so it must not silence the check.
-  const routes = extractJsRoutesAst(tree, relTarget, undefined);
-  if (routes.length === 0) return null; // not a route body → nothing to compare.
+  // `parseFile` hands back a tree nobody else owns (only `parseFiles` attaches
+  // trees to files for `disposeTrees`), so it is freed here once the routes are
+  // read. This runs inside the long-lived MCP server on every `validate_change`
+  // call; an undeleted tree is WASM heap that never comes back.
+  try {
+    // No file-middleware arg: router-scope `router.use()` auth is deliberately
+    // not visible from a single proposed body, so it must not silence the check.
+    const routes = extractJsRoutesAst(tree, relTarget, undefined);
+    if (routes.length === 0) return null; // not a route body → nothing to compare.
 
-  // RouteInfo.method is upper-cased by the extractor; SECURITY_AST.MUTATING is
-  // lower-case. Normalize before the membership test.
-  const mutating = routes.filter((r) => SECURITY_AST.MUTATING.has(r.method.toLowerCase()));
-  return {
-    isMutatingRoute: mutating.length > 0,
-    // `.every` over an empty set is vacuously true; that only matters when there
-    // is no mutating route, in which case the consumer ignores this field.
-    hasVisibleAuth: mutating.every((r) => r.hasAuth === true),
-  };
+    // RouteInfo.method is upper-cased by the extractor; SECURITY_AST.MUTATING is
+    // lower-case. Normalize before the membership test.
+    const mutating = routes.filter((r) => SECURITY_AST.MUTATING.has(r.method.toLowerCase()));
+    return {
+      isMutatingRoute: mutating.length > 0,
+      // `.every` over an empty set is vacuously true; that only matters when
+      // there is no mutating route, in which case the consumer ignores this field.
+      hasVisibleAuth: mutating.every((r) => r.hasAuth === true),
+    };
+  } finally {
+    tree.delete();
+  }
 }

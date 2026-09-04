@@ -152,8 +152,10 @@ export function findSimilarToBody(
 
   const out: SimMatch[] = [];
   for (const e of index) {
-    let sim = lcsSimilarity(q.tokens, e.tokens);
-    if (qStripped) sim = Math.max(sim, lcsSimilarity(qStripped.tokens, e.tokens));
+    // Pass the caller's own threshold as the length-ratio pre-filter's bound:
+    // the gate then skips exactly the pairs that cannot reach it, and no others.
+    let sim = lcsSimilarity(q.tokens, e.tokens, opts.threshold);
+    if (qStripped) sim = Math.max(sim, lcsSimilarity(qStripped.tokens, e.tokens, opts.threshold));
     if (sim >= opts.threshold) {
       out.push({
         relativePath: e.relativePath,
