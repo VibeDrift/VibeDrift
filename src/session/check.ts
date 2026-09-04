@@ -15,7 +15,7 @@ import { join, relative } from "node:path";
 import { loadBaselineUnchecked, type RepoDriftBaseline } from "../core/baseline.js";
 import { detectLanguage } from "../core/language.js";
 import { detectDrift } from "./detect.js";
-import type { FindingAnchor } from "./finding-anchor.js";
+import type { AnchorSite, FindingAnchor } from "./finding-anchor.js";
 import { newActivityId, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
@@ -31,6 +31,17 @@ export const COOLDOWN_MS = 5 * 60_000;
  *  for the one advisory that gets messaged. Below it, conflicts keep the lead
  *  (at lower similarity the convention conflict is usually the better call). */
 export const STRONG_DUP_SIMILARITY = 0.9;
+
+/**
+ * Appended to every MESSAGED advisory. The line used to end with a hint and no
+ * instruction; on a real session the agent declined two flags and accepted two
+ * in plain chat and none of it reached the ledger, because nothing told it to
+ * record a call. `respond_to_flag` is the MCP tool that writes the decision;
+ * where the MCP server is not connected the fallback keeps the reason at least
+ * visible in the reply.
+ */
+export const ADVISORY_ASK =
+  " Fix it, or record your call with respond_to_flag (accept / park / decline) and one reason; if that tool is unavailable, say the reason in your reply.";
 
 /** One advisory candidate for the single-message pick: the cooldown key, the
  *  agent-facing line, and the recorded flag event it belongs to. */
@@ -75,6 +86,32 @@ export function mergeCooldownState(local: CooldownState, onDisk: CooldownState):
     nextFindingSeq: Math.max(local.nextFindingSeq, onDisk.nextFindingSeq),
     lastFyi,
   };
+}
+
+/**
+ * The agent-facing line for a duplicate. Names BOTH sides: the function the
+ * agent just wrote (from the query site that saw the match) and the indexed
+ * counterpart. The old copy named only the counterpart; on a real session the
+ * agent, told "duplicates daysInMonth", removed a different function than the
+ * one the detector had anchored, and the finding could never close. When only
+ * the whole-file query matched there is no single construct to name, so the
+ * line says "this edit".
+ */
+export function formatDuplicateAdvisory(a: {
+  file: string;
+  findingId: string;
+  site: AnchorSite | undefined;
+  counterpart: { name: string; path: string; line: number };
+  similarity: number;
+}): string {
+  const mine =
+    a.site?.kind === "function" && a.site.symbol
+      ? `your ${a.site.symbol} (${a.file}${a.site.line !== undefined ? `:${a.site.line}` : ""})`
+      : "this edit";
+  return (
+    `[vibedrift] flagged ${a.file} (${a.findingId}): ${mine} duplicates ${a.counterpart.name} ` +
+    `(${a.counterpart.path}:${a.counterpart.line}), ${a.similarity.toFixed(2)} similar; prefer importing it.`
+  );
 }
 
 export interface EditCheckOptions {
@@ -267,11 +304,22 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
       similarity: topDup.similarity,
     });
     flags.push(event);
-    const site = detected.dupSites.get(where);
+    // The query-site map is keyed on the line the counterpart had when it was
+    // INDEXED; `where` carries the line verifyCounterpart re-resolved. Look up
+    // by the indexed key, or a counterpart that merely moved would lose the
+    // site: the advisory would degrade to "this edit" and, worse, no anchor
+    // would be recorded, so the finding could never resolve.
+    const site = detected.dupSites.get(`${topDup.relativePath}:${topDup.line}`);
     if (site && event.findingId) anchors[event.findingId] = { ...site, observed: where };
     candidates.push({
       key: `${relPath}|redundancy`,
-      message: `[vibedrift] flagged ${relPath} (${event.findingId}): new function duplicates ${topDup.name} at ${where} (${topDup.similarity.toFixed(2)} similar); prefer importing it.`,
+      message: formatDuplicateAdvisory({
+        file: relPath,
+        findingId: event.findingId ?? "DF-?",
+        site,
+        counterpart: { name: topDup.name, path: topDup.relativePath, line: dupStatus.line },
+        similarity: topDup.similarity,
+      }),
       event,
     });
   }
@@ -282,8 +330,9 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     const last = state.lastFyi[cand.key];
     if (last !== undefined && t - last < COOLDOWN_MS) continue;
     state.lastFyi[cand.key] = t;
-    cand.event.msgToAgent = cand.message;
-    fyi = cand.message;
+    // The recorded msgToAgent is the exact text delivered, ask included.
+    cand.event.msgToAgent = cand.message + ADVISORY_ASK;
+    fyi = cand.event.msgToAgent;
     break;
   }
 

@@ -14,6 +14,7 @@ import {
   type CooldownState,
 } from "@/session/check";
 import type { SessionEvent } from "@/session/types";
+import { formatDuplicateAdvisory, ADVISORY_ASK } from "@/session/check";
 
 const HELPER_BODY = `export function exponentialBackoff(attempt: number): number {
   const base = 250;
@@ -113,6 +114,20 @@ describe("runEditChecks", () => {
     expect(dup).toBeTruthy();
     expect(dup!.detail.similarTo).toContain("backoff.ts");
     expect(dup!.detail.similarity).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("names BOTH functions with their lines in the duplicate advisory", async () => {
+    // The old line named only the counterpart ("new function duplicates X at
+    // path:line"). On a real session the agent, told "duplicates daysInMonth",
+    // removed a different function than the one the detector had matched,
+    // and the finding could never close. The new function and its line come
+    // from the query site that saw the match.
+    const out = await runEditChecks(
+      opts({ sessionId: "s-dup-name", file: join(repo, "src", "retry.ts"), body: HELPER_BODY }),
+    );
+    expect(out.fyi).toContain(
+      "[vibedrift] flagged src/retry.ts (DF-1): your exponentialBackoff (src/retry.ts:1) duplicates exponentialBackoff (src/lib/backoff.ts:1), 1.00 similar; prefer importing it.",
+    );
   });
 
   it("stays quiet when the baseline exceeds the inline threshold", async () => {
@@ -451,4 +466,84 @@ describe("runEditChecks duplicate counterpart verification", () => {
     rmSync(repo3, { recursive: true, force: true });
     rmSync(sessionsDir3, { recursive: true, force: true });
   }, 60_000);
+});
+
+describe("duplicate advisory when the counterpart moved since indexing", () => {
+  // The index records the counterpart at the line it had when the baseline was
+  // built; by flag time the file may have grown above it. verifyCounterpart
+  // re-resolves the line for the message, but the query site map is keyed on
+  // the INDEXED line, so the lookup for the agent's own function used to miss:
+  // the advisory fell back to "this edit" and, worse, no anchor was recorded,
+  // so the finding could never resolve. Both must survive a moved counterpart.
+  it("still names the agent's function and records an anchor", async () => {
+    const file = join(repo, "src", "lib", "backoff.ts");
+    const original = readFileSync(file, "utf8");
+    try {
+      writeFileSync(file, `// moved down
+// by three
+// lines
+${original}`);
+      const out = await runEditChecks(
+        opts({ sessionId: "s-dup-moved", file: join(repo, "src", "retry.ts"), body: HELPER_BODY }),
+      );
+      const dup = out.flags.find((f) => f.detail.category === "redundancy")!;
+      expect(dup.detail.similarTo).toBe("src/lib/backoff.ts:4");
+      expect(out.fyi).toContain(
+        "your exponentialBackoff (src/retry.ts:1) duplicates exponentialBackoff (src/lib/backoff.ts:4), 1.00 similar",
+      );
+      expect(out.anchors[dup.findingId!]).toMatchObject({ kind: "function", symbol: "exponentialBackoff", observed: "src/lib/backoff.ts:4" });
+    } finally {
+      writeFileSync(file, original);
+    }
+  });
+});
+
+describe("the ask for a call", () => {
+  // The hook line used to end with a hint ("prefer importing it") and no
+  // instruction. On a real session the agent declined two flags and accepted
+  // two in plain chat, and none of it reached the ledger, because nothing
+  // told it to record a call. Every MESSAGED advisory now ends with the ask;
+  // the recorded msgToAgent is the exact text delivered.
+  it("ends a conflict advisory with the ask and records it verbatim", async () => {
+    const out = await runEditChecks(opts({ sessionId: "s-ask-conflict" }));
+    expect(out.fyi!.endsWith(ADVISORY_ASK)).toBe(true);
+    expect(out.flags.find((f) => f.msgToAgent)!.msgToAgent).toBe(out.fyi);
+  });
+  it("ends a duplicate advisory with the ask", async () => {
+    const out = await runEditChecks(
+      opts({ sessionId: "s-ask-dup", file: join(repo, "src", "retry.ts"), body: HELPER_BODY }),
+    );
+    expect(out.fyi!.endsWith(ADVISORY_ASK)).toBe(true);
+    expect(out.fyi).toContain("prefer importing it. Fix it, or record your call with respond_to_flag");
+  });
+});
+
+describe("formatDuplicateAdvisory", () => {
+  const counterpart = { name: "monthOf", path: "src/components/calendar-utils.ts", line: 8 };
+  it("names the new function and its line when the match came from a function site", () => {
+    expect(
+      formatDuplicateAdvisory({
+        file: "src/components/OpensOnCalendar.tsx",
+        findingId: "DF-24",
+        site: { kind: "function", symbol: "ymOf", line: 14, tokenHash: "x" },
+        counterpart,
+        similarity: 0.909,
+      }),
+    ).toBe(
+      "[vibedrift] flagged src/components/OpensOnCalendar.tsx (DF-24): your ymOf (src/components/OpensOnCalendar.tsx:14) duplicates monthOf (src/components/calendar-utils.ts:8), 0.91 similar; prefer importing it.",
+    );
+  });
+  it("falls back to 'this edit' when only the whole-file query matched", () => {
+    expect(
+      formatDuplicateAdvisory({
+        file: "src/x.ts",
+        findingId: "DF-2",
+        site: { kind: "file", tokenHash: "y" },
+        counterpart,
+        similarity: 0.9,
+      }),
+    ).toBe(
+      "[vibedrift] flagged src/x.ts (DF-2): this edit duplicates monthOf (src/components/calendar-utils.ts:8), 0.90 similar; prefer importing it.",
+    );
+  });
 });

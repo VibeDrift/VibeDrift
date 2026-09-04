@@ -86,6 +86,7 @@ export function detectDrift(
           site: {
             kind: "function",
             symbol: fn.name,
+            line: fn.line,
             tokenHash: anchorTokenHash(fn.rawBody),
             tokens: anchorTokens(fn.rawBody),
           },

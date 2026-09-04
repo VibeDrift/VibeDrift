@@ -60,8 +60,20 @@ describe("checkScope", () => {
     expect(r.flag?.type).toBe("flag");
     expect(r.flag?.detail.category).toBe("scope");
     expect(r.flag?.detail.experimental).toBe(true);
-    expect(r.fyi).toBeTruthy();
-    expect(r.fyi!.toLowerCase()).toContain("experimental");
+  });
+
+  it("records the scope flag but sends the agent NO message while the check is uncalibrated", async () => {
+    // Measured on a real session (20cb5425, 2026-08-16): 22 scope flags in
+    // 7.5 hours, every one against an intent lock taken on a resume prompt
+    // with zero file anchors, 20 of them delivered into the agent's context.
+    // The flag stays in the ledger (dashboard excludes experimental flags
+    // anyway); the agent-facing line is withheld until the check is calibrated.
+    const dir = tmp();
+    await lock(dir);
+    await checkScope(dir, HASH, "s1", "ui/theme.ts", "const palette = { red: 1 };");
+    const r = await checkScope(dir, HASH, "s1", "ui/layout.ts", "const grid = 12;");
+    expect(r.flag).not.toBeNull();
+    expect(r.fyi).toBeNull();
   });
 
   it("does NOT count a related edit toward the unrelated tally", async () => {

@@ -44,6 +44,10 @@ import type { RepoDriftBaseline } from "../core/baseline.js";
 export interface AnchorSite {
   kind: "file" | "function";
   symbol?: string;
+  /** 1-based line of the construct's declaration in the edit body that was
+   *  queried (function sites only). Advisory copy only: the re-check never
+   *  keys on it, because a line moves the moment anything above it changes. */
+  line?: number;
   tokenHash: string;
   /** the construct's normalized tokens, capped at ANCHOR_MAX_TOKENS. Optional
    *  because the sidecar is parsed without field validation, so a truncated or
