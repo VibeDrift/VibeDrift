@@ -155,6 +155,11 @@ async function readFileOrNull(path: string): Promise<string | null> {
   }
 }
 
+// Test-only re-export (kept at module scope, tree-shaken from the bundle):
+// the read-merge-write is only observable when the disk changes between a
+// caller's read and its write, which no public entry point can interleave.
+export const __test_writeCooldownState = writeState;
+
 export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOutcome> {
   const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineUnchecked(rootDir, HOOK_BASELINE_MAX_BYTES));
   const now = opts.now ?? Date.now;
