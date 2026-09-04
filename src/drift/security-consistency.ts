@@ -343,6 +343,12 @@ function analyzeSecurityProperty(
   const withoutProperty = applicableRoutes.filter((r) => !getter(r));
   const ratio = withProperty.length / applicableRoutes.length;
 
+  // Dominance gate: MORE than 75% of the group has the property and at least
+  // one route does not (handbook ch. 06: "exceeds 0.75"). Exactly 3 of 4 stays
+  // silent on purpose: the smallest group that can fire is 4 of 5, which keeps a
+  // single stray route in a tiny group (a test fixture, a one-off script) from
+  // producing a warning. Uniform-wrongness (ratio 0) is handled separately by
+  // analyzeUniformAuthGap.
   if (ratio <= 0.75 || withoutProperty.length === 0) return null;
 
   return {
@@ -421,6 +427,10 @@ export const securityConsistency: DriftDetector = {
     // versa. analyzeSecurityProperty already returns null under 2 applicable
     // routes, so small groups are naturally silent — no separate min-size gate.
     const groups = groupRoutes(routes);
+    // Repo-GLOBAL and loop-invariant: hoisted out of the per-group loop below,
+    // where it re-ran a full-repo regex scan over every file's content once per
+    // route group.
+    const hasMachinery = repoHasAuthMachinery(ctx.files);
 
     for (const group of groups) {
       // Auth applies to every state-changing route (POST/PUT/PATCH/DELETE).
@@ -444,7 +454,7 @@ export const securityConsistency: DriftDetector = {
       // middleware/auth.ts file) — exactly the multi-directory layout this
       // task makes more common.
       const gap = analyzeUniformAuthGap(group, {
-        hasMachinery: repoHasAuthMachinery(ctx.files),
+        hasMachinery,
         hint: authHint,
         healthPaths,
       }, langByFile);

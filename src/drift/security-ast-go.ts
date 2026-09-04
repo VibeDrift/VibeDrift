@@ -1017,6 +1017,14 @@ function classifyGoMiddlewareArg(
         const outcome = classifyGoMiddlewareAuth(name, xbody, x.defs);
         if (outcome !== "not-auth") return { outcome, name };
         if (goNameHasSubsumingVeto(name)) return { outcome: "not-auth", name };
+        // A RESOLVED body that verifiably does NOT enforce auth is a real
+        // verdict, not an absence of evidence — return it. Falling through here
+        // re-ran classifyGoMiddlewareAuth against a null in-file body, which
+        // discarded the resolution and hedged an auth-flavored name back to
+        // "unsure", so the cross-file work produced a weaker answer than it
+        // measured. A transparent-wrap name still falls through, so the
+        // single-argument wrap recursion below can look at what it wraps.
+        if (xbody && !goNameIsTransparentWrap(name)) return { outcome: "not-auth", name };
       }
     }
     const outcome = classifyGoMiddlewareAuth(name, body, defs);
@@ -1282,12 +1290,25 @@ function collectGoMiddleware(
   // A (name, scope) pair bound 2+ times in ONE scope is poisoned for that pair
   // (blessing removed, never added). (name, scope)-keyed so another function's
   // same-name binding cannot suppress this one.
-  const poisoned: Array<{ name: string; scope: SyntaxNode }> = [];
+  // One bucketing pass keyed by (name, scope span+type) instead of the previous
+  // all-pairs scan, which ran SyntaxNode.equals O(n^2) times over every binding in
+  // the file. A tree-sitter node is uniquely identified within one tree by its
+  // byte span plus its type, so bucket identity is exactly scope.equals identity;
+  // the representative scope node stored is the first sighting, and `poisoned`
+  // keeps its {name, scope} shape (and its `.equals` consumers) unchanged.
+  const buckets = new Map<string, { name: string; scope: SyntaxNode; count: number }>();
   for (const b of bindings) {
-    const count = bindings.filter((o) => o.name === b.name && o.scope.equals(b.scope)).length;
-    if (count >= 2 && !poisoned.some((p) => p.name === b.name && p.scope.equals(b.scope))) {
-      poisoned.push({ name: b.name, scope: b.scope });
-    }
+    // Joined with an ESCAPED NUL ("\u0000"), never a literal control byte in
+    // this source file: no node type or Go identifier can contain it, so the
+    // composite key is unambiguous.
+    const key = [b.name, b.scope.startIndex, b.scope.endIndex, b.scope.type].join("\u0000");
+    const hit = buckets.get(key);
+    if (hit) hit.count++;
+    else buckets.set(key, { name: b.name, scope: b.scope, count: 1 });
+  }
+  const poisoned: Array<{ name: string; scope: SyntaxNode }> = [];
+  for (const b of buckets.values()) {
+    if (b.count >= 2) poisoned.push({ name: b.name, scope: b.scope });
   }
 
   return { marks, derivations, poisoned, routerNames };

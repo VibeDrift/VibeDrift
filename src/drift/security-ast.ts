@@ -154,10 +154,17 @@ export function extractFileMiddlewareAst(tree: Tree): FileMiddleware {
     const receiver = receiverName(obj);
     if (!receiver || !SECURITY_AST.ROUTER_RECEIVER.test(receiver)) continue;
 
-    const argText = call.childForFieldName("arguments")?.text ?? "";
-    if (SECURITY_AST.AUTH_MW.test(argText)) hasAuth = true;
-    if (SECURITY_AST.VAL_MW.test(argText)) hasValidation = true;
-    if (SECURITY_AST.RATE_MW.test(argText)) hasRateLimit = true;
+    // Test the middleware IDENTIFIER/CALLEE names only, never the raw argument
+    // text. Raw text includes string literals, so `app.use("/jwt", jwtRouter)`
+    // and `app.use(express.static("passport-photos"))` used to match AUTH_MW and
+    // bless every route in the file — a file-wide false bless off a mount path.
+    // middlewareNames() is the same structural helper the per-route lane uses.
+    const args = call.childForFieldName("arguments");
+    const named = args ? args.namedChildren.filter((n): n is SyntaxNode => n !== null) : [];
+    const names = named.flatMap(middlewareNames);
+    if (names.some((n) => SECURITY_AST.AUTH_MW.test(n))) hasAuth = true;
+    if (names.some((n) => SECURITY_AST.VAL_MW.test(n))) hasValidation = true;
+    if (names.some((n) => SECURITY_AST.RATE_MW.test(n))) hasRateLimit = true;
   }
   return { hasAuth, hasValidation, hasRateLimit };
 }

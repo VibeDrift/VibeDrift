@@ -92,6 +92,154 @@ describe("buildXFileIndex — construction", () => {
     const index = buildXFileIndex(await repo([["a.py", `x = 1\n`]]));
     expect(index.go.modulePath).toBeUndefined();
   });
+
+  // ─── REGRESSION: a TREE-LESS python file was dropped from py.files ────────
+  //
+  // The loop bailed on `f.language !== "python" || !f.tree`, so a python
+  // DriftFile with no tree at all never reached `py.files.add(rel)` — despite the
+  // field's own doc ("Every python file's relativePath") and the Go half, which
+  // adds every .go path regardless. py.files is the candidate-file EXISTENCE
+  // surface: a missing entry means the `mod.py` AND `mod/__init__.py` ambiguity
+  // refusal cannot see the second candidate, and the import resolves to one body
+  // when two exist.
+  //
+  // This binds: restore the `|| !f.tree` bail and the assertion below fails.
+  it("a TREE-LESS python file is still in py.files (Go parity, ambiguity surface)", () => {
+    const treeless: DriftFile = {
+      relativePath: "app/auth.py", language: "python", content: `def authenticate():\n    pass\n`, lineCount: 2,
+    };
+    const index = buildXFileIndex([treeless]);
+    expect(index.py.files.has("app/auth.py")).toBe(true);
+    expect(index.py.fileDefs.has("app/auth.py")).toBe(false);
+    expect(index.py.roots.has("app/auth.py")).toBe(false);
+  });
+
+  it("a tree-less mod.py makes the mod/__init__.py candidate ambiguous (refuse)", async () => {
+    // The user-visible consequence of the bug above: two candidate files for
+    // `from .mod import authenticate`, one of them tree-less. With mod.py absent
+    // from py.files the ambiguity is invisible and the __init__ body resolves.
+    const parsed = await repo([
+      ["app/routes.py", `from .mod import authenticate\n`],
+      ["app/mod/__init__.py", REJECT_AUTH],
+    ]);
+    const treelessModPy: DriftFile = {
+      relativePath: "app/mod.py", language: "python", content: `def authenticate():\n    pass\n`, lineCount: 2,
+    };
+    const index = buildXFileIndex([...parsed, treelessModPy]);
+    expect(resolvePyHookBody(index, "app/routes.py", "authenticate")).toBeNull();
+  });
+
+  // ─── REGRESSION: duplicate-relativePath poisoning was ORDER-DEPENDENT ─────
+  //
+  // The duplicate test was `py.files.has(rel) && (fileDefs.has(rel) ||
+  // roots.has(rel))`. A first copy that was parse-broken leaves no fileDefs/roots
+  // entry, so the conjunction was false and the SECOND (clean) copy indexed
+  // itself normally. "Refuse beats last-wins" therefore held in only one of the
+  // two orders, and which body a duplicate path resolved to depended on the
+  // caller's file ordering. Duplicate tracking now lives in its own set.
+  //
+  // These bind: key the duplicate test off fileDefs/roots again and the
+  // broken-first order resolves a body instead of refusing.
+  it("a duplicate relativePath is poisoned in BOTH orders (broken first)", async () => {
+    const [routes, broken, clean] = await repo([
+      ["app/routes.py", `from .auth import authenticate\n`],
+      ["app/auth.py", `def authenticate(\n    if if if\n`], // parse error: no defs/roots entry
+      ["app/auth.py", REJECT_AUTH],
+    ]);
+    const index = buildXFileIndex([routes, broken, clean]);
+    expect(index.py.files.has("app/auth.py")).toBe(true);
+    expect(index.py.fileDefs.has("app/auth.py")).toBe(false);
+    expect(index.py.roots.has("app/auth.py")).toBe(false);
+    expect(resolvePyHookBody(index, "app/routes.py", "authenticate")).toBeNull();
+  });
+
+  it("a duplicate relativePath is poisoned in BOTH orders (clean first)", async () => {
+    const [routes, broken, clean] = await repo([
+      ["app/routes.py", `from .auth import authenticate\n`],
+      ["app/auth.py", `def authenticate(\n    if if if\n`],
+      ["app/auth.py", REJECT_AUTH],
+    ]);
+    const index = buildXFileIndex([routes, clean, broken]);
+    expect(index.py.fileDefs.has("app/auth.py")).toBe(false);
+    expect(index.py.roots.has("app/auth.py")).toBe(false);
+    expect(resolvePyHookBody(index, "app/routes.py", "authenticate")).toBeNull();
+  });
+
+  it("two clean copies of one path are poisoned as well (unchanged behavior)", async () => {
+    const [routes, one, two] = await repo([
+      ["app/routes.py", `from .auth import authenticate\n`],
+      ["app/auth.py", REJECT_AUTH],
+      ["app/auth.py", REJECT_AUTH],
+    ]);
+    const index = buildXFileIndex([routes, one, two]);
+    expect(index.py.fileDefs.has("app/auth.py")).toBe(false);
+    expect(resolvePyHookBody(index, "app/routes.py", "authenticate")).toBeNull();
+  });
+});
+
+// ─── REGRESSION: module-scope shadows nested in a compound statement ─────────
+//
+// moduleScopeShadows scanned only the module root's DIRECT children, but Python
+// compound statements introduce no scope: a `def foo` inside a module-level
+// `try` / `if` / `with` / `for` binds `foo` at module scope exactly as a
+// top-level `def foo` does, and shadows an `import foo` above it. A missed
+// shadow is the DANGEROUS direction — the import is then resolved cross-file to
+// a body that never runs at runtime.
+//
+// These bind: revert the walk to root.namedChildren only and each case resolves
+// a body instead of refusing.
+describe("moduleScopeShadows — shadows nested in module-level compound statements", () => {
+  const IMPORTER_SHADOW = (compound: string) =>
+    `from .auth import authenticate\n\n${compound}\n\n@app.before_request\ndef hook():\n    authenticate()\n`;
+
+  const CASES: Array<[string, string]> = [
+    [
+      "try / except ImportError fallback def",
+      `try:\n    pass\nexcept ImportError:\n    def authenticate():\n        pass\n`,
+    ],
+    [
+      "if/else conditional def",
+      `if FEATURE:\n    def authenticate():\n        pass\nelse:\n    def authenticate():\n        return 1\n`,
+    ],
+    ["with-block def", `with ctx():\n    def authenticate():\n        pass\n`],
+    ["for-block def", `for _x in items:\n    def authenticate():\n        pass\n`],
+    ["while-block def", `while flag:\n    def authenticate():\n        pass\n`],
+    ["nested if inside try", `try:\n    if FEATURE:\n        def authenticate():\n            pass\nexcept Exception:\n    pass\n`],
+    ["conditional class shadow", `if FEATURE:\n    class authenticate:\n        pass\n`],
+    ["conditional assignment shadow", `if FEATURE:\n    authenticate = _noop\n`],
+    ["finally-clause def", `try:\n    pass\nfinally:\n    def authenticate():\n        pass\n`],
+  ];
+
+  it.each(CASES)("refuses cross-file resolution: %s", async (_name, compound) => {
+    const files = await repo([
+      ["app/routes.py", IMPORTER_SHADOW(compound)],
+      ["app/auth.py", REJECT_AUTH],
+    ]);
+    const index = buildXFileIndex(files);
+    expect(resolvePyHookBody(index, "app/routes.py", "authenticate")).toBeNull();
+  });
+
+  it("non-vacuity: with no shadow anywhere, the same import DOES resolve", async () => {
+    const files = await repo([
+      ["app/routes.py", `from .auth import authenticate\n\nif FEATURE:\n    pass\n\n@app.before_request\ndef hook():\n    authenticate()\n`],
+      ["app/auth.py", REJECT_AUTH],
+    ]);
+    const index = buildXFileIndex(files);
+    expect(resolvePyHookBody(index, "app/routes.py", "authenticate")).not.toBeNull();
+  });
+
+  it("a def nested inside a FUNCTION body is not a module shadow (scope boundary held)", async () => {
+    // The walk must stop at function/class bodies: a local `def authenticate`
+    // inside another function shadows nothing at module scope, so refusing here
+    // would be a pure recall loss.
+    const files = await repo([
+      ["app/routes.py",
+        `from .auth import authenticate\n\ndef outer():\n    def authenticate():\n        pass\n    return authenticate\n\n@app.before_request\ndef hook():\n    authenticate()\n`],
+      ["app/auth.py", REJECT_AUTH],
+    ]);
+    const index = buildXFileIndex(files);
+    expect(resolvePyHookBody(index, "app/routes.py", "authenticate")).not.toBeNull();
+  });
 });
 
 describe("buildXFileIndex — determinism (order-independence)", () => {
@@ -627,5 +775,73 @@ describe("DETERMINISM (route-level, cross-file positives)", () => {
       prevRoutes = routes;
       expect(index.go.packages.get("internal/dup")!.defs.get("Dup")).toBeNull();
     }
+  });
+});
+
+// ─── REGRESSION: a resolved cross-file 'not-auth' verdict was thrown away ────
+//
+// classifyGoMiddlewareArg resolved a package-qualified selector to its in-repo
+// body and classified it — and then, when that classification came back
+// 'not-auth' without a subsuming veto, fell through to a SECOND
+// classifyGoMiddlewareAuth call against the (null) IN-FILE body. Rule 5 then
+// hedged the auth-flavored name to 'unsure', so the cross-file resolution
+// produced a WEAKER answer than it had actually measured: the route was hedged
+// with "double check <hook>" copy even though the hook's body had been read and
+// verifiably does not authenticate.
+//
+// These bind: delete the `if (xbody && !goNameIsTransparentWrap(name))` early
+// return and the hedged-hook assertions below flip back to the hook name.
+describe("classifyGoMiddlewareArg — a RESOLVED cross-file not-auth is a verdict", () => {
+  // Logs only: bodyAuthSignatureGo === "none" -> not-auth. The NAME is
+  // auth-flavored ("session"), so the name tier alone would hedge to unsure.
+  const GO_LOGGING_MW = `package middleware
+
+func SessionTracker(c *Ctx) {
+\tlog.Printf("session %s", c.Path())
+\tc.Next()
+}
+`;
+
+  it("a resolved non-enforcing body yields not-auth, not an unsure hedge", async () => {
+    const files = await goRepo([
+      ["handlers/routes.go",
+        `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.SessionTracker, createX)\n}\n`],
+      ["internal/middleware/session.go", GO_LOGGING_MW],
+    ]);
+    const index = buildXFileIndex(files, "myapp");
+    const rf = files.find((f) => f.relativePath === "handlers/routes.go")!;
+    const [route] = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(route.path).toBe("/x");
+    expect(route.hasAuth).toBe(false);
+    // The body was READ and does not authenticate — so there is nothing to
+    // double check. Before the fix this was "middleware.SessionTracker".
+    expect(route.authUnsureHook).toBeUndefined();
+  });
+
+  it("non-vacuity: the SAME shape with no resolvable body still hedges", async () => {
+    // Out-of-repo package: nothing to resolve, so the name tier hedges — proving
+    // the assertion above comes from the resolution, not from a lost hedge lane.
+    const files = await goRepo([
+      ["handlers/routes.go",
+        `package handlers\n\nimport "github.com/vendor/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.SessionTracker, createX)\n}\n`],
+    ]);
+    const index = buildXFileIndex(files, "myapp");
+    const rf = files.find((f) => f.relativePath === "handlers/routes.go")!;
+    const [route] = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(route.hasAuth).toBe(false);
+    expect(route.authUnsureHook).toBe("middleware.SessionTracker");
+  });
+
+  it("non-vacuity: a resolved REJECTING body still blesses (the bless lane is untouched)", async () => {
+    const files = await goRepo([
+      ["handlers/routes.go",
+        `package handlers\n\nimport "myapp/internal/middleware"\n\nfunc Register(r Router) {\n\tr.POST("/x", middleware.AuthMiddleware(), createX)\n}\n`],
+      ["internal/middleware/auth.go", GO_REJECT_FACTORY],
+    ]);
+    const index = buildXFileIndex(files, "myapp");
+    const rf = files.find((f) => f.relativePath === "handlers/routes.go")!;
+    const [route] = extractGoRoutesAst(rf.tree!, rf.relativePath, index);
+    expect(route.hasAuth).toBe(true);
+    expect(route.authUnsureHook).toBeUndefined();
   });
 });

@@ -51,6 +51,38 @@ describe("security-consistency detector", () => {
     }
   });
 
+  // ─── The dominance gate is "MORE than 75%", exactly 3 of 4 stays silent ──
+  //
+  // Handbook ch. 06 documents the vote as firing when the protected ratio
+  // EXCEEDS 0.75. Exactly 0.75 (3 of 4) is deliberately below the gate: the
+  // smallest group that can fire is 4 of 5, which keeps one stray route in a
+  // tiny group (a test fixture, a one-off script) from producing a warning.
+  // Measured 2026-09-03 while reviewing PR #120: opening the boundary to `<`
+  // turned four stub routes inside vibe-drift-api's tests/ into a "Rate limiting
+  // missing on 1 of 4 routes" finding and moved the composite 75.0 -> 82.1.
+  //
+  // This binds: change the gate to `<` and the 3-of-4 case below fires.
+  it("exactly 3 of 4 authed routes (ratio 0.75) is below the dominance gate; 4 of 5 fires", () => {
+    const threeOfFour = [
+      file("src/routes/a.ts", `router.post("/a", requireAuth, h);\n`),
+      file("src/routes/b.ts", `router.post("/b", requireAuth, h);\n`),
+      file("src/routes/c.ts", `router.post("/c", requireAuth, h);\n`),
+      file("src/routes/d.ts", `router.post("/d", h);\n`),
+    ];
+    const silent = securityConsistency
+      .detect(mkCtx(threeOfFour))
+      .find((x) => x.dominantPattern === `${SECURITY_SUBCATEGORIES.auth} applied`);
+    expect(silent).toBeUndefined();
+
+    const fourOfFive = [...threeOfFour, file("src/routes/e.ts", `router.post("/e", requireAuth, h);\n`)];
+    const fires = securityConsistency
+      .detect(mkCtx(fourOfFive))
+      .find((x) => x.dominantPattern === `${SECURITY_SUBCATEGORIES.auth} applied`);
+    expect(fires).toBeDefined();
+    expect(fires!.finding).toContain("missing on 1 of 5 routes");
+    expect(fires!.deviatingFiles.map((d) => d.path)).toEqual(["src/routes/d.ts"]);
+  });
+
   it("no finding when there are no routes at all", () => {
     const files = [
       file("src/lib/math.ts", `export function add(a, b) { return a + b; }`),
@@ -1021,36 +1053,66 @@ describe("Task 6: python detect-level fallback and suppression pins", () => {
   it("pinned legacy: parse-error files keep the regex window over-bless", async () => {
     // The recorded exception to never-false-bless: on a file with ANY parse error,
     // detect falls back to the regex extractor, whose per-route auth check is a
-    // 30-line TEXT window. Here an unauthed POST /legacy route sits within that
-    // window of the bare word `token` in a comment, so the regex over-blesses it
-    // to hasAuth:true. This is the legacy behavior the AST path replaces on CLEAN
-    // files; on parse-error files it survives unchanged, by design. Pinned as a
-    // decision, not left silent.
+    // 30-line TEXT window over the route decorator and the handler body below it.
+    //
+    // THIS PIN WAS INVERTED (was: "pinned legacy: parse-error files keep the regex
+    // window over-bless"). PY_AUTH used to carry a BARE `token` alternate, so the
+    // word `token` anywhere in that window — a comment, or a /login handler's own
+    // `access_token` response — blessed the route. A handler that MINTS a
+    // credential is the opposite of one that checks it, so that was a
+    // false-bless, not an acceptable legacy quirk. PY_AUTH now matches only
+    // enforcement shapes (decorators, Depends(...), guard calls), and /legacy is
+    // correctly reported as unauthed here.
     const legacySrc =
       `@app.route("/legacy", methods=["POST"])\n` + // L1: unauthed mutating route
       `def legacy():\n` +                            // L2
-      `    # token validated upstream\n` +           // L3: bare word `token` in a comment, within the 30-line window
+      `    # token validated upstream\n` +           // L3: bare word `token` — no longer blesses
       `    x = = 1\n` +                              // L4: parse error -> rootNode.hasError, routes file to regex
       `    return {}\n`;                             // L5
     const legacy = await pyTree("src/routes/legacy.py", legacySrc);
     expect(legacy.tree!.rootNode.hasError).toBe(true);
 
-    // Group: the over-blessed /legacy + 3 authed peers + 1 genuine unauthed
-    // /danger. If the over-bless holds, /legacy counts as authed, the vote is
-    // 4 authed / 1 unauthed = 0.8 (fires), and /danger — NOT /legacy — is cited.
+    // 7 authed peers + /legacy + /danger = 7/9 = 0.78, which clears the ">0.75"
+    // dominance gate, so both genuinely-unauthed routes are cited. (Under the old
+    // bare-token over-bless the ratio would be 8/9 and /legacy would be absent.)
     const peer = (n: number) =>
       pyTree(`src/routes/lp${n}.py`, `@app.post("/lp${n}")\n@requires_auth\ndef lp${n}():\n    return {}\n`);
-    const peers = await Promise.all([peer(1), peer(2), peer(3)]);
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4), peer(5), peer(6), peer(7)]);
     const danger = await pyTree("src/routes/danger.py", `@app.post("/danger")\ndef danger():\n    return {}\n`);
     const f = auth(securityConsistency.detect(ctxOf([legacy, ...peers, danger]) as any));
 
     expect(f).toBeDefined();
     // The genuine unauthed route is flagged...
     expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/danger.py")).toBe(true);
-    // ...and /legacy is NOT flagged: the regex window over-blessed it via `token`,
-    // so it came out hasAuth:true (were it correctly unauthed, it would be cited
-    // here too — and the vote would have dropped to 3/5 = 0.6 and gone silent).
-    expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/legacy.py")).toBe(false);
+    // ...and so is /legacy, which the bare-`token` window used to bless.
+    expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/legacy.py")).toBe(true);
+  });
+
+  it("regression: a /login handler returning access_token is NOT marked hasAuth", async () => {
+    // The exact PY_AUTH false-bless: python.ts reads a 30-line window starting at
+    // the route decorator, so the handler's OWN `access_token` response satisfied
+    // the bare `token` alternate and the credential-minting route blessed itself.
+    // Parse error -> the regex fallback, which is the path under test.
+    const loginSrc =
+      `@app.route("/login", methods=["POST"])\n` +
+      `def login():\n` +
+      `    user = authenticate_user(request.json)\n` +
+      `    access_token = create_access_token(identity=user.id)\n` +
+      `    x = = 1\n` +                               // parse error -> regex fallback
+      `    return {"access_token": access_token}\n`;
+    const login = await pyTree("src/routes/login.py", loginSrc);
+    expect(login.tree!.rootNode.hasError).toBe(true);
+
+    const peer = (n: number) =>
+      pyTree(`src/routes/ap${n}.py`, `@app.post("/ap${n}")\n@login_required\ndef ap${n}():\n    return {}\n`);
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4)]);
+    const f = auth(securityConsistency.detect(ctxOf([login, ...peers]) as any));
+
+    // 4 authed peers + the unauthed /login = 4/5 = 0.8 -> the vote fires and
+    // /login is the lone deviator. Under the old bare-`token` PY_AUTH the group
+    // was uniformly "authed" (5/5) and nothing was reported at all.
+    expect(f).toBeDefined();
+    expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/login.py")).toBe(true);
   });
 
   it("suppresses a python route when # @vibedrift-public sits directly above its route decorator, and cites it", async () => {

@@ -5,6 +5,7 @@ import {
   bodyAuthSignature,
   classifyHookAuth,
   collectFunctionDefs,
+  authExceptionKind,
   SECURITY_AST_PY,
 } from "../../../src/drift/security-ast-python.js";
 import { extractJsRoutesAst } from "../../../src/drift/security-ast.js";
@@ -1295,6 +1296,64 @@ describe("extractPythonFileMiddlewareAst", () => {
       hasAuth: false, hasValidation: true, hasRateLimit: false,
     });
     expect(extractPythonFileMiddlewareAst(none.tree!)).toEqual(NONE);
+  });
+
+  // ─── REGRESSION: the rate-limit / validation lanes were SUBSTRING tests ────
+  //
+  // The auth lane on the same call has always matched whole CamelCase segments
+  // (so AuthorTrackingMiddleware does not bless), but its two siblings used bare
+  // `/[Ll]imit/` and `/[Vv]alid/`. `UnlimitedAccessMiddleware` contains "limit"
+  // and `InvalidRequestMiddleware` contains "valid" — both are the OPPOSITE of
+  // the middleware they were credited as being.
+  //
+  // These bind: restore either substring test and the two cases below bless.
+  it("does NOT set rateLimit for UnlimitedAccessMiddleware (whole-segment discipline)", async () => {
+    const f = await py("mw.py", `app.add_middleware(UnlimitedAccessMiddleware)\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual(NONE);
+  });
+
+  it("does NOT set validation for InvalidRequestMiddleware (whole-segment discipline)", async () => {
+    const f = await py("mw.py", `app.add_middleware(InvalidRequestMiddleware)\n`);
+    expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual(NONE);
+  });
+
+  // A bare "limit" segment is not rate limiting either: request-size, body,
+  // upload and connection limits cap how BIG or how MANY connections, not how
+  // OFTEN. Measured 2026-09-03 (PR #120 review): RequestSizeLimitMiddleware in
+  // vibe-drift-api's tests/ blessed three stub routes as rate limited, which
+  // produced a "Rate limiting missing on 1 of 4 routes" finding against a test
+  // fixture. This binds: add "limit" back to MIDDLEWARE_RATE_SEGMENTS and the
+  // four names below bless.
+  it("does NOT set rateLimit for size/body/upload/connection limit middleware", async () => {
+    for (const name of [
+      "RequestSizeLimitMiddleware",
+      "BodyLimitMiddleware",
+      "UploadLimitMiddleware",
+      "ConnectionLimitMiddleware",
+    ]) {
+      const f = await py("mw.py", `app.add_middleware(${name})\n`);
+      expect(extractPythonFileMiddlewareAst(f.tree!), name).toEqual(NONE);
+    }
+  });
+
+  it("still sets the lanes for genuinely-named middleware (non-vacuity)", async () => {
+    const rate = await py("mw.py", `app.add_middleware(RateLimitMiddleware)\n`);
+    const throttle = await py("mw.py", `app.add_middleware(ThrottleMiddleware)\n`);
+    const limiter = await py("mw.py", `app.add_middleware(LimiterMiddleware)\n`);
+    const snake = await py("mw.py", `app.add_middleware(rate_limit_middleware)\n`);
+    const slowapi = await py("mw.py", `app.add_middleware(SlowAPIMiddleware)\n`);
+    const val = await py("mw.py", `app.add_middleware(ValidatorMiddleware)\n`);
+    const pyd = await py("mw.py", `app.add_middleware(PydanticMiddleware)\n`);
+    for (const f of [rate, throttle, limiter, snake, slowapi]) {
+      expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual({
+        hasAuth: false, hasValidation: false, hasRateLimit: true,
+      });
+    }
+    for (const f of [val, pyd]) {
+      expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual({
+        hasAuth: false, hasValidation: true, hasRateLimit: false,
+      });
+    }
   });
 
   it("a validation-only before_request hook sets validation, never auth (lanes independent)", async () => {
@@ -2779,7 +2838,11 @@ describe("bodyAuthSignature: reject signatures", () => {
       "raise werkzeug.exceptions.Unauthorized()",
       `def hook():\n    raise werkzeug.exceptions.Unauthorized()\n`,
     ],
-    ["bare raise PermissionDenied", `def hook():\n    raise PermissionDenied\n`],
+    // AUTHZ-shaped exception names moved OUT of this list — see the
+    // "authn / authz raise asymmetry" describe below. A credential-GUARDED
+    // `raise Forbidden()` still rejects, and is pinned there.
+    ["raise AuthFailed()", `def hook():\n    raise AuthFailed()\n`],
+    ["raise CredentialsRequired", `def hook():\n    raise CredentialsRequired\n`],
     [
       "return redirect(url_for('auth.login'))",
       `def hook():\n    return redirect(url_for("auth.login"))\n`,
@@ -2893,6 +2956,95 @@ describe("bodyAuthSignature: opaque (auth-flavored but unverifiable)", () => {
   it("cycle a()->b()->a() terminates and returns none (no reject, no hint)", async () => {
     const src = `def a():\n    b()\n\n\ndef b():\n    a()\n`;
     expect(await sig(src, "a")).toBe("none");
+  });
+});
+
+// ─── REGRESSION: the authn / authz raise asymmetry ───────────────────────────
+//
+// `if (rn !== null && isAuthExceptionName(rn)) out.reject401 = true` treated
+// EVERY auth-flavored exception name as a 401, so a bare
+// `raise Forbidden("maintenance mode")` or `raise PermissionDenied()` in a
+// before_request hook set reject401 -> hasAuth for the hook's whole receiver
+// scope -> every route under it blessed. Those names are AUTHORIZATION denials,
+// and the abort(403)/HTTPException(...,403) lanes right above already encoded the
+// correct rule: 401 blesses alone, 403 only behind a credential-reading guard.
+//
+// These bind: revert authExceptionKind to the single isAuthExceptionName lexicon
+// and the first two cases flip from opaque/unsure to reject/auth.
+describe("raise <exception>: authn blesses alone, authz does not (never-false-bless)", () => {
+  const cls = async (name: string, src: string, fnName = "hook") => {
+    const { body, defs } = await hookBody(src, fnName);
+    return classifyHookAuth(name, body, defs, true);
+  };
+
+  it('bare `raise Forbidden("maintenance")` does NOT bless', async () => {
+    const src = `def hook():\n    raise Forbidden("maintenance mode")\n`;
+    expect(await sig(src)).toBe("opaque"); // hedge, not reject
+    expect(await cls("before_request_hook", src)).toBe("unsure"); // never "auth"
+  });
+
+  it("bare `raise PermissionDenied()` does NOT bless", async () => {
+    const src = `def hook():\n    raise PermissionDenied()\n`;
+    expect(await sig(src)).toBe("opaque");
+    expect(await cls("gate", src)).toBe("unsure");
+  });
+
+  it("bare `raise PermissionError` does NOT bless", async () => {
+    expect(await sig(`def hook():\n    raise PermissionError\n`)).toBe("opaque");
+  });
+
+  it("bare `raise Unauthorized()` DOES bless (authentication denial)", async () => {
+    const src = `def hook():\n    raise Unauthorized()\n`;
+    expect(await sig(src)).toBe("reject");
+    expect(await cls("gate", src)).toBe("auth");
+  });
+
+  it("bare `raise AuthenticationError('nope')` DOES bless", async () => {
+    expect(await sig(`def hook():\n    raise AuthenticationError("nope")\n`)).toBe("reject");
+  });
+
+  it("credential-guarded `raise Forbidden()` DOES bless", async () => {
+    const src =
+      `def hook():\n` +
+      `    if not request.headers.get("Authorization"):\n` +
+      `        raise Forbidden()\n`;
+    expect(await sig(src)).toBe("reject");
+    expect(await cls("gate", src)).toBe("auth");
+  });
+
+  it("credential-guarded `raise PermissionDenied()` DOES bless", async () => {
+    const src =
+      `def hook():\n` +
+      `    if "user_id" not in session:\n` +
+      `        raise PermissionDenied()\n`;
+    expect(await sig(src)).toBe("reject");
+  });
+
+  it("a NON-credential guard around `raise Forbidden()` still does not bless", async () => {
+    // The guard reads a feature flag, not a credential: exactly the
+    // maintenance/feature-gate shape the 403 asymmetry exists for.
+    const src =
+      `def hook():\n` +
+      `    if settings.MAINTENANCE_MODE:\n` +
+      `        raise Forbidden("maintenance mode")\n`;
+    expect(await sig(src)).toBe("opaque");
+  });
+
+  it("a name carrying BOTH shapes resolves authz (ambiguity never blesses)", async () => {
+    expect(await sig(`def hook():\n    raise AuthForbidden()\n`)).toBe("opaque");
+  });
+
+  it("authExceptionKind: the lexicon split, directly", () => {
+    expect(authExceptionKind("Unauthorized")).toBe("authn");
+    expect(authExceptionKind("AuthenticationError")).toBe("authn");
+    expect(authExceptionKind("AuthFailed")).toBe("authn");
+    expect(authExceptionKind("CredentialsRequired")).toBe("authn");
+    expect(authExceptionKind("Forbidden")).toBe("authz");
+    expect(authExceptionKind("PermissionDenied")).toBe("authz");
+    expect(authExceptionKind("PermissionError")).toBe("authz");
+    expect(authExceptionKind("AuthForbidden")).toBe("authz");
+    expect(authExceptionKind("ValueError")).toBeNull();
+    expect(authExceptionKind("NotFound")).toBeNull();
   });
 });
 

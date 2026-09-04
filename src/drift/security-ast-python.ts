@@ -205,6 +205,22 @@ const MIDDLEWARE_AUTH_SEGMENTS = new Set([
 // built-in or custom permission class is unrecognized. Per the never-false-bless
 // invariant, ambiguity and the unrecognized case both resolve to false.
 const PERMISSION_AUTH = new Set(["IsAuthenticated", "IsAdminUser"]);
+// add_middleware(...) rate-limit / validation lanes, WHOLE-SEGMENT like
+// MIDDLEWARE_AUTH_SEGMENTS. Substring matching (/[Ll]imit/, /[Vv]alid/) broke the
+// file's segment discipline: UnlimitedAccessMiddleware contains "limit" and
+// InvalidRequestMiddleware contains "valid", and neither is the middleware it
+// claims to be.
+// The RATE_NAMES / VAL_NAMES regexes stay as a sibling fallback: their alternates
+// are specific multi-character tokens (slowapi, marshmallow) that no ordinary
+// middleware name contains by accident, so they never reintroduce the
+// Unlimited/Invalid class the bare substrings created.
+// The bare segment "limit" is NOT a rate-limit word on its own: a limit can be
+// a request-size limit (RequestSizeLimitMiddleware, BodyLimitMiddleware,
+// UploadLimitMiddleware) or a connection limit, none of which throttles request
+// rate. "RateLimit" / "rate_limit" is covered by RATE_NAMES, which requires the
+// "rate" prefix.
+const MIDDLEWARE_RATE_SEGMENTS = new Set(["limiter", "throttle", "throttling"]);
+const MIDDLEWARE_VAL_SEGMENTS = new Set(["validate", "validator", "validation"]);
 
 // ─── Body-signature lexicons (addendum: hook body classification) ────────────
 // Rejection statuses that mean "request denied for identity reasons".
@@ -219,13 +235,34 @@ const PERMISSION_AUTH = new Set(["IsAuthenticated", "IsAdminUser"]);
 // resolves "none" -> flat not-auth for a boring name, so csrf_protect /
 // maintenance_gate neither bless (a false-bless the name-only path never had) nor
 // pollute the hedge with obvious non-auth hooks. The 401/403 asymmetry is enforced
-// directly in scanBody (abort/HTTPException/return branches), not via a lookup set.
+// directly in scanBody (abort/HTTPException/return branches), not via a lookup set,
+// and the raise-by-NAME lane below carries the same asymmetry via authExceptionKind:
+// an authn-shaped name (Unauthorized) blesses alone, an authz-shaped one
+// (Forbidden / PermissionDenied) only inside a credential-reading guard.
 const REJECT_STATUSES = new Set(["401", "403"]);
-// raise <X> auth-exception matching: an ALONE segment (unauthorized/forbidden),
-// or a TOPIC segment paired anywhere with a KIND segment (AuthenticationError,
-// PermissionDenied). raise ValueError / KeyError / NotFound never match.
-const AUTH_EXCEPTION_ALONE = new Set(["unauthorized", "forbidden"]);
-const AUTH_EXCEPTION_TOPIC = new Set(["auth", "authentication", "permission", "credentials"]);
+// raise <X> exception-name matching, SPLIT BY WHAT THE NAME ACTUALLY MEANS, with
+// the SAME 401/403 asymmetry the abort()/HTTPException() lanes already enforce:
+//
+//   AUTHN ("this request is not authenticated") — Unauthorized,
+//   AuthenticationError, AuthFailed, CredentialsRequired. These are 401-shaped and
+//   reject-BLESS ALONE.
+//
+//   AUTHZ ("this identity may not do this") — Forbidden, PermissionDenied,
+//   PermissionError. These are 403-shaped, and a 403 is routinely raised for
+//   NON-authentication reasons (`raise Forbidden("maintenance mode")`, an IP
+//   allowlist, a CSRF failure, a plan/feature gate). They therefore NEVER bless
+//   alone: they bless only inside a reject whose GUARD CONDITION structurally
+//   reads a credential surface (the same guardConditionHasCredentialRead gate the
+//   403 statuses go through), and otherwise contribute only an opaque HINT, which
+//   hedges to "unsure" and still leaves the route counted as unauthed.
+//
+// A name carrying BOTH shapes (AuthForbidden) resolves AUTHZ: ambiguity resolves
+// away from a bless. raise ValueError / KeyError / NotFound match neither.
+const AUTH_EXCEPTION_ALONE = new Set(["unauthorized"]);
+const AUTH_EXCEPTION_TOPIC = new Set(["auth", "authentication", "credentials"]);
+const AUTHZ_EXCEPTION_ALONE = new Set(["forbidden"]);
+const AUTHZ_EXCEPTION_TOPIC = new Set(["permission"]);
+// Shared KIND vocabulary: pairs with either TOPIC set above.
 const AUTH_EXCEPTION_KIND = new Set(["error", "exception", "denied", "failed", "required"]);
 // Login-flavored redirect target segments; only these bless a redirect reject.
 const LOGIN_REDIRECT_SEGMENTS = new Set(["login", "signin", "signon", "auth"]);
@@ -253,8 +290,10 @@ export const SECURITY_AST_PY = {
   ROUTE_METHODS, HTTP_VERBS, MUTATING_VERBS, ROUTER_RECEIVER, ROUTER_CONSTRUCTORS,
   AUTH_DECORATORS, DEPENDS_AUTH_SEGMENTS, DEPENDS_AUTH_PAIRS, DEPENDS_VETO_SEGMENTS,
   VAL_NAMES, RATE_NAMES, AUTH_CORE_SEGMENTS, AUTH_ENFORCE_SEGMENTS,
-  AUTH_SUBJECT_SEGMENTS, OPTIONAL_AUTH_VETO, MIDDLEWARE_AUTH_SEGMENTS, PERMISSION_AUTH,
+  AUTH_SUBJECT_SEGMENTS, OPTIONAL_AUTH_VETO, MIDDLEWARE_AUTH_SEGMENTS,
+  MIDDLEWARE_RATE_SEGMENTS, MIDDLEWARE_VAL_SEGMENTS, PERMISSION_AUTH,
   REJECT_STATUSES, AUTH_EXCEPTION_ALONE, AUTH_EXCEPTION_TOPIC,
+  AUTHZ_EXCEPTION_ALONE, AUTHZ_EXCEPTION_TOPIC,
   AUTH_EXCEPTION_KIND, LOGIN_REDIRECT_SEGMENTS, KNOWN_AUTH_PRIMITIVES,
   OPAQUE_AUTH_HINT_SEGMENTS, CREDENTIAL_KEY_SEGMENTS,
 };
@@ -709,15 +748,23 @@ function hintHit(name: string): boolean {
   return nameSegments(name).some((s) => OPAQUE_AUTH_HINT_SEGMENTS.has(s));
 }
 
-/** Auth-exception name match (raise matching): an ALONE segment, or a TOPIC
- *  segment paired anywhere in the name with a KIND segment. Whole-segment. */
-function isAuthExceptionName(name: string): boolean {
+/** What a raised exception NAME means, whole-segment: "authn" (401-shaped —
+ *  Unauthorized / AuthenticationError), "authz" (403-shaped — Forbidden /
+ *  PermissionDenied), or null (neither). A name matching BOTH shapes resolves
+ *  "authz", the non-blessing side: ambiguity never resolves toward a bless.
+ *  Only "authn" reject-blesses alone; "authz" goes through the credential-guard
+ *  gate (subtreeHasGuardableReject) or hedges via opaqueHint. */
+export function authExceptionKind(name: string): "authn" | "authz" | null {
   const segs = nameSegments(name);
-  if (segs.some((s) => AUTH_EXCEPTION_ALONE.has(s))) return true;
-  return (
-    segs.some((s) => AUTH_EXCEPTION_TOPIC.has(s)) &&
-    segs.some((s) => AUTH_EXCEPTION_KIND.has(s))
-  );
+  const kindHit = segs.some((s) => AUTH_EXCEPTION_KIND.has(s));
+  const authz =
+    segs.some((s) => AUTHZ_EXCEPTION_ALONE.has(s)) ||
+    (segs.some((s) => AUTHZ_EXCEPTION_TOPIC.has(s)) && kindHit);
+  if (authz) return "authz";
+  const authn =
+    segs.some((s) => AUTH_EXCEPTION_ALONE.has(s)) ||
+    (segs.some((s) => AUTH_EXCEPTION_TOPIC.has(s)) && kindHit);
+  return authn ? "authn" : null;
 }
 
 /** True when a stripped string key carries a credential segment. */
@@ -802,15 +849,32 @@ function isCredentialGetCall(call: SyntaxNode): boolean {
  *  separately) still count. Pre-order; the root `node` itself is never yielded. */
 function prunedDescendants(node: SyntaxNode, types: Set<string>): SyntaxNode[] {
   const out: SyntaxNode[] = [];
-  const visit = (n: SyntaxNode) => {
-    for (const child of n.namedChildren) {
+  // EXPLICIT STACK, not recursion: this walker backs scanBody /
+  // guardConditionHasCredentialRead / credentialBoundLocals, and generated Python
+  // (a deeply chained boolean_operator or a machine-emitted nested expression) can
+  // nest thousands of nodes deep, which a recursive walk answers with a
+  // RangeError that would take the whole scan down. Depth and visit budgets bail
+  // to a PARTIAL result, which — because every signal this collects is additive
+  // toward a bless — can only LOSE evidence, i.e. resolve toward "not enough
+  // signal". Never toward a false bless. Pre-order is preserved (children are
+  // pushed in reverse so they pop in document order), so the collected order is
+  // byte-identical to the recursive walk on any body inside the budget.
+  const MAX_DEPTH = 400;
+  const MAX_VISITS = 200_000;
+  const stack: Array<{ n: SyntaxNode; d: number }> = [{ n: node, d: 0 }];
+  let visits = 0;
+  while (stack.length > 0) {
+    const { n, d } = stack.pop()!;
+    if (d >= MAX_DEPTH || ++visits > MAX_VISITS) continue;
+    const kids = n.namedChildren;
+    for (let i = kids.length - 1; i >= 0; i--) {
+      const child = kids[i];
       if (!child) continue;
       if (child.type === "function_definition" || child.type === "lambda") continue;
-      if (types.has(child.type)) out.push(child);
-      visit(child);
+      stack.push({ n: child, d: d + 1 });
     }
-  };
-  visit(node);
+    if (n !== node && types.has(n.type)) out.push(n);
+  }
   return out;
 }
 const CALL_T = new Set(["call"]);
@@ -964,10 +1028,14 @@ function guardConditionHasCredentialRead(cond: SyntaxNode, boundLocals: Set<stri
   return false;
 }
 
-/** True when a subtree contains a 403 reject: `abort(403)`, a raised
- *  `HTTPException` with status 403, or a `(expr, 403)` return tuple. Nested def
+/** True when a subtree contains a GUARDABLE (403-shaped) reject: `abort(403)`, a
+ *  raised `HTTPException` with status 403, a `(expr, 403)` return tuple, or a
+ *  raised AUTHZ-shaped exception (`raise Forbidden()` / `raise
+ *  PermissionDenied()`). None of these bless on their own; this predicate is only
+ *  ever consulted from inside an `if <credential-condition>:` consequence, which
+ *  is what supplies the authentication evidence a bare 403 lacks. Nested def
  *  subtrees are pruned (same inline-execution rule as the body scan). */
-function subtreeHas403Reject(node: SyntaxNode): boolean {
+function subtreeHasGuardableReject(node: SyntaxNode): boolean {
   for (const call of prunedDescendants(node, CALL_T)) {
     if (call.hasError) continue;
     if (finalName(call.childForFieldName("function")) === "abort") {
@@ -977,13 +1045,18 @@ function subtreeHas403Reject(node: SyntaxNode): boolean {
   for (const rs of prunedDescendants(node, new Set(["raise_statement"]))) {
     if (rs.hasError) continue;
     const raised = rs.namedChild(0);
+    if (!raised) continue;
     if (
-      raised?.type === "call" &&
-      finalName(raised.childForFieldName("function")) === "HTTPException" &&
-      httpExceptionStatus(raised) === "403"
+      raised.type === "call" &&
+      finalName(raised.childForFieldName("function")) === "HTTPException"
     ) {
-      return true;
+      if (httpExceptionStatus(raised) === "403") return true;
+      continue;
     }
+    // `raise Forbidden()` / `raise PermissionDenied()` inside a credential guard:
+    // the guard supplies the authentication evidence the name alone does not.
+    const rn = finalName(raised);
+    if (rn !== null && authExceptionKind(rn) === "authz") return true;
   }
   for (const ret of prunedDescendants(node, new Set(["return_statement"]))) {
     if (ret.hasError) continue;
@@ -1077,7 +1150,7 @@ function scanBody(
     if (ifs.hasError) continue;
     const cond = ifs.childForFieldName("condition");
     const cons = ifs.childForFieldName("consequence");
-    if (cond && cons && guardConditionHasCredentialRead(cond, boundLocals) && subtreeHas403Reject(cons)) {
+    if (cond && cons && guardConditionHasCredentialRead(cond, boundLocals) && subtreeHasGuardableReject(cons)) {
       out.reject403Guarded = true;
     }
   }
@@ -1097,8 +1170,16 @@ function scanBody(
       else if (st === "unreadable") out.opaqueHint = true;
       continue;
     }
+    // Exception-name lane, SPLIT by meaning (mirrors the 401/403 asymmetry above):
+    // an AUTHN name (Unauthorized / AuthenticationError) blesses alone; an AUTHZ
+    // name (Forbidden / PermissionDenied) is a 403-shaped denial that is routinely
+    // non-authentication, so it only HINTS (-> unsure hedge, route still counted
+    // unauthed). A credential-guarded `raise Forbidden()` still blesses, via the
+    // guarded-reject walk above.
     const rn = finalName(raised);
-    if (rn !== null && isAuthExceptionName(rn)) out.reject401 = true;
+    const exKind = rn === null ? null : authExceptionKind(rn);
+    if (exKind === "authn") out.reject401 = true;
+    else if (exKind === "authz") out.opaqueHint = true;
   }
 
   // return: a login-flavored redirect, or an (expr, 401) tuple. A trailing 403
@@ -1514,8 +1595,15 @@ function collectPyMiddleware(
       ) {
         mark(receiver, false, "hasAuth");
       }
-      if (/[Ll]imit/.test(mwName) || RATE_NAMES.test(mwName)) mark(receiver, false, "hasRateLimit");
-      if (/[Vv]alid/.test(mwName)) mark(receiver, false, "hasValidation");
+      // Rate-limit / validation lanes: WHOLE-SEGMENT, same discipline as the auth
+      // lane above. The old substring tests (/[Ll]imit/, /[Vv]alid/) blessed
+      // UnlimitedAccessMiddleware and InvalidRequestMiddleware.
+      if (mwSegs.some((s) => MIDDLEWARE_RATE_SEGMENTS.has(s)) || RATE_NAMES.test(mwName)) {
+        mark(receiver, false, "hasRateLimit");
+      }
+      if (mwSegs.some((s) => MIDDLEWARE_VAL_SEGMENTS.has(s)) || VAL_NAMES.test(mwName)) {
+        mark(receiver, false, "hasValidation");
+      }
     }
   }
 
