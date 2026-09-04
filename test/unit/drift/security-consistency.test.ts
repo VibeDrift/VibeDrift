@@ -51,47 +51,36 @@ describe("security-consistency detector", () => {
     }
   });
 
-  // ─── REGRESSION: the 0.75 dominance boundary was excluded ─────────────────
+  // ─── The dominance gate is "MORE than 75%", exactly 3 of 4 stays silent ──
   //
-  // The gate read `ratio <= 0.75`, so a group where exactly 3 of 4 routes carry
-  // the property — a clear dominant pattern with one deviator, and precisely the
-  // ">= 75%" the finding copy and the module comment describe — reported nothing.
+  // Handbook ch. 06 documents the vote as firing when the protected ratio
+  // EXCEEDS 0.75. Exactly 0.75 (3 of 4) is deliberately below the gate: the
+  // smallest group that can fire is 4 of 5, which keeps one stray route in a
+  // tiny group (a test fixture, a one-off script) from producing a warning.
+  // Measured 2026-09-03 while reviewing PR #120: opening the boundary to `<`
+  // turned four stub routes inside vibe-drift-api's tests/ into a "Rate limiting
+  // missing on 1 of 4 routes" finding and moved the composite 75.0 -> 82.1.
   //
-  // This binds: restore `<=` and the 3-of-4 case below produces no finding.
-  it("3 of 4 authed routes (ratio exactly 0.75) still produces the finding", () => {
-    const files = [
+  // This binds: change the gate to `<` and the 3-of-4 case below fires.
+  it("exactly 3 of 4 authed routes (ratio 0.75) is below the dominance gate; 4 of 5 fires", () => {
+    const threeOfFour = [
       file("src/routes/a.ts", `router.post("/a", requireAuth, h);\n`),
       file("src/routes/b.ts", `router.post("/b", requireAuth, h);\n`),
       file("src/routes/c.ts", `router.post("/c", requireAuth, h);\n`),
       file("src/routes/d.ts", `router.post("/d", h);\n`),
     ];
-    const f = securityConsistency
-      .detect(mkCtx(files))
-      .find((x) => x.subCategory === SECURITY_SUBCATEGORIES.auth);
-    expect(f).toBeDefined();
-    // Specifically the DOMINANCE vote, not the uniform-auth-gap fallback, which
-    // fires on the same subCategory and would make this assertion vacuous.
-    expect(f!.dominantPattern).toBe(`${SECURITY_SUBCATEGORIES.auth} applied`);
-    expect(f!.finding).toContain("missing on 1 of 4 routes");
-    expect(f!.consistencyScore).toBe(75);
-    expect(f!.dominantCount).toBe(3);
-    expect(f!.totalRelevantFiles).toBe(4);
-    expect(f!.deviatingFiles.map((d) => d.path)).toEqual(["src/routes/d.ts"]);
-  });
+    const silent = securityConsistency
+      .detect(mkCtx(threeOfFour))
+      .find((x) => x.dominantPattern === `${SECURITY_SUBCATEGORIES.auth} applied`);
+    expect(silent).toBeUndefined();
 
-  it("2 of 4 authed routes (ratio 0.5) stays below the gate", () => {
-    // Non-vacuity for the case above: the gate is still a gate, not removed.
-    const files = [
-      file("src/routes/a.ts", `router.post("/a", requireAuth, h);\n`),
-      file("src/routes/b.ts", `router.post("/b", requireAuth, h);\n`),
-      file("src/routes/c.ts", `router.post("/c", h);\n`),
-      file("src/routes/d.ts", `router.post("/d", h);\n`),
-    ];
-    const f = securityConsistency
-      .detect(mkCtx(files))
-      .find((x) => x.subCategory === SECURITY_SUBCATEGORIES.auth);
-    // Either silent, or the uniform-auth-gap fallback — never the dominance vote.
-    if (f) expect(f.dominantPattern).not.toBe(`${SECURITY_SUBCATEGORIES.auth} applied`);
+    const fourOfFive = [...threeOfFour, file("src/routes/e.ts", `router.post("/e", requireAuth, h);\n`)];
+    const fires = securityConsistency
+      .detect(mkCtx(fourOfFive))
+      .find((x) => x.dominantPattern === `${SECURITY_SUBCATEGORIES.auth} applied`);
+    expect(fires).toBeDefined();
+    expect(fires!.finding).toContain("missing on 1 of 5 routes");
+    expect(fires!.deviatingFiles.map((d) => d.path)).toEqual(["src/routes/d.ts"]);
   });
 
   it("no finding when there are no routes at all", () => {
@@ -1083,12 +1072,12 @@ describe("Task 6: python detect-level fallback and suppression pins", () => {
     const legacy = await pyTree("src/routes/legacy.py", legacySrc);
     expect(legacy.tree!.rootNode.hasError).toBe(true);
 
-    // 6 authed peers + /legacy + /danger = 6/8 = 0.75, which clears the dominance
-    // gate, so both genuinely-unauthed routes are cited. (Under the old bare-token
-    // over-bless the ratio would be 7/8 and /legacy would be absent.)
+    // 7 authed peers + /legacy + /danger = 7/9 = 0.78, which clears the ">0.75"
+    // dominance gate, so both genuinely-unauthed routes are cited. (Under the old
+    // bare-token over-bless the ratio would be 8/9 and /legacy would be absent.)
     const peer = (n: number) =>
       pyTree(`src/routes/lp${n}.py`, `@app.post("/lp${n}")\n@requires_auth\ndef lp${n}():\n    return {}\n`);
-    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4), peer(5), peer(6)]);
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4), peer(5), peer(6), peer(7)]);
     const danger = await pyTree("src/routes/danger.py", `@app.post("/danger")\ndef danger():\n    return {}\n`);
     const f = auth(securityConsistency.detect(ctxOf([legacy, ...peers, danger]) as any));
 
@@ -1116,12 +1105,12 @@ describe("Task 6: python detect-level fallback and suppression pins", () => {
 
     const peer = (n: number) =>
       pyTree(`src/routes/ap${n}.py`, `@app.post("/ap${n}")\n@login_required\ndef ap${n}():\n    return {}\n`);
-    const peers = await Promise.all([peer(1), peer(2), peer(3)]);
+    const peers = await Promise.all([peer(1), peer(2), peer(3), peer(4)]);
     const f = auth(securityConsistency.detect(ctxOf([login, ...peers]) as any));
 
-    // 3 authed peers + the unauthed /login = 3/4 = 0.75 -> the vote fires and
+    // 4 authed peers + the unauthed /login = 4/5 = 0.8 -> the vote fires and
     // /login is the lone deviator. Under the old bare-`token` PY_AUTH the group
-    // was uniformly "authed" (4/4) and nothing was reported at all.
+    // was uniformly "authed" (5/5) and nothing was reported at all.
     expect(f).toBeDefined();
     expect(f!.deviatingFiles.some((d: any) => d.path === "src/routes/login.py")).toBe(true);
   });
