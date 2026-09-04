@@ -339,16 +339,29 @@ describe("runUploaderOnce (bounded flush)", () => {
     const hash = "h1";
     await appendEvent(sessionsDir, hash, "s1", ev("edit", { detail: { file: "a.ts", diffstat: "+1" } }));
     let clock = 0;
+    let calls = 0;
+    const budgetMs = 50;
     // returns quickly since a network error (non-402) breaks on no-progress,
-    // but the budget guard is the ultimate backstop
-    await runUploaderOnce({
+    // but the budget guard is the ultimate backstop. Assert both: it never
+    // exceeds the fake budget clock, and it resolves promptly on the REAL
+    // wall clock too (proving it didn't fall back to spinning/hanging).
+    const wallStart = Date.now();
+    const out = await runUploaderOnce({
       sessionsDir,
       projectHash: hash,
-      budgetMs: 50,
+      budgetMs,
       now: () => (clock += 10),
-      post: async () => { throw new Error("network down"); },
+      post: async () => { calls++; throw new Error("network down"); },
     });
-    // reaching here (not hanging) is the assertion
-    expect(true).toBe(true);
+    const wallElapsed = Date.now() - wallStart;
+
+    expect(out.locked).toBe(false);
+    // no-progress break fires well inside the fake budget window
+    expect(clock).toBeLessThanOrEqual(budgetMs + 10);
+    // a handful of calls at most — not spinning until the fake clock maxes out
+    expect(calls).toBeLessThanOrEqual(5);
+    // real wall-clock time stays far under the budget + generous slack for
+    // test-runner overhead, proving the loop actually returned rather than hung
+    expect(wallElapsed).toBeLessThan(budgetMs + 5000);
   });
 });

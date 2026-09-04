@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBaseline, type RepoDriftBaseline } from "@/core/baseline";
 import { runEditChecks } from "@/session/check";
-import { recheckFile, detectRevert, type OpenFinding } from "@/session/outcomes";
+import {
+  recheckFile,
+  detectRevert,
+  mergeOutcomeState,
+  readOutcomeState,
+  writeOutcomeState,
+  emptyOutcomeState,
+  type OpenFinding,
+  type OutcomeState,
+} from "@/session/outcomes";
 
 const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 
@@ -114,6 +123,190 @@ export function unrelatedTwo(b) { return b - 1; }`;
     expect(recheckFile(baseline, "src/util.ts", noDup, dupOpen).resolved.map((f) => f.findingId)).toEqual(
       dupOpen.map((f) => f.findingId),
     );
+  });
+});
+
+describe("mergeOutcomeState (pure)", () => {
+  const finding = (id: string, over: Partial<OpenFinding> = {}): OpenFinding => ({
+    findingId: id,
+    file: "src/x.ts",
+    category: "async_patterns",
+    ...over,
+  });
+
+  it("unions open findings present on only one side", () => {
+    const local: OutcomeState = { open: [finding("DF-1")], hashes: {}, resolved: [] };
+    const onDisk: OutcomeState = { open: [finding("DF-2")], hashes: {}, resolved: [] };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.open.map((f) => f.findingId).sort()).toEqual(["DF-1", "DF-2"]);
+  });
+
+  it("prefers local's entry on a genuine findingId conflict", () => {
+    const local: OutcomeState = { open: [finding("DF-1", { category: "naming" })], hashes: {}, resolved: [] };
+    const onDisk: OutcomeState = { open: [finding("DF-1", { category: "async_patterns" })], hashes: {}, resolved: [] };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.open).toHaveLength(1);
+    expect(merged.open[0].category).toBe("naming");
+  });
+
+  it("does NOT resurrect a finding local deliberately dropped (resolved) when onDisk never had it either", () => {
+    const local: OutcomeState = { open: [], hashes: {}, resolved: [] };
+    const onDisk: OutcomeState = { open: [], hashes: {}, resolved: [] };
+    expect(mergeOutcomeState(local, onDisk).open).toEqual([]);
+  });
+
+  it("drops a disk finding that local has tombstoned (a resolve is not a never-seen)", () => {
+    const local: OutcomeState = { open: [], hashes: {}, resolved: ["DF-1"] };
+    const onDisk: OutcomeState = { open: [finding("DF-1"), finding("DF-2")], hashes: {}, resolved: [] };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.open.map((f) => f.findingId)).toEqual(["DF-2"]);
+    expect(merged.resolved).toEqual(["DF-1"]);
+  });
+
+  it("keeps a finding local holds open even when the disk copy tombstoned it (open wins, by design)", () => {
+    const local: OutcomeState = { open: [finding("DF-1")], hashes: {}, resolved: [] };
+    const onDisk: OutcomeState = { open: [], hashes: {}, resolved: ["DF-1"] };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.open.map((f) => f.findingId)).toEqual(["DF-1"]);
+    expect(merged.resolved).toEqual([]);
+  });
+
+  it("unions tombstones from both sides, dedupes, and caps keeping the most recent", () => {
+    const disk = Array.from({ length: 150 }, (_, i) => `DF-${i}`); // DF-0..149
+    const loc = Array.from({ length: 150 }, (_, i) => `DF-${100 + i}`); // DF-100..249, overlaps DF-100..149
+    const merged = mergeOutcomeState(
+      { open: [], hashes: {}, resolved: loc },
+      { open: [], hashes: {}, resolved: disk },
+    );
+    // 250 unique ids, capped to the 200 most recent: DF-50..249
+    expect(merged.resolved).toHaveLength(200);
+    expect(new Set(merged.resolved).size).toBe(200);
+    expect(merged.resolved[0]).toBe("DF-50");
+    expect(merged.resolved.at(-1)).toBe("DF-249");
+    expect(merged.resolved).not.toContain("DF-0"); // the oldest is what falls off
+  });
+
+  it("unions per-file revert hashes from both sides without duplicating shared entries", () => {
+    const local: OutcomeState = { open: [], hashes: { "a.ts": ["h1", "h2"] }, resolved: [] };
+    const onDisk: OutcomeState = { open: [], hashes: { "a.ts": ["h2", "h3"] }, resolved: [] };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(new Set(merged.hashes["a.ts"])).toEqual(new Set(["h1", "h2", "h3"]));
+  });
+
+  it("unions hashes across files present on only one side", () => {
+    const local: OutcomeState = { open: [], hashes: { "a.ts": ["h1"] }, resolved: [] };
+    const onDisk: OutcomeState = { open: [], hashes: { "b.ts": ["h2"] }, resolved: [] };
+    const merged = mergeOutcomeState(local, onDisk);
+    expect(merged.hashes).toEqual({ "a.ts": ["h1"], "b.ts": ["h2"] });
+  });
+});
+
+describe("writeOutcomeState: read-merge-write", () => {
+  function finding(id: string): OpenFinding {
+    return { findingId: id, file: "src/x.ts", category: "naming" };
+  }
+
+  // Sequential (deterministic) demonstration of the actual fix contract: a
+  // SECOND write for the same session, whose caller computed its local state
+  // from an earlier read, must not blindly clobber what the FIRST write
+  // already committed. This is exactly what a blind writeFile() used to do.
+  it("a later write merges with, rather than clobbers, what an earlier write committed", async () => {
+    const dir = tmp("vd-out-merge-");
+    const hash = "feedfacefeedfaaa";
+    const sid = "s-seq";
+
+    await writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-a")] });
+    // stateB was computed from a stale (pre-DF-a) read, as a concurrent
+    // writer's would be — it does not know about DF-a at all.
+    await writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-b")] });
+
+    const final = await readOutcomeState(dir, hash, sid);
+    expect(final.open.map((f) => f.findingId).sort()).toEqual(["DF-a", "DF-b"]);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // The reviewer's single-writer repro: flag DF-1, resolve it, write. Before
+  // tombstones the merge unioned `open` with the disk copy, so the finding the
+  // caller had just filtered out came straight back from disk and a resolve
+  // could never persist at all.
+  it("a resolve persists: the resolved finding is not resurrected from disk on the write that removes it", async () => {
+    const dir = tmp("vd-out-resolve-");
+    const hash = "feedfacefeedfaaa";
+    const sid = "s-resolve";
+
+    await writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-1"), finding("DF-2")] });
+    const state = await readOutcomeState(dir, hash, sid);
+    expect(state.open.map((f) => f.findingId).sort()).toEqual(["DF-1", "DF-2"]);
+
+    // what hook-entry does on a resolve: drop it from open AND tombstone it
+    state.open = state.open.filter((f) => f.findingId !== "DF-1");
+    state.resolved.push("DF-1");
+    await writeOutcomeState(dir, hash, sid, state);
+
+    const after = await readOutcomeState(dir, hash, sid);
+    expect(after.open.map((f) => f.findingId)).toEqual(["DF-2"]);
+    expect(after.resolved).toEqual(["DF-1"]);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a re-flag after a resolve reopens the finding and clears its tombstone", async () => {
+    const dir = tmp("vd-out-reflag-");
+    const hash = "feedfacefeedfaaa";
+    const sid = "s-reflag";
+
+    await writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), resolved: ["DF-1"] });
+    const state = await readOutcomeState(dir, hash, sid);
+    expect(state.resolved).toEqual(["DF-1"]);
+
+    // what hook-entry does on a flag: clear the tombstone, then push it open
+    state.resolved = state.resolved.filter((id) => id !== "DF-1");
+    state.open.push(finding("DF-1"));
+    await writeOutcomeState(dir, hash, sid, state);
+
+    const after = await readOutcomeState(dir, hash, sid);
+    expect(after.open.map((f) => f.findingId)).toEqual(["DF-1"]);
+    expect(after.resolved).toEqual([]);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reads a sidecar written before tombstones existed (no `resolved` key) as an empty tombstone list", async () => {
+    const dir = tmp("vd-out-legacy-");
+    const hash = "feedfacefeedfaaa";
+    const sid = "s-legacy";
+    mkdirSync(join(dir, hash), { recursive: true });
+    writeFileSync(join(dir, hash, `${sid}.outcomes.json`), JSON.stringify({ open: [finding("DF-1")], hashes: {} }));
+
+    const state = await readOutcomeState(dir, hash, sid);
+    expect(state.open.map((f) => f.findingId)).toEqual(["DF-1"]);
+    expect(state.resolved).toEqual([]);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // True concurrency is lock-free by design (like upload-state.ts's
+  // commit()), so a genuine race's outcome is not fully deterministic — we do
+  // NOT assert both findings are guaranteed to survive. What must always
+  // hold: the sidecar is never torn (invalid JSON), and at least one write's
+  // finding is durably present.
+  it("never tears the file under a concurrent write, and at least one finding survives", async () => {
+    const dir = tmp("vd-out-concurrent-");
+    const hash = "feedfacefeedfaaa";
+    const sid = "s-conc";
+
+    await Promise.all([
+      writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-a")] }),
+      writeOutcomeState(dir, hash, sid, { ...emptyOutcomeState(), open: [finding("DF-b")] }),
+    ]);
+
+    const final = await readOutcomeState(dir, hash, sid);
+    const ids = final.open.map((f) => f.findingId);
+    expect(ids.every((id) => id === "DF-a" || id === "DF-b")).toBe(true);
+    expect(ids.length).toBeGreaterThan(0);
+
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

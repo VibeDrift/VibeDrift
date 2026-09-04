@@ -113,13 +113,21 @@ export async function sendScanBeacon(
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), BEACON_TIMEOUT_MS);
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
+    try {
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      // Must run on the rejection path too (offline, DNS failure, connection
+      // refused), not just on success: a ref'd timer left pending keeps the
+      // event loop alive for up to BEACON_TIMEOUT_MS, which hangs `vibedrift
+      // scan` when run offline (scan.ts calls this unawaited with no
+      // process.exit on the success path).
+      clearTimeout(timer);
+    }
   } catch {
     // Best-effort — never block or error the scan
   }
@@ -135,22 +143,31 @@ export async function sendReportOpenBeacon(
   bearerToken: string,
   apiUrl?: string,
 ): Promise<void> {
+  const enabled = await isTelemetryEnabled();
+  if (!enabled) return;
+
   const base = apiUrl ?? "https://vibedrift-api.fly.dev";
   const url = `${base}/v1/beacon/report-open`;
 
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), BEACON_TIMEOUT_MS);
-    await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${bearerToken}`,
-      },
-      body: JSON.stringify({ scan_id: scanId, opened_at: new Date().toISOString() }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
+    try {
+      await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({ scan_id: scanId, opened_at: new Date().toISOString() }),
+        signal: controller.signal,
+      });
+    } finally {
+      // Same rejection-path leak as sendScanBeacon: clear the ref'd timer
+      // even when the fetch throws, or the event loop stays alive up to
+      // BEACON_TIMEOUT_MS.
+      clearTimeout(timer);
+    }
   } catch {
     // Best-effort
   }

@@ -10,7 +10,7 @@
  * phase).
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { loadBaselineUnchecked, type RepoDriftBaseline } from "../core/baseline.js";
 import { detectLanguage } from "../core/language.js";
@@ -21,6 +21,7 @@ import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
 import { isInLoopCheckable } from "../drift/utils.js";
 import { verifyCounterpart } from "./counterpart.js";
+import { writeFileAtomic } from "./atomic-write.js";
 
 export const INLINE_CHECK_MAX_ENTRIES = 2000;
 export const COOLDOWN_MS = 5 * 60_000;
@@ -52,9 +53,28 @@ export function rankAdvisoryCandidates(candidates: AdvisoryCandidate[]): Advisor
   return [...candidates.filter(strong), ...candidates.filter((c) => !strong(c))];
 }
 
-interface CooldownState {
+export interface CooldownState {
   nextFindingSeq: number;
   lastFyi: Record<string, number>;
+}
+
+/** Merge two cooldown snapshots (this write's local state and whatever is
+ *  currently on disk) so a concurrent hook subprocess's progress is never
+ *  clobbered by a blind overwrite (upload-state.ts's `commit()` does the same
+ *  read-merge-write for the same reason). `nextFindingSeq` only needs to stay
+ *  monotonic going forward — it never renames a findingId already minted from
+ *  a lower value — so the max is always safe. `lastFyi` is a per-key cooldown
+ *  clock: the max timestamp per key is the correct merge, since an earlier
+ *  timestamp can never un-expire a throttle the other writer already started. */
+export function mergeCooldownState(local: CooldownState, onDisk: CooldownState): CooldownState {
+  const lastFyi: Record<string, number> = { ...onDisk.lastFyi };
+  for (const [key, ts] of Object.entries(local.lastFyi)) {
+    lastFyi[key] = Math.max(lastFyi[key] ?? 0, ts);
+  }
+  return {
+    nextFindingSeq: Math.max(local.nextFindingSeq, onDisk.nextFindingSeq),
+    lastFyi,
+  };
 }
 
 export interface EditCheckOptions {
@@ -106,11 +126,14 @@ async function readState(opts: EditCheckOptions): Promise<CooldownState> {
 
 async function writeState(opts: EditCheckOptions, state: CooldownState): Promise<void> {
   try {
-    await mkdir(join(opts.sessionsDir, safeSegment(opts.projectHash)), {
-      recursive: true,
-      mode: 0o700,
-    });
-    await writeFile(statePath(opts), JSON.stringify(state), { mode: 0o600 });
+    // Read-merge-write (not a blind overwrite): a concurrent hook subprocess
+    // for the same session may have advanced nextFindingSeq or started a
+    // cooldown on a key this call never touched between our read and this
+    // write. Re-reading here and merging keeps that progress instead of
+    // losing it (see mergeCooldownState).
+    const onDisk = await readState(opts);
+    const merged = mergeCooldownState(state, onDisk);
+    await writeFileAtomic(statePath(opts), JSON.stringify(merged), { mode: 0o600 });
   } catch {
     // cooldown is best-effort; losing it degrades to an extra FYI, never a failure
   }
@@ -131,6 +154,11 @@ async function readFileOrNull(path: string): Promise<string | null> {
     return null;
   }
 }
+
+// Test-only re-export (kept at module scope, tree-shaken from the bundle):
+// the read-merge-write is only observable when the disk changes between a
+// caller's read and its write, which no public entry point can interleave.
+export const __test_writeCooldownState = writeState;
 
 export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOutcome> {
   const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineUnchecked(rootDir, HOOK_BASELINE_MAX_BYTES));
