@@ -18,7 +18,8 @@
  * check is back to baseline-only.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { writeFileAtomic } from "./atomic-write.js";
 import { join } from "node:path";
 import type { MinhashEntry } from "../core/baseline.js";
 import { extractAllFunctions } from "../codedna/function-extractor.js";
@@ -82,7 +83,17 @@ export async function writeOverlay(
       })),
     };
     await mkdir(join(sessionsDir, safeSegment(projectHash)), { recursive: true, mode: 0o700 });
-    await writeFile(overlayPath(sessionsDir, projectHash, sessionId), JSON.stringify(serial), { mode: 0o600 });
+    // Atomic, like every other per-session sidecar (see ./atomic-write.ts): the
+    // hook arms a 2 s self-timeout and can be killed mid-write, and a plain
+    // writeFile truncates in place. This is the largest of the sidecars, so it
+    // is the one most likely to be caught mid-write, and a half-written overlay
+    // parses as no overlay: the very same-session duplicates this index exists
+    // to catch would stop being caught, silently.
+    await writeFileAtomic(
+      overlayPath(sessionsDir, projectHash, sessionId),
+      JSON.stringify(serial),
+      { mode: 0o600 },
+    );
   } catch {
     // best-effort: a lost overlay means baseline-only checks, never a failure
   }

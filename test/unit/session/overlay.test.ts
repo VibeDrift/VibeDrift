@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -102,3 +102,24 @@ describe("overlay merge respects the inline gate", () => {
   }, 60_000);
 });
 
+describe("the overlay sidecar is written atomically", () => {
+  // Main's #122 made every per-session sidecar tmp+rename, because the hook
+  // arms a 2 s self-timeout and a plain writeFile truncates in place. The
+  // overlay is the largest of them, so it is the likeliest to be caught
+  // mid-write, and a half-written one parses as no overlay at all: the
+  // same-session duplicates this index exists to catch stop being caught.
+  it("leaves no temp residue and never a half-written file when it shrinks", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "vd-overlay-atomic-")));
+    const hash = "feedfacefeedface";
+    const big = updateOverlay({ files: new Map() }, "src/a.ts", overlayEntriesFor("src/a.ts", MONTH_TITLE));
+    await writeOverlay(dir, hash, "s-atomic", big);
+    const projectDir = join(dir, hash);
+    expect(readdirSync(projectDir).filter((n) => n.includes(".tmp"))).toEqual([]);
+    // a shorter payload must replace the file whole, not overwrite its head
+    await writeOverlay(dir, hash, "s-atomic", { files: new Map() });
+    const raw = readFileSync(join(projectDir, "s-atomic.overlay.json"), "utf8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(JSON.parse(raw)).toEqual({ v: 1, files: [] });
+    expect(readdirSync(projectDir).filter((n) => n.includes(".tmp"))).toEqual([]);
+  });
+});
