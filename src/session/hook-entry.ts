@@ -20,14 +20,21 @@
  * (no file is parsed), so the cold cost stays ~60-80ms.
  */
 
-import { relative, resolve, isAbsolute, basename, dirname } from "node:path";
+import { relative, resolve, isAbsolute, basename, dirname, join } from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { TrialRecapTotals } from "./trial-recap.js";
 import type { EditCheckOutcome } from "./check.js";
+import type { SessionEvent } from "./types.js";
+import type { RepoDriftBaseline } from "../core/baseline.js";
 
 const SELF_TIMEOUT_MS = 2000;
+/** Wall-time budget for the per-file checks after one Bash call; the rest of
+ *  the batch is recorded unchecked. Sized to leave the watchdog headroom for
+ *  process start (~80 ms), the baseline read and the ledger writes. */
+export const BASH_CHECK_BUDGET_MS = 1200;
 
 // Arm the fail-open guard first, before the dynamic imports below run.
 const timer = setTimeout(() => {
@@ -94,9 +101,11 @@ async function main(): Promise<number> {
     { appendEvent, newActivityId, sessionFilePath },
     { normalizeHookPayload },
     { repoIdentity, defaultSessionsDir },
-    { runEditChecks },
+    { runEditChecks, HOOK_BASELINE_MAX_BYTES },
     { processPrompt, checkScope },
     { recheckFile, detectRevert, readOutcomeState, writeOutcomeState },
+    { readHookClock, writeHookClock, changedSourceFiles },
+    { loadBaselineUnchecked },
   ] = await Promise.all([
     import("./ledger.js"),
     import("./normalize.js"),
@@ -104,6 +113,8 @@ async function main(): Promise<number> {
     import("./check.js"),
     import("./scope.js"),
     import("./outcomes.js"),
+    import("./bash-changes.js"),
+    import("../core/baseline.js"),
   ]);
 
   const cwd =
@@ -270,19 +281,35 @@ async function main(): Promise<number> {
 
   const sessionsDir = defaultSessionsDir();
 
-  // Decide `checked` BEFORE the ledger write, so the recorded edit event
-  // carries the check's real outcome rather than an inference (P1.7: the
-  // drift-density denominator counts only edits the inline check RAN on).
-  // Preconditions here (in-repo file, non-empty body) are one skip class;
-  // runEditChecks reports its own (non-code file, missing or oversized
-  // baseline, load or detect error) via `res.checked`. Stated cost of the
-  // reordering: the check now runs BEFORE the append, so a self-timeout
-  // firing inside it loses the edit event too (previously only flags were
-  // at risk). The window is bounded small on purpose: the baseline read is
-  // stat-capped (HOOK_BASELINE_MAX_BYTES) and the entry gate keeps the
-  // warm-path check in low milliseconds.
-  let editCheck: EditCheckOutcome | null = null;
-  if (event.type === "edit") {
+  // The per-session clock the Bash path compares mtimes against. Read the
+  // previous stamp, then stamp NOW before any work: every file the tool call
+  // that triggered this run wrote already has an earlier mtime, and a
+  // self-timeout later in this run must not leave the old stamp behind, or
+  // every following Bash call would repeat the same batch and append the same
+  // edits again until some other hook event stamped the clock.
+  const previousClock = await readHookClock(sessionsDir, projectHash, event.sid);
+  const stampMs = Date.now();
+  await writeHookClock(sessionsDir, projectHash, event.sid, stampMs, previousClock.recorded);
+
+  /**
+   * One in-repo edit, whatever tool made it: run the inline check BEFORE the
+   * ledger write so the recorded event carries the check's real outcome (the
+   * drift-density denominator counts only edits the check RAN on), append it,
+   * then resolve open findings against the file's current content, record new
+   * flags (deduped against open ones), note byte-exact reverts, and run the
+   * scope check. Returns the one advisory line to message, or null. Stated
+   * cost of running the check ahead of the append: a self-timeout firing
+   * inside it loses the edit event too; the window is bounded small (the
+   * baseline read is stat-capped and the entry gate keeps the warm path in
+   * low milliseconds).
+   */
+  async function processEdit(
+    event: SessionEvent,
+    body: string | undefined,
+    checkAbsFile: string | null,
+    loadBaselineFor?: (root: string) => Promise<RepoDriftBaseline | null>,
+  ): Promise<string | null> {
+    let editCheck: EditCheckOutcome | null = null;
     if (body && checkAbsFile) {
       editCheck = await runEditChecks({
         rootDir,
@@ -291,27 +318,12 @@ async function main(): Promise<number> {
         sessionsDir,
         file: checkAbsFile,
         body,
+        ...(loadBaselineFor ? { loadBaselineFor } : {}),
       });
     }
     event.detail.checked = editCheck?.checked ?? false;
-  }
-
-  await appendEvent(sessionsDir, projectHash, event.sid, event);
-
-  // End of a turn (Claude Code fires Stop per response): ship this turn's
-  // events so the dashboard streams live WITHOUT watch-session open. The hook
-  // stays offline — it only spawns a detached child (fail-open, opt-in gated).
-  if (event.type === "session_end") {
-    await maybeSpawnFlush(projectHash, sessionsDir);
-  }
-
-  // Capture the task intent from prompts; lock it on the first one.
-  if (event.type === "user_prompt" && event.detail.promptText) {
-    const lock = await processPrompt(sessionsDir, projectHash, event.sid, event.detail.promptText);
-    if (lock) await appendEvent(sessionsDir, projectHash, event.sid, lock);
-  }
-
-  if (event.type === "edit" && body && event.detail.file) {
+    await appendEvent(sessionsDir, projectHash, event.sid, event);
+    if (!body || !event.detail.file) return null;
     const relFile = event.detail.file;
     let fyi: string | null = null;
     const outcomes = await readOutcomeState(sessionsDir, projectHash, event.sid);
@@ -399,10 +411,120 @@ async function main(): Promise<number> {
     if (scope.flag) await appendEvent(sessionsDir, projectHash, event.sid, scope.flag);
     if (!fyi && scope.fyi) fyi = scope.fyi;
 
-    if (fyi) {
-      process.stderr.write(`${fyi}\n`);
-      return 2;
+    return fyi;
+  }
+
+  /**
+   * After a Bash tool call: the files it changed, checked as if each were an
+   * edit. The hook keeps a per-session clock (when its previous run finished);
+   * checkable source files with a newer mtime are read from disk and pushed
+   * through processEdit with toolName "Bash" and no diffstat (there is no hunk,
+   * the whole file is the body). The clock is stamped at the START of every
+   * hook run, so only a Bash call that is the first hook event of a session
+   * finds none and detects nothing. The baseline is loaded once for the batch.
+   *
+   * A touched file whose content is byte-identical to the baseline's copy is
+   * skipped: a `touch`, or a formatter that changed nothing, moves the mtime
+   * without writing anything new, and re-checking an unchanged templated file
+   * against the index would flag it as a duplicate of its own siblings. A file
+   * whose bytes did change is checked whole, as a Write of it would be.
+   */
+  async function processBashChanges(
+    sid: string,
+    v: SessionEvent["v"],
+    clock: { lastMs?: number; recorded?: Record<string, number> },
+  ): Promise<string | null> {
+    if (clock.lastMs === undefined) return null;
+    const walk = await changedSourceFiles(rootDir, clock.lastMs);
+    // A file the previous Bash run already recorded, at the same mtime, is
+    // not an edit again: the mtime slack would otherwise re-detect a file
+    // written just before the previous stamp on every quick follow-up call.
+    const files = walk.files.filter((rel) => clock.recorded?.[rel] !== walk.mtimes[rel]);
+    // Remember what THIS run saw, whatever happens to it below, so the next
+    // run can skip it. Best-effort, like the stamp itself.
+    const seen: Record<string, number> = {};
+    for (const rel of walk.files) seen[rel] = walk.mtimes[rel];
+    await writeHookClock(sessionsDir, projectHash, sid, stampMs, seen);
+    if (files.length === 0) return null;
+    // Time budget for the per-file checks. The walk is cheap (single-digit
+    // milliseconds); the checks it feeds are not: measured 65 to 70 ms per
+    // file on a 458-entry index and about 180 ms on a 1,600-entry one, so a
+    // 20-file batch can outrun the 2s self-timeout. Files past the budget are
+    // still recorded, as edits the check did NOT run on (checked: false), so
+    // the ledger stays complete and the density denominator stays honest.
+    const budgetMs = Number(process.env.VIBEDRIFT_BASH_CHECK_BUDGET_MS ?? BASH_CHECK_BUDGET_MS);
+    const batchStart = Date.now();
+    let cached: Promise<RepoDriftBaseline | null> | undefined;
+    const loadBaselineFor = (root: string): Promise<RepoDriftBaseline | null> =>
+      (cached ??= loadBaselineUnchecked(root, HOOK_BASELINE_MAX_BYTES));
+    const baseline = await loadBaselineFor(rootDir);
+    const knownHash = new Map<string, string>();
+    for (const f of baseline?.ctxFiles ?? []) {
+      const rel = (isAbsolute(f.path) ? relative(rootDir, f.path) : f.path).replace(/\\/g, "/");
+      knownHash.set(rel, f.hash);
     }
+    let fyi: string | null = null;
+    for (const rel of files) {
+      const abs = join(rootDir, rel);
+      let content: string;
+      try {
+        content = await readFile(abs, "utf8");
+      } catch {
+        continue;
+      }
+      if (!content.trim()) continue;
+      if (knownHash.get(rel) === createHash("sha256").update(content).digest("hex")) continue;
+      const ev: SessionEvent = {
+        v,
+        sid,
+        aid: newActivityId(),
+        ts: new Date().toISOString(),
+        agent: "claude-code",
+        projectHash,
+        channel: "hook",
+        type: "edit",
+        mode: "passive",
+        detail: { file: rel, toolName: "Bash", inRepo: true },
+      };
+      if (Date.now() - batchStart >= budgetMs) {
+        // Over budget: recorded, not checked. Never a fabricated `checked`.
+        ev.detail.checked = false;
+        await appendEvent(sessionsDir, projectHash, sid, ev);
+        continue;
+      }
+      const f = await processEdit(ev, content, abs, loadBaselineFor);
+      if (!fyi && f) fyi = f;
+    }
+    return fyi;
+  }
+
+  let fyi: string | null = null;
+  if (event.type === "edit") {
+    fyi = await processEdit(event, body, checkAbsFile);
+  } else {
+    await appendEvent(sessionsDir, projectHash, event.sid, event);
+
+    // End of a turn (Claude Code fires Stop per response): ship this turn's
+    // events so the dashboard streams live WITHOUT watch-session open. The hook
+    // stays offline — it only spawns a detached child (fail-open, opt-in gated).
+    if (event.type === "session_end") {
+      await maybeSpawnFlush(projectHash, sessionsDir);
+    }
+
+    // Capture the task intent from prompts; lock it on the first one.
+    if (event.type === "user_prompt" && event.detail.promptText) {
+      const lock = await processPrompt(sessionsDir, projectHash, event.sid, event.detail.promptText);
+      if (lock) await appendEvent(sessionsDir, projectHash, event.sid, lock);
+    }
+
+    if (event.type === "command") {
+      fyi = await processBashChanges(event.sid, event.v, previousClock);
+    }
+  }
+
+  if (fyi) {
+    process.stderr.write(`${fyi}\n`);
+    return 2;
   }
 
   return 0;

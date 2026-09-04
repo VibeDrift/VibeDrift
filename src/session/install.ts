@@ -39,13 +39,24 @@ export function detectClaudeCode(repoRoot: string, homeDir: string): boolean {
   );
 }
 
-/** The events Phase 1 listens to. PostToolUse is scoped to edit tools. */
-const HOOK_EVENTS: Array<{ event: string; matcher?: string }> = [
+/** The events the hook listens to. PostToolUse is scoped twice: the edit
+ *  tools, and Bash on its own. An agent in Claude Code's bypass-permissions
+ *  mode is steered to change files through Bash (heredocs, `sed -i`), and on a
+ *  recorded session that moved about two thirds of file changes out of the
+ *  edit-tool matcher's sight, every fix made in answer to a flag included.
+ *  The Bash group lets the hook re-check what a Bash call changed. */
+export const HOOK_EVENTS: Array<{ event: string; matcher?: string }> = [
   { event: "SessionStart" },
   { event: "UserPromptSubmit" },
   { event: "PostToolUse", matcher: "Edit|Write|MultiEdit" },
+  { event: "PostToolUse", matcher: "Bash" },
   { event: "Stop" },
 ];
+
+/** Label for a hook group in status output: "PostToolUse:Bash". */
+function groupLabel(h: { event: string; matcher?: string }): string {
+  return h.matcher ? `${h.event}:${h.matcher}` : h.event;
+}
 
 const HOOK_TIMEOUT_SECONDS = 10;
 
@@ -93,6 +104,21 @@ function hasOurEntry(groups: HookGroup[] | undefined): boolean {
   return !!groups?.some((g) => Array.isArray(g.hooks) && g.hooks.some(isOurs));
 }
 
+/** Our entry present in a group with exactly this matcher (undefined = a
+ *  matcher-less group). A pre-Bash install has our PostToolUse entry under the
+ *  edit-tool matcher only, and must read as "Bash group missing", not as
+ *  "installed". */
+function hasOurEntryFor(groups: HookGroup[] | undefined, matcher: string | undefined): boolean {
+  return !!groups?.some(
+    (g) => g.matcher === matcher && Array.isArray(g.hooks) && g.hooks.some(isOurs),
+  );
+}
+
+/** The hook groups we install that are NOT present in `hooks`. */
+function missingGroups(hooks: Record<string, HookGroup[]>): string[] {
+  return HOOK_EVENTS.filter((h) => !hasOurEntryFor(hooks[h.event], h.matcher)).map(groupLabel);
+}
+
 async function readSettings(
   file: string,
 ): Promise<{ raw: string | null; parsed: SettingsShape | null; unparseable: boolean }> {
@@ -121,7 +147,7 @@ export async function installHooks(repoRoot: string, opts: InstallOptions): Prom
   const settings: SettingsShape = parsed ?? {};
   const hooks: Record<string, HookGroup[]> = (settings.hooks as Record<string, HookGroup[]>) ?? {};
 
-  if (HOOK_EVENTS.every(({ event }) => hasOurEntry(hooks[event]))) {
+  if (missingGroups(hooks).length === 0) {
     return { status: "already", file };
   }
 
@@ -143,7 +169,7 @@ export async function installHooks(repoRoot: string, opts: InstallOptions): Prom
   const command = taggedCommand(opts);
   for (const { event, matcher } of HOOK_EVENTS) {
     const groups = hooks[event] ?? [];
-    if (!hasOurEntry(groups)) {
+    if (!hasOurEntryFor(groups, matcher)) {
       const entry: HookEntry = { type: "command", command, timeout: HOOK_TIMEOUT_SECONDS };
       groups.push(matcher !== undefined ? { matcher, hooks: [entry] } : { hooks: [entry] });
     }
@@ -228,9 +254,12 @@ export async function uninstallHooks(
 
 export async function hooksStatus(
   repoRoot: string,
-): Promise<{ installed: boolean; file: string }> {
+): Promise<{ installed: boolean; file: string; missing: string[] }> {
   const file = settingsPath(repoRoot);
   const { parsed } = await readSettings(file);
   const hooks = (parsed?.hooks as Record<string, HookGroup[]>) ?? {};
-  return { installed: Object.values(hooks).some((groups) => hasOurEntry(groups)), file };
+  const installed = Object.values(hooks).some((groups) => hasOurEntry(groups));
+  // `missing` only means something for an install: an uninstalled repo lists
+  // nothing rather than every group.
+  return { installed, file, missing: installed ? missingGroups(hooks) : [] };
 }

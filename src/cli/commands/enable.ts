@@ -136,7 +136,9 @@ export async function runEnable(targetPath: string, options: EnableOptions = {})
   }
 
   const already = await hooksStatus(rootDir);
-  if (!already.installed) {
+  // A pre-existing install missing a hook group (the Bash group, added later)
+  // is upgraded in place: installHooks adds only what is absent.
+  if (!already.installed || already.missing.length > 0) {
     const res = await installHooks(rootDir, {
       hookCommand: options.hookCommand ?? resolveHookCommand(),
       sessionsDir,

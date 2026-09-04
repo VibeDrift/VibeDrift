@@ -2,12 +2,12 @@
 
 A batch scan reports drift after the code exists. The MCP server (chapter 9) moves the same checks earlier, to the moment an agent *asks* a conformance question before writing. Drift Sessions moves them earlier still, to the moment the agent *acts*, without waiting to be asked. It rides inside a Claude Code coding session through the agent's own hooks, watches prompts and edits as they stream by, flags an edit that diverges from the repo's dominant patterns while the agent is still on the task, feeds a one-line advisory back into the agent's context, and records the whole session to a local append-only ledger. Optionally, and only when you opt in, it uploads a derived projection of that ledger to a hosted dashboard.
 
-The whole surface is built local-first and fail-open. Nothing leaves the machine unless you turn on sync, and a hook that errors, times out, or sees a shape it does not understand exits cleanly and never interrupts your agent. This chapter walks the command, the four hooks, the ledger, the live tape, the advisories, the experimental intent tier, the outcome model, and the local/cloud boundary, all grounded in `src/session/`.
+The whole surface is built local-first and fail-open. Nothing leaves the machine unless you turn on sync, and a hook that errors, times out, or sees a shape it does not understand exits cleanly and never interrupts your agent. This chapter walks the command, the five hook groups, the ledger, the live tape, the advisories, the experimental intent tier, the outcome model, and the local/cloud boundary, all grounded in `src/session/`.
 
 > [!NOTE]
 > Drift Sessions is labeled **preview**. The command prints that label, the intent tier is marked experimental in the code and on the tape, and the drift gauge ships with weights annotated as initial calibration. Treat the signal as advisory.
 
-## `watch-session` and the four Claude Code hooks
+## `watch-session` and the five Claude Code hook groups
 
 One command drives the feature:
 
@@ -19,23 +19,26 @@ The path argument defaults to `.`. Run with no flags, it makes sure the hooks ar
 
 | Flag | Effect |
 |---|---|
-| `--status` | Report whether the hooks are installed for this repo, and print the ledger location |
+| `--status` | Report whether the hooks are installed for this repo (and any hook group an older install is missing), and print the ledger location |
 | `--uninstall` | Remove the hooks this command installed |
 | `--yes` | Skip the consent prompt |
 | `--no-watch` | Install the hooks only, do not follow the live tape |
 | `--sync <on\|off>` | Hosted sync (Pro): `on` opts into derived-only upload, `off` disables it |
 | `--local-only` | Force hosted sync off for this run, regardless of the saved setting |
 
-Installation writes four marker-tagged hook entries into the project's `.claude/settings.local.json`, the project-local settings file that is conventionally left uncommitted (`src/session/install.ts`). The four events, and the tools each one listens to, are fixed:
+Installation writes five marker-tagged hook entries into the project's `.claude/settings.local.json`, the project-local settings file that is conventionally left uncommitted (`src/session/install.ts`). The events, and the tools each one listens to, are fixed:
 
 | Hook event | Fires when | Matcher |
 |---|---|---|
 | `SessionStart` | a Claude Code session begins | (all) |
 | `UserPromptSubmit` | you submit a prompt | (all) |
 | `PostToolUse` | the agent finishes a file-editing tool | `Edit\|Write\|MultiEdit` |
+| `PostToolUse` | the agent finishes a Bash command | `Bash` |
 | `Stop` | the session ends | (all) |
 
-Each entry is the absolute command `node <dist>/session/hook-entry.js` with a trailing `#vibedrift-hook` shell comment. That comment does double duty as the idempotency and removal marker: install refuses to add a second copy of an entry that is already present, and uninstall finds our entries by that marker and nothing else.
+Each entry is the absolute command `node <dist>/session/hook-entry.js` with a trailing `#vibedrift-hook` shell comment. That comment does double duty as the idempotency and removal marker: install refuses to add a second copy of an entry that is already present, and uninstall finds our entries by that marker and nothing else. Presence is checked per event *and* matcher, so an install made before the Bash group existed reads as "installed, missing `PostToolUse:Bash`" under `--status`, and a plain `watch-session` on such a repo adds the missing group in place without a new consent prompt (the capture contract is unchanged).
+
+The Bash group exists because an agent in Claude Code's bypass-permissions mode is steered to change files through Bash (python heredocs, `sed -i`, `cat >`) rather than the edit tools. On a recorded session that moved about two thirds of file changes out of the edit-tool matcher's sight, every fix made in answer to a flag included, so no re-check ever ran and no finding could resolve. The hook has no hunk to judge after a Bash call, so it keeps a per-session clock (the wall time its previous run finished, in a `.hookclock.json` sidecar next to the ledger) and, after each Bash call, walks the repo for checkable source files whose mtime is newer than that clock (`src/session/bash-changes.ts`). The walk is bounded (at most 5,000 directory entries, 500 ms, 20 files, with the scanner's skip-dirs and every dot-directory excluded) and returns what it found so far when a bound is hit. Each file found is read from disk and pushed through exactly the same path as an edit-tool write: the inline check, an `edit` event with `toolName: "Bash"` and no diffstat, the finding-scoped re-check, dedupe, and the one advisory line. The walk costs single-digit milliseconds; the checks it feeds do not (65 to 70 ms per file on a 458-entry index, about 180 ms on a 1,600-entry one), so the batch has a 1.2 s budget (`BASH_CHECK_BUDGET_MS`) and files past it are recorded as edits the check did not run on (`checked: false`) rather than dropped. The clock is stamped at the start of every hook run, before any of this work, so a self-timeout mid-batch cannot make the next Bash call repeat it. A touched file whose content is byte-identical to the baseline's copy is skipped (a `touch`, or a formatter that changed nothing); a file whose bytes did change is checked whole, exactly as a Write of the same content would be. Only a Bash call that is the very first hook event of a session finds no clock and detects nothing; the Bash command text itself is never recorded (the `command` event stays bodiless).
 
 The installer is deliberately conservative about a file it does not own. It refuses to touch `settings.local.json` at all when it cannot parse the JSON (it returns an `aborted_unparseable` status rather than risk clobbering a hand-edited file), and before it writes it snapshots the pre-install bytes. On `--uninstall`, if you have not edited the settings since install, it restores those exact bytes, and if it created the file and nothing else was added, it removes the file. If you *have* edited the settings, it falls back to surgically stripping only the marked entries and leaves your edits in place. Either way the recorded ledgers are never touched: they remain yours.
 

@@ -17,7 +17,7 @@ function makeOpts(sessionsDir: string) {
 const settingsPath = (repo: string) => join(repo, ".claude", "settings.local.json");
 
 describe("installHooks", () => {
-  it("creates settings.local.json with marker-tagged hooks for all four events", async () => {
+  it("creates settings.local.json with marker-tagged hooks for every hook group", async () => {
     const repo = tmp("vd-inst-");
     const res = await installHooks(repo, makeOpts(tmp("vd-sess-")));
     expect(res.status).toBe("installed");
@@ -33,6 +33,30 @@ describe("installHooks", () => {
     const postGroups = parsed.hooks.PostToolUse;
     expect(postGroups[0].matcher).toBe("Edit|Write|MultiEdit");
     expect(postGroups[0].hooks[0].timeout).toBe(10);
+    // Bash gets its own PostToolUse group: an agent in bypass-permissions mode
+    // changes files through heredocs and sed, which the edit-tool matcher
+    // never sees.
+    expect(postGroups[1].matcher).toBe("Bash");
+    expect(postGroups[1].hooks[0].command).toContain(HOOK_MARKER);
+    expect(postGroups[1].hooks[0].timeout).toBe(10);
+  });
+
+  it("adds the Bash group to an install that predates it, and reports installed", async () => {
+    const repo = tmp("vd-upgrade-");
+    const opts = makeOpts(tmp("vd-sess-"));
+    await installHooks(repo, opts);
+    // simulate the pre-Bash install: drop our Bash group, keep the rest
+    const parsed = JSON.parse(readFileSync(settingsPath(repo), "utf8"));
+    parsed.hooks.PostToolUse = parsed.hooks.PostToolUse.filter((g: { matcher?: string }) => g.matcher !== "Bash");
+    writeFileSync(settingsPath(repo), JSON.stringify(parsed, null, 2));
+    expect((await hooksStatus(repo)).missing).toEqual(["PostToolUse:Bash"]);
+    const res = await installHooks(repo, opts);
+    expect(res.status).toBe("installed");
+    const after = JSON.parse(readFileSync(settingsPath(repo), "utf8"));
+    expect(after.hooks.PostToolUse.map((g: { matcher?: string }) => g.matcher)).toEqual(["Edit|Write|MultiEdit", "Bash"]);
+    expect((await hooksStatus(repo)).missing).toEqual([]);
+    // and a further install is a no-op again
+    expect((await installHooks(repo, opts)).status).toBe("already");
   });
 
   it("is idempotent: second install returns already and leaves bytes unchanged", async () => {
@@ -124,6 +148,14 @@ describe("uninstallHooks", () => {
 });
 
 describe("hooksStatus", () => {
+  it("lists no missing groups on a complete install", async () => {
+    const repo = tmp("vd-status-full-");
+    await installHooks(repo, makeOpts(tmp("vd-sess-")));
+    const s = await hooksStatus(repo);
+    expect(s.installed).toBe(true);
+    expect(s.missing).toEqual([]);
+  });
+
   it("reflects installed state", async () => {
     const repo = tmp("vd-stat-");
     const opts = makeOpts(tmp("vd-sess-"));
