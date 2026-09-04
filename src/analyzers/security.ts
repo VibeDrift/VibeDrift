@@ -238,7 +238,13 @@ const SECURITY_PATTERNS: SecurityPattern[] = [
   {
     id: "python-yaml-unsafe",
     name: "Unsafe YAML load",
-    pattern: /yaml\.load\s*\([^)]*(?!\bLoader\b)/g,
+    // No in-pattern negative lookahead for `Loader=` here: `[^)]*(?!\bLoader\b)`
+    // is a no-op — `[^)]*` is greedy but backtracks freely, so it can always
+    // shrink by one character to satisfy the lookahead regardless of whether
+    // "Loader" appears later in the call. The `negativeFilter` below (tested
+    // against the full matched line, not constrained by backtracking) is
+    // what actually excludes `yaml.load(f, Loader=SafeLoader)` etc.
+    pattern: /yaml\.load\s*\(/g,
     severity: "error",
     confidence: 0.8,
     message: "yaml.load without SafeLoader can execute arbitrary code",
@@ -289,7 +295,11 @@ export const securityAnalyzer: Analyzer = {
   // absolute-floor subset; five noisy rules force severity "info" + a
   // "demoted" tag). Invalidates the on-disk findings cache so already-scanned
   // repos pick up the new classification on their next run.
-  version: 3,
+  // Bumped 4: the python-yaml-unsafe pattern text changed (a no-op lookahead
+  // was removed). Finding set is expected to be identical since negativeFilter
+  // already did the filtering, but the matched snippet text can differ — so
+  // warm caches must not serve a mix of old and new results.
+  version: 4,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];

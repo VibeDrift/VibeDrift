@@ -174,7 +174,7 @@ export const intentClarityAnalyzer: Analyzer = {
   category: "intentClarity",
   requiresAST: false,
   applicableLanguages: "all",
-  version: 2,
+  version: 3,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -301,6 +301,7 @@ function detectLongFunctions(ctx: AnalysisContext): Finding[] {
   const findings: Finding[] = [];
   const functionStarts = [
     /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/gm,
+    /^(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>\s*\{/gm,
     /^def\s+(\w+)/gm,
     /^func\s+(?:\([^)]*\)\s+)?(\w+)/gm,
     /^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/gm,

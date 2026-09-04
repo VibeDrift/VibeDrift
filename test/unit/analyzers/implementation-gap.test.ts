@@ -187,4 +187,60 @@ export function d() { return "not implemented"; }
     // won't trigger. Documents current behavior.
     expect(await implementationGapAnalyzer.analyze(mkCtx([file]))).toHaveLength(0);
   });
+
+  it("does NOT flag a vitest mock-factory file (test-path exclusion)", async () => {
+    // FIELD_ASSIGN_PATTERNS used to match ANY object key with a
+    // placeholder-word value, including a mock factory's own deliberate
+    // `role: "mock"` — the whole point of a mock is to carry an obviously
+    // fake value. That's not evidence of an unfinished production function.
+    const file = mkFile(
+      "src/__mocks__/user.ts",
+      "typescript",
+      `export function createMockUser() {
+  return { id: "1", role: "mock", name: "Test User" };
+}`,
+    );
+    expect(await implementationGapAnalyzer.analyze(mkCtx([file]))).toHaveLength(0);
+  });
+
+  it("does NOT flag a plain todo-app domain object (not in call-argument context)", async () => {
+    // A bare object literal assigned to a variable — `status: "todo"` here
+    // is a todo-app's own domain state, not a stub constructor kwarg. It
+    // reads identically to `verdict: "unvalidated"` without scoping the
+    // check to call-argument context.
+    const file = mkFile(
+      "src/tasks.ts",
+      "typescript",
+      `export function newTask(title: string) {
+  const task = {
+    id: crypto.randomUUID(),
+    title,
+    status: "todo",
+  };
+  return task;
+}`,
+    );
+    expect(await implementationGapAnalyzer.analyze(mkCtx([file]))).toHaveLength(0);
+  });
+
+  it("still flags a real constructor kwarg carrying a placeholder value (call-argument context preserved)", async () => {
+    // The dominance/scoping fix must not lose the original signal: a
+    // constructor call (not a mock, not in a test path) passing a
+    // placeholder-word kwarg is still exactly the stub pattern this
+    // detector exists to catch.
+    const file = mkFile(
+      "src/services/validation.ts",
+      "typescript",
+      `export function buildResult() {
+  const client = FakeClient({
+    status: "unvalidated",
+  });
+  return client;
+}`,
+    );
+    const findings = await implementationGapAnalyzer.analyze(mkCtx([file]));
+    expect(findings.length).toBeGreaterThan(0);
+    const msg = findings.map((f) => f.message + f.locations.map((l) => l.snippet).join(" ")).join(" ");
+    expect(msg).toMatch(/unvalidated/);
+  });
 });

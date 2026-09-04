@@ -12,12 +12,64 @@ import { getLineNumber } from "../utils/text.js";
 
 const EMPTY_CATCH_PATTERN = /catch\s*\([^)]*\)\s*\{\s*\}/g;
 
+/**
+ * Locate the function body's opening `{` by scanning forward from just
+ * after the parameter list's closing `)`, tracking bracket depth across
+ * `<>`, `()`, `[]`, and `{}`.
+ *
+ * The old approach folded the optional return-type annotation into the
+ * same regex as the body brace (`(?::\s*[^{]*)?\s*\{`), which stops at the
+ * FIRST `{` it sees — but an inline object return type like
+ * `Promise<{ ok: boolean }>` has a `{` of its own, so the regex matched
+ * that type's brace instead of the real body brace. The function's actual
+ * body then got mislocated (or missed): brace-depth counting started from
+ * the type literal, not the real body, and closed early at the type's `}`.
+ *
+ * Bracket-depth tracking sidesteps this: whatever nesting the return type
+ * introduces (`<...>`, `(...)`, `[...]`, `{...}`) is balanced away, and the
+ * first `{` seen at depth 0 is guaranteed to be the body.
+ */
+function findFunctionBodyBrace(content: string, fromIndex: number): number {
+  let depth = 0;
+  // Bound the scan — a real return-type annotation is short; if we haven't
+  // found the body within a generous window, this isn't a function with a
+  // body here (e.g. an ambient/overload declaration with no `{` at all).
+  const limit = Math.min(content.length, fromIndex + 500);
+  for (let i = fromIndex; i < limit; i++) {
+    const c = content[i];
+    if (c === "{" && depth === 0) return i;
+    // A `;` at depth 0 ends a body-less declaration — a TS overload
+    // signature (`async load(id: string): Promise<User>;`) or an abstract
+    // method. Without this stop the scan would keep walking and return the
+    // NEXT function's body brace, so that body was analyzed twice (once for
+    // the overload, once for the real implementation) and its await counted
+    // double. `;` inside `<...>`/`(...)`/`[...]` (e.g. an inline object type
+    // `Promise<{ a: string; b: number }>`) is a separator, not a terminator,
+    // and is skipped by the depth check.
+    if (c === ";" && depth === 0) return -1;
+    if (c === "<" || c === "(" || c === "[" || c === "{") {
+      depth++;
+    } else if (c === ")" || c === "]" || c === "}") {
+      depth = Math.max(0, depth - 1);
+    } else if (c === ">" && content[i - 1] !== "=") {
+      // Skip the `>` of an arrow (`=>`) inside a function-type return
+      // annotation (e.g. `Promise<{ cb: () => void }>`) — it isn't a
+      // generic close and decrementing on it would unbalance the real
+      // `<...>` depth before its true closing `>`.
+      depth = Math.max(0, depth - 1);
+    }
+  }
+  return -1;
+}
+
 export const errorHandlingAnalyzer: Analyzer = {
   id: "error-handling",
   name: "Error Handling",
   category: "architecturalConsistency",
   requiresAST: false,
   applicableLanguages: ["javascript", "typescript"],
+  // Bumped when detection logic changes — invalidates the S1 findings cache.
+  version: 2,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -53,8 +105,12 @@ export const errorHandlingAnalyzer: Analyzer = {
       });
     }
 
+    // Matches only through the parameter list's closing `)` — the optional
+    // return-type annotation and the body's opening `{` are then located by
+    // findFunctionBodyBrace, which tracks bracket depth instead of stopping
+    // at the first `{` (which may belong to an inline object return type).
     const ASYNC_FN_PATTERN =
-      /async\s+(?:function\s+\w+|\(\w*\)|\w+)\s*\([^)]*\)\s*(?::\s*[^{]*)?\s*\{/g;
+      /async\s+(?:function\s+\w+|\(\w*\)|\w+)\s*\([^)]*\)/g;
     const ERROR_HANDLING_PATTERNS = [
       /\btry\s*\{/,
       /\.catch\s*\(/,
@@ -76,7 +132,7 @@ export const errorHandlingAnalyzer: Analyzer = {
       while ((fnMatch = asyncRegex.exec(file.content)) !== null) {
         // Extract the function body via brace-depth counting so we can
         // check if error handling exists within this specific function scope
-        const openBrace = file.content.indexOf("{", fnMatch.index + fnMatch[0].length - 1);
+        const openBrace = findFunctionBodyBrace(file.content, fnMatch.index + fnMatch[0].length);
         if (openBrace === -1) continue;
         let depth = 1;
         let pos = openBrace + 1;
