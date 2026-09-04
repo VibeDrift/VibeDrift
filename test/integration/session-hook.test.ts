@@ -31,6 +31,18 @@ function ledgerLines(home: string, sessionId: string): string[] {
   return readFileSync(join(sessions, hashDir, `${sessionId}.jsonl`), "utf8").trim().split("\n");
 }
 
+/** The per-session outcomes sidecar: the open-finding set the NEXT hook run
+ *  reads. The ledger records what happened; this is the state that decides
+ *  whether a finding is still open. */
+function outcomesSidecar(home: string, sessionId: string): { open: unknown[]; resolved: string[] } {
+  const sessions = join(home, ".vibedrift", "sessions");
+  const hashDir = readdirSync(sessions)[0];
+  const path = join(sessions, hashDir, `${sessionId}.outcomes.json`);
+  if (!existsSync(path)) return { open: [], resolved: [] };
+  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  return { open: parsed.open ?? [], resolved: parsed.resolved ?? [] };
+}
+
 describe("hook entry (integration)", () => {
   it("appends a user_prompt event with masked secrets and exits 0", () => {
     const home = tmp("vd-home-");
@@ -351,6 +363,19 @@ describe("hook entry (integration)", () => {
     const edits = events.filter((e) => e.type === "edit");
     expect(edits).toHaveLength(2);
     for (const e of edits) expect(e.detail.checked).toBe(true);
+
+    // ...and the resolve must actually PERSIST. writeOutcomeState merges with
+    // the on-disk copy instead of overwriting it, so a resolve — which is only
+    // an absence from `open` — needs a tombstone or the merge copies the
+    // finding straight back from disk on the very write meant to remove it.
+    // The ledger `resolve` event above is emitted either way, so it cannot
+    // catch that; the sidecar is what the next hook run actually reads.
+    // Binds the tombstone wiring in hook-entry.ts, not just mergeOutcomeState.
+    const sidecar = outcomesSidecar(home, "res-1");
+    const resolvedId = events.find((e) => e.type === "resolve").findingId;
+    expect(resolvedId).toBeTruthy();
+    expect(sidecar.open.map((f: any) => f.findingId)).not.toContain(resolvedId);
+    expect(sidecar.resolved).toContain(resolvedId);
   });
 
   it("does not resolve a finding when the post-edit file read fails (#84)", () => {

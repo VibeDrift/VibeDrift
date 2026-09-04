@@ -7,8 +7,9 @@
  *   1.0 → likely_justified deviation (intentional choice, e.g. raw SQL
  *         in a reporting handler with complex aggregation)
  *
- * Score is base 0.5 + weighted sum of signals. Weights are overridable per
- * project via `.vibedrift.json` (see src/core/config.ts).
+ * Score is base 0.5 + weighted sum of signals. The weights are fixed
+ * constants (DEFAULT_DEVIATION_WEIGHTS in src/core/config.ts); there is no
+ * per-project override.
  *
  * Signals (with default weights):
  *   +0.15  complex SQL indicators (GROUP BY, HAVING, CTE, 3+ JOIN, etc.)

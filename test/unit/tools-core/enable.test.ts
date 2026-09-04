@@ -69,4 +69,18 @@ describe("enable tool core (O18)", () => {
     const { projectHash } = repoIdentity(repo);
     expect(projectStatus(loadActivation(home), projectHash)).toBe("active");
   });
+
+  it("refuses a rootDir with no project marker, before touching anything", async () => {
+    // enable installs agent hook config into rootDir, and rootDir is fully
+    // caller-controlled over MCP. The Allow/Deny prompt plus `confirm` are the
+    // primary consent gate; assertPlausibleProjectRoot is the defense-in-depth
+    // that stops a marker-less target outright. The guard has its own unit
+    // tests, but nothing bound it to THIS call site: deleting the call left all
+    // 17 tests here green.
+    const bare = realpathSync(mkdtempSync(join(tmpdir(), "vd-bare-")));
+    process.env.VIBEDRIFT_HOME = realpathSync(mkdtempSync(join(tmpdir(), "vd-home-")));
+    await expect(run({ rootDir: bare, confirm: "yes please" })).rejects.toThrow(/doesn't look like a project directory/);
+    // and nothing was recorded for it
+    expect(existsSync(join(bare, ".claude"))).toBe(false);
+  });
 });

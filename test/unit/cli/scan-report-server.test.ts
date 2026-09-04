@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ScanResult, ScanOptions } from "../../../src/core/types.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Each test dynamically imports scan.js (a heavy module graph) inside its
 // body; under a fully parallel suite run that import alone can exceed the 5s
@@ -110,14 +113,23 @@ describe("serveHtmlReportOnLocalhost — binds loopback only", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
-// Regression: --fail-on-score used to call process.exit(1) unconditionally,
-// tearing the just-started local report server down before the browser
-// could load it. On the local-server path, the server's own lifecycle must
-// own process termination; logAndRender should only set process.exitCode.
+// --fail-on-score used to call process.exit(1) unconditionally, tearing the
+// just-started local report server down before the browser could load it.
+// On the local-server path the server's lifecycle owns process termination,
+// so logAndRender only sets process.exitCode — but ONLY for an interactive
+// terminal session. A CI job or a piped invocation is waiting on the exit
+// code, not on a browser, and must still exit immediately: measured
+// 2026-09-03, gating on the path alone made `vibedrift . --fail-on-score N`
+// block for the server's full 10-minute lifetime instead of failing in ~1s.
 // ────────────────────────────────────────────────────────────────────
 describe("logAndRender — --fail-on-score on the local report server path", () => {
+  let prevTTY: boolean | undefined;
+  let prevCI: string | undefined;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    prevTTY = process.stdout.isTTY;
+    prevCI = process.env.CI;
   });
 
   afterEach(() => {
@@ -125,9 +137,20 @@ describe("logAndRender — --fail-on-score on the local report server path", () 
     vi.restoreAllMocks();
     process.removeAllListeners("SIGINT");
     process.exitCode = undefined;
+    (process.stdout as unknown as { isTTY?: boolean }).isTTY = prevTTY;
+    if (prevCI === undefined) delete process.env.CI;
+    else process.env.CI = prevCI;
   });
 
-  it("does not call process.exit and instead sets process.exitCode when the score fails the threshold", async () => {
+  /** Pretend to be (or not be) a human at a terminal. */
+  function setInteractive(interactive: boolean) {
+    (process.stdout as unknown as { isTTY?: boolean }).isTTY = interactive;
+    if (interactive) delete process.env.CI;
+    else process.env.CI = "true";
+  }
+
+  it("interactive terminal: does not call process.exit, sets process.exitCode so the served report survives", async () => {
+    setInteractive(true);
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -153,6 +176,27 @@ describe("logAndRender — --fail-on-score on the local report server path", () 
     expect(process.exitCode).toBe(1);
   });
 
+  it("non-interactive (CI or piped): still exits immediately, so a scripted gate does not block on the server", async () => {
+    setInteractive(false);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+
+    const { logAndRender } = await import("../../../src/cli/commands/scan.js");
+
+    await logAndRender(
+      makeResult(10),
+      { format: "html", failOnScore: 90 } as ScanOptions,
+      null, // unauthenticated → local-server path
+      undefined,
+      "/tmp/demo",
+      undefined,
+      false,
+    );
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
   it("still calls process.exit(1) immediately for a non-server format (e.g. json)", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -166,5 +210,73 @@ describe("logAndRender — --fail-on-score on the local report server path", () 
     await logAndRender(result, options, null, undefined, "/tmp/demo", undefined, false);
 
     expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
+
+// ────────────────────────────────────────────────────────────────────
+// Privacy: the report-open beacon is an inline <script> in the generated
+// HTML, and its ONLY gate is whether `scanId` was passed into
+// renderHtmlReport. A user who ran `vibedrift telemetry disable` must not
+// receive a report that phones home when opened. The exported
+// sendReportOpenBeacon function had a telemetry check but zero production
+// callers; this is the path that actually ships.
+// ────────────────────────────────────────────────────────────────────
+describe("renderToFormat — the inline report-open beacon respects the telemetry opt-out", () => {
+  let prevDisabled: string | undefined;
+
+  beforeEach(() => {
+    prevDisabled = process.env.VIBEDRIFT_TELEMETRY_DISABLED;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (prevDisabled === undefined) delete process.env.VIBEDRIFT_TELEMETRY_DISABLED;
+    else process.env.VIBEDRIFT_TELEMETRY_DISABLED = prevDisabled;
+  });
+
+  /** Drive the authenticated html path with --output, which is what makes
+   *  renderToFormat write a local report (and therefore build beaconOpts). */
+  async function renderWithTelemetry(disabled: boolean) {
+    if (disabled) process.env.VIBEDRIFT_TELEMETRY_DISABLED = "1";
+    else delete process.env.VIBEDRIFT_TELEMETRY_DISABLED;
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const dir = mkdtempSync(join(tmpdir(), "vd-beacon-gate-"));
+
+    const { renderHtmlReport } = await import("../../../src/output/html.js");
+    (renderHtmlReport as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+    const { logAndRender } = await import("../../../src/cli/commands/scan.js");
+    const result = makeResult(80) as ScanResult & { __scanId?: string; __apiUrl?: string };
+    result.__scanId = "scan-abc123";
+    result.__apiUrl = "https://api.example.com";
+
+    await logAndRender(
+      result,
+      { format: "html", output: join(dir, "report.html") } as ScanOptions,
+      "tok", // authenticated -> renderToFormat, not the local report server
+      "https://api.example.com",
+      "/tmp/demo",
+      undefined,
+      true,
+    );
+
+    rmSync(dir, { recursive: true, force: true });
+    const calls = (renderHtmlReport as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    return calls.map((c) => c[3] as { scanId?: string } | undefined);
+  }
+
+  it("omits scanId (and therefore the whole beacon script) when telemetry is disabled", async () => {
+    const optsSeen = await renderWithTelemetry(true);
+    expect(optsSeen.length).toBeGreaterThan(0);
+    for (const o of optsSeen) expect(o?.scanId).toBeUndefined();
+  });
+
+  it("still passes scanId when telemetry is enabled (non-vacuity)", async () => {
+    const optsSeen = await renderWithTelemetry(false);
+    expect(optsSeen.length).toBeGreaterThan(0);
+    expect(optsSeen.some((o) => o?.scanId === "scan-abc123")).toBe(true);
   });
 });

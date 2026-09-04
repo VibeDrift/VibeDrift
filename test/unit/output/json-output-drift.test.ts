@@ -102,3 +102,21 @@ describe("renderJsonOutput includes driftFindings but not the raw CodeDnaResult"
     expect(parsed.driftFindings).toEqual([]);
   });
 });
+
+describe("renderJsonOutput surfaces a degraded run", () => {
+  it("includes degradedAnalyzers so a CI consumer can tell the score is incomplete", () => {
+    // A Layer 1 analyzer that throws is skipped and the scan continues, so the
+    // composite is computed WITHOUT its findings and can read cleaner than the
+    // code is. The stderr warning is not machine-readable; this field is the
+    // only signal a `--format json` consumer gets. Binds the JSON half of the
+    // crash-isolation fix.
+    const result = minimalScanResult({ degradedAnalyzers: ["complexity"] });
+    const parsed = JSON.parse(renderJsonOutput(result));
+    expect(parsed.degradedAnalyzers).toEqual(["complexity"]);
+  });
+
+  it("omits the key entirely on a clean run (absent, not an empty array)", () => {
+    const parsed = JSON.parse(renderJsonOutput(minimalScanResult()));
+    expect("degradedAnalyzers" in parsed).toBe(false);
+  });
+});
