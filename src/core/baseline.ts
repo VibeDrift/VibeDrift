@@ -31,8 +31,14 @@ import type { IntentHint } from "../intent/types.js";
 import { directoryOf } from "../drift/utils.js";
 
 const CACHE_DIR = join(vibedriftHome(), "baseline-cache");
-/** Bump when vote logic / detector set / signature format changes (invalidates all caches). */
-export const BASELINE_VERSION = 6;
+/**
+ * Bump when vote logic / detector set / signature format changes (invalidates all caches).
+ *
+ * 7: the codedna tokenizer's ordering change alters every persisted MinHash
+ *    signature stream; the drift and security vote logic changed; DriftFinding
+ *    gained `allDominantFiles`, so a v6 vote shape is missing fields.
+ */
+export const BASELINE_VERSION = 7;
 
 export interface CategoryVote {
   driftCategory: DriftCategory;

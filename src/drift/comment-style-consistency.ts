@@ -43,7 +43,11 @@ function dominantStyle(file: DriftFile): DocStyle {
       continue;
     }
     if (trimmed.startsWith("//")) lineComments++;
-    else if (trimmed.startsWith("#") && !trimmed.startsWith("#!")) hashComments++;
+    // A hash comment needs whitespace after the `#`. This detector only ever
+    // sees JS/TS (see the language filter in `detect`), where a bare `#name` is
+    // a private class field, not a comment — `#count = 0;` was being tallied as
+    // commentary and could make a class-heavy file "hash-commented".
+    else if (/^#(?:\s|$)/.test(trimmed)) hashComments++;
   }
 
   // Dominant style = whichever category has the most "votes" over the file.
@@ -99,7 +103,14 @@ export const commentStyleConsistency: DriftDetector = {
     const [dominant, dominantFiles] = stylesWithContent[0];
     const minority = stylesWithContent.slice(1).flatMap(([_, files]) => files);
 
-    const consistencyScore = Math.round((dominantFiles.length / analyzed) * 100);
+    // Denominator is the PEER GROUP — the files that actually made a comment-
+    // style choice — not every JS/TS file scanned. Dividing by `analyzed`
+    // counted comment-less files as deviations from the dominant style: a repo
+    // with 90 uncommented files, 6 JSDoc and 4 `//` scored 6/100, which the
+    // scoring engine reads as 94% deviation on an axis where only 10 files ever
+    // expressed an opinion (the honest number is 6/10 = 60).
+    const relevantFiles = dominantFiles.length + minority.length;
+    const consistencyScore = Math.round((dominantFiles.length / relevantFiles) * 100);
 
     return [{
       detector: "comment-style-consistency",
@@ -109,7 +120,7 @@ export const commentStyleConsistency: DriftDetector = {
       finding: `${dominantFiles.length} JS/TS files use ${STYLE_NAMES[dominant]} while ${minority.length} use other styles`,
       dominantPattern: STYLE_NAMES[dominant],
       dominantCount: dominantFiles.length,
-      totalRelevantFiles: analyzed,
+      totalRelevantFiles: relevantFiles,
       consistencyScore,
       deviatingFiles: minority.slice(0, 15).map((f) => ({
         path: f,

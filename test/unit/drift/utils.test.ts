@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   buildDirectoryScopedVote,
+  detectFilePattern,
+  extractEvidence,
+  isAnalyzableSource,
   isInLoopCheckable,
   directoryOf,
   buildPatternDistribution,
@@ -320,5 +323,89 @@ describe("isInLoopCheckable", () => {
     // be caught by the `scripts` alternative.
     expect(isInLoopCheckable("src/transcripts/render.ts")).toBe(true);
     expect(isInLoopCheckable("src/benchmarking/report.ts")).toBe(true);
+  });
+});
+
+describe("detectFilePattern", () => {
+  function ev(n: number) {
+    return Array.from({ length: n }, (_, i) => ({ line: i + 1, code: `line ${i + 1}` }));
+  }
+
+  it("ranks by evidence count, not by which pattern the detector pushed first", () => {
+    // The exact shape every detector produces: ONE profile entry per pattern
+    // family it saw, each carrying that family's evidence. Counting entries
+    // made both families tie at 1 and handed the file to whichever was pushed
+    // first — logging-consistency iterates FAMILY_PATTERNS with `console`
+    // ahead of `structured`, so a file with a single stray console.log and
+    // fifty winston calls classified as `console` and then voted as a
+    // console-logging file.
+    const oneConsoleFiftyWinston = [
+      { pattern: "console" as const, evidence: ev(1) },
+      { pattern: "structured" as const, evidence: ev(3) },
+    ];
+    expect(detectFilePattern(oneConsoleFiftyWinston)).toBe("structured");
+  });
+
+  it("falls back to occurrence count, then to insertion order, when evidence ties", () => {
+    // Detectors that carry no evidence (test-structure, comment-style) must
+    // keep their previous behavior: first pushed wins.
+    expect(
+      detectFilePattern([
+        { pattern: "a" as const, evidence: [] },
+        { pattern: "b" as const, evidence: [] },
+      ]),
+    ).toBe("a");
+    // Two entries for one pattern outweigh one entry for another at equal evidence.
+    expect(
+      detectFilePattern([
+        { pattern: "a" as const, evidence: [] },
+        { pattern: "b" as const, evidence: [] },
+        { pattern: "b" as const, evidence: [] },
+      ]),
+    ).toBe("b");
+  });
+
+  it("returns null for an empty profile", () => {
+    expect(detectFilePattern([])).toBeNull();
+  });
+});
+
+describe("extractEvidence", () => {
+  it("advances through distinct matches even when the caller passes a non-global regex", () => {
+    // Without the g flag `regex.exec` restarts at index 0 every iteration, so
+    // the loop reported the SAME first match three times and every consumer
+    // saw evidence.length === maxResults regardless of the real occurrence
+    // count — which is exactly the signal detectFilePattern now ranks on.
+    const content = "console.log(1)\nfiller\nconsole.log(2)\nconsole.log(3)\n";
+    const ev = extractEvidence(content, /console\.log\(/);
+    expect(ev.map((e) => e.line)).toEqual([1, 3, 4]);
+  });
+
+  it("is unchanged for a regex that already carries the g flag", () => {
+    const content = "console.log(1)\nfiller\nconsole.log(2)\n";
+    expect(extractEvidence(content, /console\.log\(/g).map((e) => e.line)).toEqual([1, 3]);
+  });
+});
+
+describe("isAnalyzableSource", () => {
+  it("keeps ordinary source whose NAME merely contains a keyword substring", () => {
+    // Every one of these returned false under the unanchored
+    // /(?:test|spec|mock|fixture)/ match, silently shrinking the denominator of
+    // every detector that gates on this helper.
+    expect(isAnalyzableSource("src/latest-run.ts")).toBe(true);
+    expect(isAnalyzableSource("src/protest.ts")).toBe(true);
+    expect(isAnalyzableSource("src/mockup.ts")).toBe(true);
+    expect(isAnalyzableSource("src/specimen.ts")).toBe(true);
+    expect(isAnalyzableSource("src/fixtures-loader-helper.ts")).toBe(false); // real boundary: `fixtures-`
+  });
+
+  it("still rejects real test, spec, mock and fixture paths", () => {
+    expect(isAnalyzableSource("src/lib/foo.test.ts")).toBe(false);
+    expect(isAnalyzableSource("src/lib/foo.spec.ts")).toBe(false);
+    expect(isAnalyzableSource("test/unit/drift/utils.test.ts")).toBe(false);
+    expect(isAnalyzableSource("src/__tests__/foo.ts")).toBe(false);
+    expect(isAnalyzableSource("src/__mocks__/db.ts")).toBe(false);
+    expect(isAnalyzableSource("test/fixtures/sample.ts")).toBe(false);
+    expect(isAnalyzableSource("src/mocks/server.ts")).toBe(false);
   });
 });

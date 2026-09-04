@@ -156,3 +156,38 @@ describe("phantom-scaffolding detector", () => {
     }
   });
 });
+
+describe("phantom-scaffolding: entry points", () => {
+  it("does not call a package entry point's CRUD exports phantom", () => {
+    // "Zero incoming imports" IS the phantom signal, and an entry point has
+    // zero by definition — the package manifest or the runtime reaches it, not
+    // another module in the repo. Every CRUD-named export in src/cli/index.ts,
+    // src/index.ts, src/server.ts and bin/ was reported dead on every scan.
+    const files = [
+      file("src/index.ts", `export function createApp() {}\nexport function getConfig() {}\n`),
+      file("src/cli/index.ts", `export function runScan() {}\nexport function loadOptions() {}\n`),
+      file("src/server.ts", `export function createServer() {}\nexport function getPort() {}\n`),
+      file("bin/tool.ts", `export function updateManifest() {}\n`),
+      // A real consumer so the import graph has more than one node.
+      file("src/app.ts", `import { helper } from "./lib.js";\nexport const app = helper();\n`),
+      file("src/lib.ts", `export function helper() { return 1; }\n`),
+    ];
+    expect(phantomScaffolding.detect(mkCtx(files))).toHaveLength(0);
+  });
+
+  it("still flags a genuinely unwired handler module next to entry points", () => {
+    const files = [
+      file("src/index.ts", `export function createApp() {}\n`),
+      file(
+        "src/handlers/ghost.ts",
+        `export function createOrder() {}\nexport function deleteOrder() {}\n`,
+      ),
+      file("src/lib.ts", `export function helper() { return 1; }\n`),
+    ];
+    const findings = phantomScaffolding.detect(mkCtx(files));
+    expect(findings.length).toBeGreaterThan(0);
+    const paths = findings.flatMap((f) => f.deviatingFiles.map((d) => d.path));
+    expect(paths).toContain("src/handlers/ghost.ts");
+    expect(paths).not.toContain("src/index.ts");
+  });
+});

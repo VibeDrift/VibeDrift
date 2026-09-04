@@ -333,3 +333,55 @@ describe("classifyReturnShapeLabel — dominant shape, defensive rethrow discoun
     ).toBe("error-object returns");
   });
 });
+
+describe("return-shape-consistency: intent-hint vocabulary guard", () => {
+  function withHint(files: Partial<DriftFile>[], pattern: string): DriftContext {
+    return {
+      ...makeCtx(files),
+      intentHints: [{
+        category: "return_shape_consistency",
+        pattern,
+        label: "some declared shape",
+        source: "CLAUDE.md",
+        line: 5,
+        text: "- Declared shape",
+        confidence: 0.95,
+      }],
+    };
+  }
+
+  // One file per shape, so no real shape's weight exceeds 1.
+  // `seedDominanceVote` injects a declared shape the distribution does not hold
+  // with weight 1 + confidence (~1.95), which therefore wins the vote outright
+  // with a count of ZERO.
+  const files = makeHandlers([
+    { name: "a", body: `if (!id) throw new NotFoundError("a");
+return 1;` },
+    { name: "b", body: `if (!id) return null;
+return 2;` },
+    { name: "c", body: `return [value, err];` },
+  ]);
+
+  it("an out-of-vocabulary declaration does not seed, so no phantom dominant is reported", () => {
+    // `throw` (singular) and `either` are what a team writes; the detector's
+    // ReturnShape keys are `throws` and `result_type`. Seeded, an unknown
+    // pattern out-weighed every real shape and produced a finding whose
+    // dominantPattern was `SHAPE_NAMES[dominant]` — undefined — with
+    // dominantCount 0 and consistencyScore 0. Guarded, the hint is absent and
+    // the 1/3 plurality fails the 70% dominance gate.
+    for (const bogus of ["throw", "either", "panic"]) {
+      expect(returnShapeConsistency.detect(withHint(files, bogus))).toHaveLength(0);
+    }
+  });
+
+  it("an in-vocabulary declaration binds without ever reporting a zero-count dominant", () => {
+    for (const pattern of ["throws", "null_sentinel", "tuple"]) {
+      for (const f of returnShapeConsistency.detect(withHint(files, pattern))) {
+        expect(f.dominantCount).toBeGreaterThan(0);
+        expect(f.consistencyScore).toBeGreaterThan(0);
+        expect(f.dominantPattern).toBeTruthy();
+      }
+    }
+  });
+
+});

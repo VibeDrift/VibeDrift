@@ -123,3 +123,40 @@ describe("convention-oscillation detector", () => {
     }
   });
 });
+
+describe("convention-oscillation: dominantCount and totalRelevantFiles share a unit", () => {
+  it("never reports a symbol-count numerator over a file-count denominator", () => {
+    // The symbol axis votes over symbols, so both fields are symbol counts. A
+    // file-count denominator under the symbol-count numerator rendered
+    // "X of Y" ratios above 100% whenever symbols outnumbered files.
+    const files: DriftFile[] = [];
+    // 2 files x 6 camelCase functions.
+    for (let i = 0; i < 2; i++) {
+      files.push(file(
+        `src/service${i}.ts`,
+        Array.from({ length: 6 }, (_, j) => `function camelName${i}${j}() {}`).join("\n") + "\n",
+      ));
+    }
+    // 1 file with 4 snake_case functions — the deviating minority.
+    files.push(file(
+      "src/legacy_svc.ts",
+      Array.from({ length: 4 }, (_, j) => `function snake_name_${j}() {}`).join("\n") + "\n",
+    ));
+    // A second deviating file, since the detector needs ≥2 deviating files.
+    files.push(file(
+      "src/legacy_two.ts",
+      Array.from({ length: 3 }, (_, j) => `function other_snake_${j}() {}`).join("\n") + "\n",
+    ));
+
+    const symbolFindings = conventionOscillation
+      .detect(mkCtx(files))
+      .filter((f) => f.subCategory?.endsWith("_names"));
+    expect(symbolFindings.length).toBeGreaterThan(0);
+    for (const f of symbolFindings) {
+      // 19 symbols across 4 files: 12 camelCase dominant, 7 snake_case.
+      expect(f.totalRelevantFiles).toBe(19);
+      expect(f.dominantCount).toBe(12);
+      expect(f.dominantCount).toBeLessThanOrEqual(f.totalRelevantFiles);
+    }
+  });
+});

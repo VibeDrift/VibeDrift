@@ -182,6 +182,14 @@ function analyzeSymbolTypeConventions(
   if (deviatingFiles.length < 2) return null;
 
   const consistencyScore = Math.round((maxCount / totalSymbols) * 100);
+  // `dominantCount` and `totalRelevantFiles` are rendered as "X of Y" and
+  // divided into a percentage, so they must share a unit. This axis votes over
+  // SYMBOLS, so both are symbol counts. A file-count denominator here paired
+  // with the symbol-count numerator let the rendered ratio exceed 100%. The
+  // cost is that the scoring engine's group-sample confidence term
+  // (SAMPLE_FULL_CONFIDENCE = 8) reads this field as a peer count and any
+  // symbol axis clears it trivially — a known, pre-existing tradeoff that
+  // belongs in the scoring layer, not in a unit mismatch on the finding.
   return {
     detector: "naming_conventions",
     subCategory: `${type}_names`,
@@ -246,6 +254,7 @@ function analyzeFileNaming(ctx: DriftContext): DriftFinding[] {
     consistencyScore: v.consistencyScore,
     deviatingFiles: v.deviators.slice(0, 10),
     dominantFiles: v.dominantFiles,
+    allDominantFiles: v.allDominantFiles,
     recommendation: `Standardize file names in ${v.directory}/ to ${v.dominant}.`,
   }));
 }

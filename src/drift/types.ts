@@ -161,6 +161,16 @@ export interface DriftFinding {
    * backward compat; detectors that can produce it should.
    */
   dominantFiles?: string[];
+  /**
+   * The FULL dominant population, not the 3-file display sample above. Only
+   * pivot detection reads it: bucketing files by commit age needs the whole
+   * peer group, and the alphabetical `dominantFiles` sample is not a random
+   * draw — a stable 9-vs-3 directory read as a temporal pivot whenever the
+   * sampled exemplars happened to be the recent ones. Optional: a detector
+   * that cannot produce it makes pivot detection fall back to a coverage
+   * guard rather than treat a sample as the population.
+   */
+  allDominantFiles?: string[];
   /** Present when a temporal pivot was detected for this category. */
   pivot?: PivotDetection;
   /** Files aligned with the old dominant but not the new — migration targets. */
