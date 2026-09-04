@@ -49,7 +49,11 @@ describe("loadScanById — scanId path-traversal guard", () => {
     await mkdir(secretDir, { recursive: true });
     await writeFile(join(secretDir, "leak.json"), JSON.stringify({ leaked: true }));
 
-    const traversalId = "../../secret/leak";
+    // Four levels: the "scan-" prefix consumes the first "..", then two more
+    // climb out of <home>/scans/<projectHash>. Fewer levels land back inside
+    // the scans tree, where nothing is planted, so the assertion would pass
+    // with the guard REMOVED and prove nothing.
+    const traversalId = "../../../../secret/leak";
     const result = await loadScanById("/tmp/some-project", traversalId);
     expect(result).toBeNull();
   });

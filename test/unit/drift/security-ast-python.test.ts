@@ -1317,13 +1317,34 @@ describe("extractPythonFileMiddlewareAst", () => {
     expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual(NONE);
   });
 
+  // A bare "limit" segment is not rate limiting either: request-size, body,
+  // upload and connection limits cap how BIG or how MANY connections, not how
+  // OFTEN. Measured 2026-09-03 (PR #120 review): RequestSizeLimitMiddleware in
+  // vibe-drift-api's tests/ blessed three stub routes as rate limited, which
+  // produced a "Rate limiting missing on 1 of 4 routes" finding against a test
+  // fixture. This binds: add "limit" back to MIDDLEWARE_RATE_SEGMENTS and the
+  // four names below bless.
+  it("does NOT set rateLimit for size/body/upload/connection limit middleware", async () => {
+    for (const name of [
+      "RequestSizeLimitMiddleware",
+      "BodyLimitMiddleware",
+      "UploadLimitMiddleware",
+      "ConnectionLimitMiddleware",
+    ]) {
+      const f = await py("mw.py", `app.add_middleware(${name})\n`);
+      expect(extractPythonFileMiddlewareAst(f.tree!), name).toEqual(NONE);
+    }
+  });
+
   it("still sets the lanes for genuinely-named middleware (non-vacuity)", async () => {
     const rate = await py("mw.py", `app.add_middleware(RateLimitMiddleware)\n`);
     const throttle = await py("mw.py", `app.add_middleware(ThrottleMiddleware)\n`);
     const limiter = await py("mw.py", `app.add_middleware(LimiterMiddleware)\n`);
+    const snake = await py("mw.py", `app.add_middleware(rate_limit_middleware)\n`);
+    const slowapi = await py("mw.py", `app.add_middleware(SlowAPIMiddleware)\n`);
     const val = await py("mw.py", `app.add_middleware(ValidatorMiddleware)\n`);
     const pyd = await py("mw.py", `app.add_middleware(PydanticMiddleware)\n`);
-    for (const f of [rate, throttle, limiter]) {
+    for (const f of [rate, throttle, limiter, snake, slowapi]) {
       expect(extractPythonFileMiddlewareAst(f.tree!)).toEqual({
         hasAuth: false, hasValidation: false, hasRateLimit: true,
       });

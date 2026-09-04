@@ -173,7 +173,7 @@ When the pattern classifier finds a file deviating from the project's dominant a
 | `adjacent_test` | +0.15 | Tested deviations look intentional |
 | `adr_mention` | +0.25 | Referenced in an architecture decision record |
 
-Weights are overridable per project via `.vibedrift.json` under `deviation_heuristics.signal_weights`. Verdicts: `likely_justified` at 0.6 and above, `likely_accidental` at 0.3 and below, `uncertain` between. Only `likely_accidental` becomes a finding (`codedna-deviation`, severity `warning`, confidence `max(0.5, 1 - justificationScore)`); justified and uncertain deviations are recorded on the result but stay silent, because flagging an intentional, documented deviation trains users to ignore the tool.
+The weights are fixed constants (`DEFAULT_DEVIATION_WEIGHTS` in `src/core/config.ts`); there is no per-project override. A `.vibedrift.json` loader for them existed but was never called by any consumer, so it was removed rather than left as a documented setting that silently did nothing. Verdicts: `likely_justified` at 0.6 and above, `likely_accidental` at 0.3 and below, `uncertain` between. Only `likely_accidental` becomes a finding (`codedna-deviation`, severity `warning`, confidence `max(0.5, 1 - justificationScore)`); justified and uncertain deviations are recorded on the result but stay silent, because flagging an intentional, documented deviation trains users to ignore the tool.
 
 ## The non-shippable filter
 

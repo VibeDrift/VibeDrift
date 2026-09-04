@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileAtomic } from "@/session/atomic-write";
@@ -57,5 +57,29 @@ describe("writeFileAtomic", () => {
     ]);
     expect(JSON.parse(readFileSync(pathA, "utf8"))).toEqual({ who: "a" });
     expect(JSON.parse(readFileSync(pathB, "utf8"))).toEqual({ who: "b" });
+  });
+
+  it("replaces the destination by rename, never truncating it in place", async () => {
+    // This is what makes the write atomic, and it is the whole point of the
+    // helper: the hook arms a 2s self-timeout that calls process.exit(0)
+    // without waiting for pending I/O, so an in-place truncate-then-write can
+    // leave a torn file that every reader's parse-failure fallback silently
+    // treats as "no state". A rename onto the destination is a single
+    // filesystem operation, and its signature is a NEW inode. A plain
+    // writeFile to the same path keeps the inode, so this fails if the
+    // tmp+rename is ever replaced by a direct write.
+    const dir = mkdtempSync(join(tmpdir(), "vd-atomic-ino-"));
+    const target = join(dir, "state.json");
+    await writeFileAtomic(target, JSON.stringify({ n: 1 }));
+    const first = statSync(target).ino;
+
+    await writeFileAtomic(target, JSON.stringify({ n: 2 }));
+    const second = statSync(target).ino;
+
+    expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({ n: 2 });
+    expect(second).not.toBe(first);
+    // and no tmp sibling is left behind
+    expect(readdirSync(dir)).toEqual(["state.json"]);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

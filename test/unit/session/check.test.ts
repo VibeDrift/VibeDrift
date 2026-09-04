@@ -7,6 +7,7 @@ import {
   runEditChecks,
   rankAdvisoryCandidates,
   mergeCooldownState,
+  __test_writeCooldownState,
   INLINE_CHECK_MAX_ENTRIES,
   COOLDOWN_MS,
   STRONG_DUP_SIMILARITY,
@@ -243,6 +244,37 @@ describe("runEditChecks: concurrent hook subprocesses never tear the cooldown fi
     // usable state, not corrupted by the race.
     const again = await runEditChecks(opts({ sessionId, file: join(repo, "src", "concA.ts") }));
     expect(again.flags.length).toBeGreaterThanOrEqual(1); // detection itself is unaffected by the sidecar race
+  });
+
+  it("a later write MERGES with the cooldown state on disk instead of clobbering it", async () => {
+    // writeState is a read-merge-write, not a blind overwrite: a concurrent
+    // hook subprocess for the same session may have advanced nextFindingSeq or
+    // started a cooldown on a key this writer's own state never saw. That is
+    // only observable when the disk changes BETWEEN a caller's read and its
+    // write, which no public entry point can interleave — hence the test-only
+    // export. The concurrency test above cannot catch it: a blind overwrite
+    // also leaves a parseable, usable file. Binds the wiring in writeState,
+    // not just mergeCooldownState.
+    const sessionId = "s-merge-cooldown";
+    const statePath = join(sessionsDir, "feedfacefeedface", `${sessionId}.cooldown.json`);
+    mkdirSync(join(sessionsDir, "feedfacefeedface"), { recursive: true });
+
+    // What another writer already put on disk.
+    writeFileSync(
+      statePath,
+      JSON.stringify({ nextFindingSeq: 55, lastFyi: { "other-writer-key": 1_700_000_000_000 } }),
+    );
+
+    // A stale writer whose own state predates all of that.
+    await __test_writeCooldownState(
+      opts({ sessionId, file: join(repo, "src", "concA.ts") }),
+      { nextFindingSeq: 1, lastFyi: { "my-key": 1_600_000_000_000 } },
+    );
+
+    const merged = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(merged.lastFyi["other-writer-key"]).toBe(1_700_000_000_000); // not clobbered
+    expect(merged.lastFyi["my-key"]).toBe(1_600_000_000_000); // and not lost
+    expect(merged.nextFindingSeq).toBe(55); // max, never rewound
   });
 });
 
