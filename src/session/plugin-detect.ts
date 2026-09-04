@@ -8,6 +8,15 @@
  * With the plugin active, activation alone is enough; the plugin hooks
  * capture.
  *
+ * Being installed and enabled is NOT enough: the copy on disk must actually
+ * carry `hooks/hooks.json`. The plugin only gained the session hooks in this
+ * release, so a machine that installed it earlier has an enabled plugin with
+ * no hooks at all. Treating that as active made `enable` skip the repo-local
+ * install, which left the repo activated and listening to nothing — observed
+ * on a real machine carrying a 0.20.1 plugin cache, where four repos were
+ * enabled and captured no events. Each install records its `installPath`, so
+ * the hooks are checked where they would actually be read from.
+ *
  * Read from Claude Code's own registry: `~/.claude/plugins/installed_plugins.json`
  * (v2: `plugins["vibedrift@vibedrift"]` is a non-empty array of installs) and
  * `~/.claude/settings.json` (`enabledPlugins["vibedrift@vibedrift"]`, where an
@@ -15,7 +24,7 @@
  * "not active", so the repo-local install proceeds as before.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const VIBEDRIFT_PLUGIN_ID = "vibedrift@vibedrift";
@@ -42,5 +51,18 @@ export function vibedriftPluginActive(homeDir: string): boolean {
   if (enabled !== null && typeof enabled === "object") {
     if ((enabled as Record<string, unknown>)[VIBEDRIFT_PLUGIN_ID] === false) return false;
   }
-  return true;
+  // The installed copy must carry the hooks, or it captures nothing.
+  return installs.some(shipsHooks);
+}
+
+/** Does this recorded install actually carry `hooks/hooks.json` on disk? */
+function shipsHooks(install: unknown): boolean {
+  if (install === null || typeof install !== "object") return false;
+  const path = (install as Record<string, unknown>).installPath;
+  if (typeof path !== "string" || path.length === 0) return false;
+  try {
+    return existsSync(join(path, "hooks", "hooks.json"));
+  } catch {
+    return false;
+  }
 }
