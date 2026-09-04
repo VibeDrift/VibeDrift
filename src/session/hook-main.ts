@@ -60,6 +60,58 @@ async function maybeSpawnFlush(projectHash: string, sessionsDir: string): Promis
   }
 }
 
+/** Minimum spacing between background baseline rebuilds for one repo. */
+export const REBUILD_MIN_INTERVAL_MS = 10 * 60_000;
+
+/**
+ * Spawn a detached baseline rebuild at Stop when this session has written code
+ * the persisted baseline never saw (its overlay sidecar is non-empty) and the
+ * last rebuild for the repo is older than REBUILD_MIN_INTERVAL_MS. The rebuild
+ * is a full scan run out of process (src/session/baseline-rebuild.ts), so the
+ * hook returns at once; the next session's checks compare against a tree that
+ * includes this one's work. Fail-open: any error means no rebuild.
+ * `VIBEDRIFT_BASELINE_REBUILD_CMD` is a test seam (invoked with rootDir).
+ */
+async function maybeSpawnBaselineRebuild(
+  rootDir: string,
+  projectHash: string,
+  sessionsDir: string,
+  sid: string,
+): Promise<void> {
+  try {
+    const { readOverlay } = await import("./overlay.js");
+    const overlay = await readOverlay(sessionsDir, projectHash, sid);
+    if (overlay.files.size === 0) return;
+    const { safeSegment } = await import("./ledger.js");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const stampPath = join(sessionsDir, safeSegment(projectHash), "baseline-rebuild.json");
+    let lastMs = 0;
+    try {
+      const parsed = JSON.parse(await readFile(stampPath, "utf8")) as { lastMs?: unknown };
+      if (typeof parsed.lastMs === "number") lastMs = parsed.lastMs;
+    } catch {
+      // never rebuilt
+    }
+    const now = Date.now();
+    if (now - lastMs < REBUILD_MIN_INTERVAL_MS) return;
+    await mkdir(join(sessionsDir, safeSegment(projectHash)), { recursive: true, mode: 0o700 });
+    await writeFile(stampPath, JSON.stringify({ lastMs: now }), { mode: 0o600 });
+
+    const { spawn } = await import("node:child_process");
+    const override = process.env.VIBEDRIFT_BASELINE_REBUILD_CMD;
+    const [cmd, args] = override
+      ? [override, [rootDir]]
+      : [
+          process.execPath,
+          [resolve(dirname(fileURLToPath(import.meta.url)), "..", "session", "baseline-rebuild.js"), rootDir],
+        ];
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch {
+    // fail-open: no rebuild
+  }
+}
+
 /**
  * The whole hook, as a function of the raw stdin payload and the hook's argv.
  * `--source=plugin` marks a run the Claude Code plugin's hooks/hooks.json
@@ -512,6 +564,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     // stays offline — it only spawns a detached child (fail-open, opt-in gated).
     if (event.type === "session_end") {
       await maybeSpawnFlush(projectHash, sessionsDir);
+      await maybeSpawnBaselineRebuild(rootDir, projectHash, sessionsDir, event.sid);
     }
 
     // Capture the task intent from prompts; lock it on the first one.

@@ -22,6 +22,7 @@ import type { SessionEvent } from "./types.js";
 import { isInLoopCheckable } from "../drift/utils.js";
 import { verifyCounterpart } from "./counterpart.js";
 import { writeFileAtomic } from "./atomic-write.js";
+import { overlayEntriesExcept, overlayEntriesFor, readOverlay, updateOverlay, writeOverlay } from "./overlay.js";
 
 export const INLINE_CHECK_MAX_ENTRIES = 2000;
 export const COOLDOWN_MS = 5 * 60_000;
@@ -232,9 +233,26 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
   }
 
+  // The session overlay: functions this session has written, signed like the
+  // baseline's, so a duplicate of something written minutes ago is seen even
+  // though the persisted index predates it. Every other file's entries join
+  // the queried index; a file never matches its own. The baseline object
+  // handed back to the caller stays the persisted one, so the finding-scoped
+  // re-check keeps exactly its current semantics.
+  const overlay = await readOverlay(opts.sessionsDir, opts.projectHash, opts.sessionId);
+  // The queried index never exceeds the inline gate the size check above
+  // promises: the overlay fills only the headroom under INLINE_CHECK_MAX_ENTRIES,
+  // newest files first (measured ~0.35 ms per overlay entry on the hook path,
+  // so an unbounded merge near the gate would outrun the 2s watchdog).
+  const headroom = Math.max(0, INLINE_CHECK_MAX_ENTRIES - baseline.minhashIndex.length);
+  const all = overlayEntriesExcept(overlay, relPath);
+  const extra = all.length > headroom ? all.slice(all.length - headroom) : all;
+  const queried: RepoDriftBaseline =
+    extra.length > 0 ? { ...baseline, minhashIndex: [...baseline.minhashIndex, ...extra] } : baseline;
+
   let detected: ReturnType<typeof detectDrift>;
   try {
-    detected = detectDrift(baseline, relPath, opts.body);
+    detected = detectDrift(queried, relPath, opts.body);
   } catch {
     // the check errored, so it did NOT run — never report an errored edit as checked
     return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
@@ -337,5 +355,20 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   }
 
   if (flags.length > 0) await writeState(opts, state);
+
+  // Refresh this file's overlay entries from its CURRENT content on disk (an
+  // Edit's body is only the hunk); fall back to the body when the read fails.
+  let current = opts.body;
+  try {
+    current = await readFile(opts.file, "utf8");
+  } catch {
+    // keep the body
+  }
+  await writeOverlay(
+    opts.sessionsDir,
+    opts.projectHash,
+    opts.sessionId,
+    updateOverlay(overlay, relPath, overlayEntriesFor(relPath, current)),
+  );
   return { flags, fyi, baseline, anchors, checked: true };
 }
