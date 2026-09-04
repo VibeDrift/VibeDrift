@@ -8,8 +8,16 @@ baseline → exact, mechanical ground truth, no human labeling):
   mutated files, scans, and reports **precision / recall / F1 per detector**
   against that ground truth. This answers "is the detector actually accurate?",
   which the monotonicity harness below cannot.
-- **`npm run calibrate:monotonic`** → `run.ts` — the older **responsiveness**
-  gate: verifies the composite score drops monotonically as injected drift
+- **`npm run calibrate:monotonic`** → `run.ts` — two INDEPENDENT properties,
+  reported separately. **Monotonicity gates** (exits 1): more injected drift
+  must never raise the composite. **Responsiveness is report-only**: each 25%
+  more drift should drop the score by at least 3 points. They fail for
+  different reasons — one says the score lies, the other says the score is too
+  flat — and conflating them behind one exit code is how this command spent
+  months red with neither getting fixed. The responsiveness threshold predates
+  the v18 scoring formula and stays report-only until the scoring-algorithm
+  work sets it deliberately; do not adjust it to make a run pass. Verifies the
+  composite score drops monotonically as injected drift
   rises. A weaker check (any threshold passes it) — kept as a pre-publish
   smoke test.
 
@@ -83,8 +91,9 @@ Injection  Composite  Drift   Δ composite  Δ drift
      75%       55.0    48.6        -13.7   -16.5
      90%       42.2    35.8        -12.8   -12.8
 
-monotonicity: ✓  (composite + drift both strictly decrease)
-responsiveness: ✓  (each +25% drift yields ≥3pt score drop)
+monotonicity   (GATE):        ✓
+responsiveness (report-only): ! each 25% injection should drop score ≥3pt; saw 1.4 (25→50) and 6.3 (50→75)
+  monotonicity margin: 0.0pt (largest rise 0.5, tolerance 0.5)
 ```
 
 ## Python security fixture (the multilang calibration gate)

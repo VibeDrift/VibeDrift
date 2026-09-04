@@ -1,6 +1,6 @@
 # Scoring: From Findings to the Vibe Drift Score
 
-Every analyzer, drift detector, and Code DNA module ends in the same place: a flat list of `Finding` objects. The scoring engine (`src/scoring/engine.ts`) turns that list into the headline Vibe Drift Score, a parallel Hygiene Score, five category scores, per-file scores, and per-finding fix impacts. This chapter documents the real engine as shipped, `SCORING_VERSION = "v13"`, including the design history that explains why it is not a weighted sum.
+Every analyzer, drift detector, and Code DNA module ends in the same place: a flat list of `Finding` objects. The scoring engine (`src/scoring/engine.ts`) turns that list into the headline Vibe Drift Score, a parallel Hygiene Score, five category scores, per-file scores, and per-finding fix impacts. This chapter documents the real engine as shipped, `SCORING_VERSION = "v18"`, including the design history that explains why it is not a weighted sum.
 
 ## Two tracks, one engine
 
@@ -17,10 +17,12 @@ Findings within a category are first grouped by `analyzerId`. Each detector grou
 
 ```text
 damage_d = min(0.85, severity_d × confidence_d × importance_d × deviation_d × sampleConf_d)
-health_c = Π_d (1 − damage_d)
+health_c = min( Π_d (1 − damage_d), cleanCredit(LOC) )
 categoryScore_c = 20 × health_c
 composite = 100 × exp( Σ_c ln(max(0.02, health_c)) / |applicable categories| )
 ```
+
+The `cleanCredit(LOC)` ceiling and the composite's treatment of surface-specific categories are the v18 monotonicity guarantees; both are described in the category and composite sections below. The invariant they enforce is that the composite is non-increasing in the finding set: adding a finding can never raise the Vibe Drift Score, and closing one can never lower it.
 
 Grouping by detector, not by finding, is the first size-fairness decision: 30 findings from one detector damage a category exactly as much as that detector's worst deviation warrants, never 30 times as much. Raw finding count scales with codebase size; the number of distinct drifting patterns, and how badly each drifts, does not.
 
@@ -29,12 +31,14 @@ The five factors of `damage_d` (all in `detectorDamage`, `src/scoring/engine.ts`
 | Factor | Definition | Constants |
 |---|---|---|
 | `severity_d` | worst severity in the group, mapped through `SEVERITY_DAMAGE` | error 0.7, warning 0.4, info 0.12 |
-| `confidence_d` | mean confidence across the group's findings | default 1.0 |
+| `confidence_d` | max confidence across the group's findings | default 1.0 |
 | `importance_d` | max file-importance weight over the group's locations | see the weights table below |
 | `deviation_d` | how far the repo actually deviates on this axis (three shapes, below) | floor 0.05 |
 | `sampleConf_d` | dominance sample-size weight: `min(1, maxTotalRelevantFiles / 8)` | `SAMPLE_FULL_CONFIDENCE = 8` |
 
 and the cap `MAX_DETECTOR_DAMAGE = 0.85` guarantees that no single detector can remove more than 85% of a category, so one catastrophic axis cannot erase the information carried by the others.
+
+Confidence is a max, not a mean, and that choice is load-bearing: with a mean, adding a low-confidence finding to a group lowered the group's confidence and therefore its damage, so a new finding improved the score. Every other group aggregate (severity, importance, sample confidence) is already a max, and the damage model asks how bad the worst pattern in the group is, not how bad the average one is (`groupConfidence`, changed in v18).
 
 ### File-importance weights
 
@@ -62,10 +66,12 @@ The `sampleConf_d` factor exists for the same statistical reason in the other di
 
 ## Category scores and the empty-category problem
 
-A category with findings gets `20 × health`. A category with no findings is genuinely subtle, and `computeCategoryScore` treats two cases differently:
+A category with findings gets `20 × health`, where health is the noisy-OR survival product capped at the category's own empty-category clean credit (below). A category with no findings is genuinely subtle, and `computeCategoryScore` treats two cases differently:
 
 - **Surface-specific drift categories** (`securityPosture`, `intentClarity`): zero findings could mean "clean" or could mean "this repo has no routes to vote on." The engine cannot tell the difference, so on the drift track an empty one is marked not measured and excluded from the composite entirely, rather than credited a free 20/20 that would dilute the categories that were measured.
-- **All other empty categories** earn evidence-weighted clean credit: `frac = 0.8 + 0.2 × (1 − e^(−LOC/2500))` of the max score. "No drift found" in 50 lines of code is weak evidence; in 8000 lines it is strong. Without this, every category in a tiny repo returned the max and the composite floated to ~100 purely because the repo was small (measured before the fix: repos under 20 functions had a median score of 100, repos over 500 functions a median of 82). The prior 0.8 is the elite-corpus mean health, so a thin-evidence clean repo lands near the population mean rather than getting either a free 100 or a punitive markdown.
+- **All other empty categories** earn evidence-weighted clean credit: `frac = 0.8 + 0.2 × (1 − e^(−LOC/2500))` of the max score (`emptyCategoryFraction`, with `NO_FINDING_PRIOR = 0.8` and `EVIDENCE_SCALE_LINES = 2500`). "No drift found" in 50 lines of code is weak evidence; in 8000 lines it is strong. Without this, every category in a tiny repo returned the max and the composite floated to ~100 purely because the repo was small (measured before the fix: repos under 20 functions had a median score of 100, repos over 500 functions a median of 82). The prior 0.8 is the elite-corpus mean health, so a thin-evidence clean repo lands near the population mean rather than getting either a free 100 or a punitive markdown.
+
+The same `emptyCategoryFraction` is also the **ceiling for a category that has findings** (v18). Without that ceiling, a category holding one faint finding could score above the same category holding none (health ~0.99 against a 0.87 clean credit on a small repo), so closing the last finding lowered the score and adding the first raised it. "Some drift found" must never read better than "no drift found", so the survival product is clamped to the clean credit before it becomes a score.
 
 ## The composite: a geometric mean
 
@@ -74,6 +80,8 @@ The Vibe Drift Score is the geometric mean of category healths over the applicab
 A geometric mean is multiplicative: a repo scoring 0.95/0.95/0.30 composites to about 65, where an additive average would report a reassuring 73. That asymmetry is deliberate. One collapsed dimension (say, security consistency in shreds) is not offset by tidiness elsewhere, and the old additive engine's floor near 75 was one of the main reasons it stopped discriminating.
 
 One category never appears on the drift track at all: `dependencyHealth` has only hygiene-kind analyzers (`dependencies`, `config-drift`), so under the drift kind-gate it has zero applicable analyzers, is marked `applicable: false`, and simply drops out of the geometric mean's denominator. There is no /80 to /100 rescale; the mean is taken over whatever is applicable.
+
+Surface-specific categories enter the mean clamped (`computeScoresForKind`, v18). They leave the composite entirely while empty and re-enter on their first finding, and re-entering must never raise the headline: a repo that just grew its first security drift finding cannot have become more consistent. Yet a category entering above the mean of the always-measured categories did exactly that (measured: 65.0 to 74.9 on one added security finding, and a Fix Plan projection that fell after a fix). So on the drift track each surface-specific category contributes `min(its health, the geometric mean of the always-measured categories)` to the composite; entering can only lower or hold the score. The category's own reported score is untouched, so its bar still states the health it actually has. When there is no always-measured category to compare against, there is nothing to be raised above and no clamp is applied.
 
 ## The five categories and what feeds each
 
@@ -93,7 +101,7 @@ The report also renders 13 per-drift-category bars (import style, logging consis
 
 Two mechanisms in `src/drift/utils.ts` shape the dominance signals before they ever reach the engine, and both directly set the numbers the damage model consumes.
 
-The **entropy gate** decides whether a convention exists at all. Given the vote distribution for a pattern axis, it computes normalized Shannon entropy; above 0.8 there is no dominant convention, so the detector reports a single "no convention" observation at confidence 0.75 instead of flagging half the repo as deviant. Below the gate, deviators are flagged with confidence `max(0.3, min(0.9, 1 − normalizedEntropy))`: the tighter the convention, the more confident the deviation. That confidence is exactly the `confidence_d` the engine averages.
+The **entropy gate** decides whether a convention exists at all. Given the vote distribution for a pattern axis, it computes normalized Shannon entropy; above 0.8 there is no dominant convention, so the detector reports a single "no convention" observation at confidence 0.75 instead of flagging half the repo as deviant. Below the gate, deviators are flagged with confidence `max(0.3, min(0.9, 1 − normalizedEntropy))`: the tighter the convention, the more confident the deviation. That confidence is exactly the `confidence_d` the engine takes the group max of.
 
 The **temporal weight** makes votes recency-aware when git metadata exists: each file's vote is scaled by `2 × e^(−ln2 × daysAgo / 90)`, so a file touched today counts 2x, at 90 days 1x, at 180 days 0.5x, and at a year roughly 0.12x. The point is migrations: three recent files should outvote ten stale ones when the codebase is actively moving away from an old pattern, otherwise every in-progress migration reads as drift. Files without metadata weight 1.0, which reproduces the pre-temporal behavior. The vote's outputs, `consistencyScore` and `totalRelevantFiles`, become the engine's deviation and sample-confidence inputs through the finding's `driftSignal`.
 
@@ -121,18 +129,20 @@ Take a 12,000-line repo with 400 extracted functions, and two drift-kind finding
 | sample confidence | min(1, 20/8) = 1.0 | 1.0 (no dominance sample) |
 | **damage** | 0.4 × 0.85 × 1.0 × 0.20 × 1.0 = **0.068** | 0.4 × 0.62 × 1.0 × 0.0050 × 1.0 ≈ **0.0012** |
 
-The two findings come from different detectors, so the category multiplies their survivals:
+The two findings come from different detectors, so the category multiplies their survivals, then checks the result against the clean-credit ceiling (at 12,000 lines, `0.8 + 0.2 × (1 − e^(−12000/2500)) ≈ 0.998`, which does not bind here):
 
 ```text
-health  = (1 − 0.068) × (1 − 0.0012) ≈ 0.9308
+health  = min( (1 − 0.068) × (1 − 0.0012), 0.998 ) ≈ 0.9308
 score   = 20 × 0.9308 = 18.6 / 20
 ```
 
-Note the asymmetry the model is built for: the dominance finding (a real 20% deviation across 20 files) costs 55 times more than the single count-based naming finding in a 400-function repo. Suppose the other drift categories land at Redundancy 17.6/20 (health 0.88) and Security Consistency 19.0/20 (health 0.95), with Intent Clarity unmeasured (no comment-style or intent findings) and Dependency Health not applicable on the drift track. The composite averages the three measured healths geometrically:
+Note the asymmetry the model is built for: the dominance finding (a real 20% deviation across 20 files) costs 55 times more than the single count-based naming finding in a 400-function repo. Suppose the other drift categories land at Redundancy 17.6/20 (health 0.88) and Security Consistency 19.0/20 (health 0.95), with Intent Clarity unmeasured (no comment-style or intent findings) and Dependency Health not applicable on the drift track. Security Consistency is surface-specific, so it enters the composite clamped to the geometric mean of the two always-measured categories, `√(0.93 × 0.88) ≈ 0.905`; its own bar still reads 19.0/20. The composite averages the three healths geometrically:
 
 ```text
-composite = 100 × exp( (ln 0.93 + ln 0.88 + ln 0.95) / 3 ) ≈ 92.0   →  grade A
+composite = 100 × exp( (ln 0.93 + ln 0.88 + ln 0.905) / 3 ) ≈ 90.5   →  grade A
 ```
+
+Had the security category entered unclamped at 0.95 the composite would have read about 92.0, that is, adding a security finding to a repo that previously had none would have raised the headline. The clamp is what makes that impossible.
 
 Letter grades are assigned at render time: A at 90+, B at 75+, C at 50+, D at 25+, F below (`src/cli/commands/scan.ts`, kept in sync with the HTML renderer's `gradeFor()`).
 
@@ -140,13 +150,13 @@ Letter grades are assigned at render time: A at 90+, B at 75+, C at 50+, D at 25
 
 `computePerFileScores` applies the same detector-level noisy-OR scoped to each file's findings, with deviation treated as full (the file is the deviator on its own axes), bounded by the same 0.85 cap, on a 0 to 100 scale.
 
-Two "what if" surfaces come from the same machinery. `consistencyImpact`, stamped on each drift finding, is the exact score gain from removing that finding alone, computed by recomputing the category without it (O(n²) per category, but findings per category are few); an emptied category routes through the same evidence-weighted clean-credit path, not a free maximum. `estimateScoreAfterFixes` does a real recompute on the remaining set and additionally returns `consistencyGain`, the summed per-category point gain, which is provably between the largest individual impact and the sum of all impacts, because the noisy-OR is sub-additive. The Fix Plan displays that value, so the projected total and the per-item impacts can never contradict each other.
+Two "what if" surfaces come from the same machinery. `consistencyImpact`, stamped on each drift finding, is the exact score gain from removing that finding alone. Removing a finding only changes its own detector's damage term, so the engine divides that detector out of the cached survival product and recomputes only that group, rather than rebuilding the whole category per finding (the division is safe because damage is capped below 1); an emptied category routes through the same evidence-weighted clean-credit path, not a free maximum. `estimateScoreAfterFixes` does a real recompute on the remaining set and additionally returns `consistencyGain`, the summed per-category point gain, which is provably between the largest individual impact and the sum of all impacts, because the noisy-OR is sub-additive. The Fix Plan displays that value, so the projected total and the per-item impacts can never contradict each other.
 
 There is also a peer-percentile hook: `compositeToPercentile` places the composite on the empirical CDF of a bundled per-language corpus distribution (`src/data/score_percentiles.json`). The shipped artifact is currently a placeholder with an empty `languages` map, so every lookup returns `null` and the renderer shows nothing; the mechanism is live, the data is pending.
 
 ## SCORING_VERSION: shipping score changes without gaslighting users
 
-Scoring methodology changes make raw scores from different versions incomparable, and a user who sees their score drop 6 points wants to know whether their code got worse or the ruler changed. The engine's answer is `SCORING_VERSION` (currently `"v13"`), with three coordinated behaviors:
+Scoring methodology changes make raw scores from different versions incomparable, and a user who sees their score drop 6 points wants to know whether their code got worse or the ruler changed. The engine's answer is `SCORING_VERSION` (currently `"v18"`), with three coordinated behaviors:
 
 1. **Cross-version delta suppression.** History stores the `scoringVersion` alongside each scan's scores. When `computeScores` receives previous scores from a different version, it refuses to compute per-category deltas (they would be in different units) and returns `previousScoresMismatch: "scoring-version-mismatch"`, which downstream silently hides delta arrows.
 2. **A one-time notice, never a banner.** `shouldShowScoringNotice` (`src/core/scoring-notice.ts`) shows a single line ("We refined how the Vibe Drift Score is calculated this release... What changed → https://vibedrift.ai/releases") exactly once per version change, then records `lastSeenScoringVersion`. Brand-new users with no history see nothing. Users never see the version string itself.
@@ -165,8 +175,12 @@ Scoring methodology changes make raw scores from different versions incomparable
 | v11 | multi-language security auth (body-first route and auth extraction for Python/Go/Rust, cross-file hook resolution, conservative "unsure"); AST import graph with real module resolution |
 | v12 | detection-precision batch: Go Fiber and Gorilla mux routes enter the security auth vote; dependency scan ignores import-like text in comments and strings; Code DNA escapes regex metacharacters in filename-derived patterns |
 | v13 | Go multi-module dependency resolution: each `.go` file is checked against its nearest enclosing `go.mod`, declared-module matching is path-prefix aware, sibling in-repo and `// indirect` requires are handled (issue #48) |
+| v15 | function-index and duplicate-normalization corrections: the JS/TS extractor indexes class methods, object-literal methods, `let`/`var` arrows, generators, accessors and `export default function` (constructors stay out); Go generics and Rust `where` clauses are matched; property-chain members stay literal in duplicate normalization; body tokenization neutralizes string literals before comments |
+| v16 | phantom-scaffolding reads the AST import graph instead of regex-parsing raw content (reported phantom exports fell 111 to 16 on eight repos) |
+| v17 | count-based detectors score item volume, not finding count: a finding carries `itemCount` and the count branches sum it, so one project-level `imports` finding covering 800 files no longer scores like one covering 3 (#104) |
+| v18 | monotonicity repair: the composite is provably non-increasing in the finding set. Surface-specific categories enter the mean clamped to the always-measured geometric mean; a category with findings is capped at its own empty-category clean credit; group confidence aggregates as max, not mean. Repos move only where one of those inversions was active |
 
-(The comment records no v8 or v9 entries.)
+(The comment records no v8, v9, or v14 entries.)
 
 ## Why not a simple weighted sum
 

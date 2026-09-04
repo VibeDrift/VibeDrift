@@ -127,12 +127,30 @@ import {
  *        eslint -0.4 (112 minority files), moment -0.2 (23), underscore -0.1
  *        (4). The other seven are byte identical, including three that mix ESM
  *        and CJS but whose minority side is 1 to 3 files. Reported in #104.
+ *   v18: monotonicity repair. The composite is now provably non-increasing in
+ *        the finding set: adding a finding can never RAISE the Vibe Drift Score.
+ *        Three inversions were removed. (1) A surface-specific category
+ *        (securityPosture, intentClarity) is excluded from the composite while
+ *        empty and re-entered on its first finding; if it entered ABOVE the mean
+ *        of the always-measured categories it pulled the headline up (measured:
+ *        65.0 -> 74.9 on adding one security drift finding, and a projected
+ *        Fix-Plan score that DROPPED after a fix). Its contribution is now
+ *        clamped to the geometric mean of the always-measured categories, so
+ *        entering can only lower or hold the composite. (2) A category WITH
+ *        findings could score above the evidence-weighted clean credit an EMPTY
+ *        category earns, so removing the last finding lowered the score; a
+ *        category with findings is now capped at its own empty-category credit.
+ *        (3) Detector confidence aggregated as the group MEAN, so removing a
+ *        low-confidence finding raised the group's mean and increased its
+ *        damage; it is now the group MAX, matching how severity and importance
+ *        already aggregate. Repos move only where one of those inversions was
+ *        active; the direction is always down or unchanged.
  *
  * A change here is absorbed silently for users: stored scores are re-aligned
  * where possible and a one-time release-notes notice is shown (see
  * src/core/scoring-notice.ts). Users never see this string.
  */
-export const SCORING_VERSION = "v17";
+export const SCORING_VERSION = "v18";
 
 /** The bundled corpus distribution, typed. Placeholder until the corpus build lands. */
 export const scorePercentiles = scorePercentilesArtifact as ScorePercentiles;
@@ -441,12 +459,21 @@ function groupSeverityDamage(findings: Finding[]): number {
   return worst;
 }
 
-/** Mean confidence across a detector group's findings (default 1.0). */
+/**
+ * Worst (max) confidence across a detector group's findings (default 1.0).
+ *
+ * MAX, not mean, and that is load-bearing for monotonicity: with a mean, adding
+ * a low-confidence finding to a group LOWERED the group's confidence and so
+ * REDUCED its damage — a new finding improved the score. Every other group
+ * aggregate (severity, importance, sample confidence) is already a max, and the
+ * damage model asks "how bad is the worst pattern here", not "how bad is the
+ * average one". A group's confidence is therefore its most-confident finding.
+ */
 function groupConfidence(findings: Finding[]): number {
   if (findings.length === 0) return 1.0;
-  let sum = 0;
-  for (const f of findings) sum += f.confidence ?? 1.0;
-  return sum / findings.length;
+  let worst = 0;
+  for (const f of findings) worst = Math.max(worst, f.confidence ?? 1.0);
+  return worst;
 }
 
 /**
@@ -471,34 +498,89 @@ function groupImportance(findings: Finding[]): number {
 
 /**
  * Representative deviation for a detector group:
- *  - dominance (every finding carries driftSignal): the worst deviation
- *    fraction in the group (already a size-normalized rate), floored.
- *  - count-based: a saturating density of finding count per KLOC, so volume
- *    scales with codebase size rather than raw count.
+ *  - dominance (findings carrying driftSignal): the worst deviation fraction in
+ *    the group (already a size-normalized rate), floored.
+ *  - count-based (findings without driftSignal): a saturating density of
+ *    finding volume per function (or per KLOC), so volume scales with codebase
+ *    size rather than raw count.
+ *  - MIXED group (both kinds under one analyzerId): the MAX of the dominance
+ *    deviation over the signalled findings and the count deviation over the
+ *    signal-less ones. This is load-bearing for monotonicity: with an all-or-
+ *    nothing `every(driftSignal)` switch, ONE signal-less finding flipped a
+ *    dominance group into the count branch, replacing a large deviation with a
+ *    tiny per-function rate — a new finding raised the score by 31 points in
+ *    the measured case. And it is reachable: `codedna-pattern` emits a
+ *    "Pattern drift" finding WITH driftSignal and a "Mixed patterns" finding
+ *    WITHOUT, under the same analyzerId. A max of two parts that are each
+ *    monotone in their own subset can only go up when a finding of either
+ *    kind is added. The dominance part carries its own sample-size discount
+ *    (`groupSampleConfidence` over the signalled findings), so the count part
+ *    is never scaled by a dominance sample it has nothing to do with. Pure
+ *    groups are unchanged: all-signal → dominance only (discounted in
+ *    `detectorDamage` as before), no-signal → count only.
  */
+/**
+ * Whether a detector group is scored through the duplicated-FUNCTION-fraction
+ * branch. Single source of truth, because two decisions must agree: the
+ * deviation branch in `groupDeviation` AND the importance suppression in
+ * `detectorDamage` (the fraction branch bakes per-group file importance in via
+ * `findingMaxWeight`, so applying `groupImportance` on top would double-count).
+ * The fraction needs a real denominator, so a group with `dupGroupSize` but no
+ * known function count falls back to the per-KLOC density branch AND keeps
+ * detector-level importance — previously the two tests disagreed on exactly that
+ * case, dropping importance from a group that was not using the dup branch.
+ */
+function usesDupFraction(findings: Finding[], functionCount: number): boolean {
+  return functionCount > 0 && findings.some((f) => (f.dupGroupSize ?? 0) > 1);
+}
+
 function groupDeviation(
   findings: Finding[],
   useDriftMagnitude: boolean,
   klocCount: number,
   functionCount: number,
 ): number {
-  const isDominance = useDriftMagnitude && findings.every((f) => f.driftSignal);
-  if (isDominance) {
-    let worst = 0;
-    for (const f of findings) {
-      worst = Math.max(worst, 1 - (f.driftSignal!.consistencyScore ?? 100) / 100);
-    }
-    // A genuinely-consistent finding (consistencyScore 100 → deviation 0) is NOT
-    // drift and must contribute zero damage — do not floor it. The DEVIATION_FLOOR
-    // only applies once there is some real deviation to register faintly.
-    if (worst <= 0) return 0;
-    return Math.max(DEVIATION_FLOOR, Math.min(1, worst));
+  if (!useDriftMagnitude) return countDeviation(findings, klocCount, functionCount);
+
+  const signalled = findings.filter((f) => f.driftSignal);
+  if (signalled.length === 0) return countDeviation(findings, klocCount, functionCount);
+
+  const dominance = dominanceDeviation(signalled);
+  if (signalled.length === findings.length) return dominance;
+
+  // Mixed group: neither kind may hide the other (see the doc comment above).
+  // The sample-size discount belongs to the dominance evidence alone, so it is
+  // folded in HERE rather than applied to the whole group in `detectorDamage`
+  // (which returns a neutral 1.0 for mixed groups): scaling the count part by
+  // the dominance sample meant removing the last signalled finding lifted the
+  // discount to 1.0 and RAISED the damage — closing a finding lowered the score.
+  const plain = findings.filter((f) => !f.driftSignal);
+  return Math.max(
+    dominance * groupSampleConfidence(signalled),
+    countDeviation(plain, klocCount, functionCount),
+  );
+}
+
+/** Worst deviation fraction across findings that all carry `driftSignal`. */
+function dominanceDeviation(findings: Finding[]): number {
+  let worst = 0;
+  for (const f of findings) {
+    worst = Math.max(worst, 1 - (f.driftSignal!.consistencyScore ?? 100) / 100);
   }
+  // A genuinely-consistent finding (consistencyScore 100 → deviation 0) is NOT
+  // drift and must contribute zero damage — do not floor it. The DEVIATION_FLOOR
+  // only applies once there is some real deviation to register faintly.
+  if (worst <= 0) return 0;
+  return Math.max(DEVIATION_FLOOR, Math.min(1, worst));
+}
+
+/** Saturating volume deviation for findings scored by count rather than dominance. */
+function countDeviation(findings: Finding[], klocCount: number, functionCount: number): number {
   // Grouped exact/near-duplicate detectors carry `dupGroupSize`: score by the
   // DUPLICATED-FUNCTION FRACTION (Σ redundant copies ÷ total functions), which is
   // size-fair AND volume-sensitive — 32 identical functions register as ~31
   // redundant copies no matter how they were chunked into findings.
-  if (functionCount > 0 && findings.some((f) => (f.dupGroupSize ?? 0) > 1)) {
+  if (usesDupFraction(findings, functionCount)) {
     // Each duplicate group's redundant copies are weighted by WHERE the group
     // lives (findingMaxWeight): duplication in shipped src counts full, in
     // examples/tests less, in generated code ~0. Importance is therefore baked
@@ -533,9 +615,12 @@ function groupDeviation(
  * Sample-size confidence for a dominance group: full weight once the dominance
  * vote saw at least SAMPLE_FULL_CONFIDENCE relevant files, scaled down below
  * that. Count-based findings carry no dominance sample (no driftSignal), so
- * they return a neutral 1.0 and are unaffected.
+ * they return a neutral 1.0 and are unaffected. A MIXED group also returns 1.0:
+ * its dominance part is discounted inside `groupDeviation`, where the discount
+ * can be applied to the dominance evidence only and not to the count part.
  */
 function groupSampleConfidence(findings: Finding[]): number {
+  if (findings.some((f) => !f.driftSignal)) return 1;
   let maxN = 0;
   for (const f of findings) {
     if (f.driftSignal) maxN = Math.max(maxN, f.driftSignal.totalRelevantFiles);
@@ -554,8 +639,8 @@ function detectorDamage(
   // Dup detectors bake per-group file-importance into their deviation
   // (findingMaxWeight); applying groupImportance again would double-count, so use
   // a neutral 1.0 for them. All other detectors weight at the detector level.
-  const isDupDetector = findings.some((f) => (f.dupGroupSize ?? 0) > 1);
-  const importance = isDupDetector ? 1.0 : groupImportance(findings);
+  // Same predicate the deviation branch uses, so the two can never disagree.
+  const importance = usesDupFraction(findings, functionCount) ? 1.0 : groupImportance(findings);
   const damage =
     groupSeverityDamage(findings) *
     groupConfidence(findings) *
@@ -571,23 +656,43 @@ function detectorDamage(
  * a category's score depends on how many distinct patterns drift and how
  * badly — not on the raw number of findings (which scales with codebase size).
  */
-export function categoryHealth(
-  findings: Finding[],
-  useDriftMagnitude: boolean,
-  klocCount: number,
-  functionCount = 0,
-): number {
+function groupByDetector(findings: Finding[]): Map<string, Finding[]> {
   const byDetector = new Map<string, Finding[]>();
   for (const f of findings) {
     const g = byDetector.get(f.analyzerId);
     if (g) g.push(f);
     else byDetector.set(f.analyzerId, [f]);
   }
+  return byDetector;
+}
+
+export function categoryHealth(
+  findings: Finding[],
+  useDriftMagnitude: boolean,
+  klocCount: number,
+  functionCount = 0,
+): number {
   let survival = 1;
-  for (const [, group] of byDetector) {
+  for (const [, group] of groupByDetector(findings)) {
     survival *= 1 - detectorDamage(group, useDriftMagnitude, klocCount, functionCount);
   }
   return Math.max(0, Math.min(1, survival));
+}
+
+/**
+ * Evidence-weighted clean credit a category earns with NO findings (see
+ * NO_FINDING_PRIOR): NO_FINDING_PRIOR of maxScore at zero evidence, rising
+ * toward full credit as LOC saturates EVIDENCE_SCALE_LINES.
+ *
+ * Also the CEILING for a category that HAS findings. Without that ceiling a
+ * category holding one faint finding could score ABOVE the same category
+ * holding none (health ~0.99 vs a 0.87 clean credit on a small repo), so
+ * closing the last finding LOWERED the score and adding the first RAISED it.
+ * "Some drift found" must never read better than "no drift found".
+ */
+function emptyCategoryFraction(totalLines: number): number {
+  const evidence = 1 - Math.exp(-Math.max(0, totalLines) / EVIDENCE_SCALE_LINES);
+  return NO_FINDING_PRIOR + (1 - NO_FINDING_PRIOR) * evidence;
 }
 
 function computeCategoryScore(
@@ -615,19 +720,38 @@ function computeCategoryScore(
     // regresses toward the population prior when there was little code to find
     // drift in, so a tiny repo no longer earns a free maxScore it lacked the
     // evidence to justify. Large clean repos (high LOC) still earn ~maxScore.
-    const evidence = 1 - Math.exp(-Math.max(0, totalLines) / EVIDENCE_SCALE_LINES);
-    const frac = NO_FINDING_PRIOR + (1 - NO_FINDING_PRIOR) * evidence;
-    const score = Math.round(maxScore * frac * 10) / 10;
+    const score = Math.round(maxScore * emptyCategoryFraction(totalLines) * 10) / 10;
     return { score, maxScore, locked: false, findingCount: 0, applicable: true };
   }
 
   const klocCount = Math.max(1, totalLines / 1000);
-  const health = categoryHealth(findings, useDriftMagnitude, klocCount, functionCount);
+  const emptyFrac = emptyCategoryFraction(totalLines);
+
+  // Detector groups and their damage terms are computed ONCE and reused for the
+  // category health AND every per-finding marginal impact below.
+  const byDetector = groupByDetector(findings);
+  const damageByDetector = new Map<string, number>();
+  let survival = 1;
+  for (const [id, group] of byDetector) {
+    const damage = detectorDamage(group, useDriftMagnitude, klocCount, functionCount);
+    damageByDetector.set(id, damage);
+    survival *= 1 - damage;
+  }
+  // Capped at the empty-category clean credit: a category with findings can
+  // never score better than the same category with none (see
+  // emptyCategoryFraction).
+  const health = Math.min(Math.max(0, Math.min(1, survival)), emptyFrac);
   const score = Math.round(maxScore * health * 10) / 10;
 
   // Marginal consistencyImpact: the score gain from removing finding i alone.
-  // Exact — recompute the category SCORE with that finding removed and diff.
-  // O(n²) per category, but findings-per-category is small.
+  // Exact — the category health with that finding removed, minus this one.
+  //
+  // Removing a finding only changes ITS OWN detector's damage term; every other
+  // detector's `(1 - damage)` survival factor is unchanged. So we divide the
+  // detector out of the cached product once per group and recompute only that
+  // group, instead of rebuilding the whole category per finding. `1 - damage` is
+  // never zero (damage is capped at MAX_DETECTOR_DAMAGE = 0.85), so the division
+  // is safe.
   //
   // Removing the LAST finding does NOT restore the full maxScore: an emptied
   // category routes through the evidence-weighted clean-credit path (it earns
@@ -636,16 +760,24 @@ function computeCategoryScore(
   // over-state the achievable gain and become inconsistent with the cumulative
   // Fix-Plan projection (which is a real recompute through this same path).
   if (mutateImpact) {
-    const evidence = 1 - Math.exp(-Math.max(0, totalLines) / EVIDENCE_SCALE_LINES);
-    const emptyFrac = NO_FINDING_PRIOR + (1 - NO_FINDING_PRIOR) * evidence;
-    for (let i = 0; i < findings.length; i++) {
-      const without = findings.slice(0, i).concat(findings.slice(i + 1));
-      const fracWithout =
-        without.length === 0
-          ? emptyFrac
-          : categoryHealth(without, useDriftMagnitude, klocCount, functionCount);
-      const impact = maxScore * (fracWithout - health);
-      findings[i].consistencyImpact = Math.round(Math.max(0, impact) * 100) / 100;
+    for (const [id, group] of byDetector) {
+      const othersSurvival = survival / (1 - damageByDetector.get(id)!);
+      for (let i = 0; i < group.length; i++) {
+        let fracWithout: number;
+        if (findings.length === 1) {
+          fracWithout = emptyFrac;
+        } else {
+          const without = group.slice(0, i).concat(group.slice(i + 1));
+          const damageWithout =
+            without.length === 0
+              ? 0
+              : detectorDamage(without, useDriftMagnitude, klocCount, functionCount);
+          const raw = othersSurvival * (1 - damageWithout);
+          fracWithout = Math.min(Math.max(0, Math.min(1, raw)), emptyFrac);
+        }
+        const impact = maxScore * (fracWithout - health);
+        group[i].consistencyImpact = Math.round(Math.max(0, impact) * 100) / 100;
+      }
     }
   }
 
@@ -737,15 +869,40 @@ function computeScoresForKind(
   //
   // Computed via logs for numerical stability:
   //   composite = 100 × exp( (Σ ln(max(HEALTH_FLOOR, health))) / appCount )
-  let logSum = 0;
-  let appCount = 0;
+  //
+  // Surface-specific categories are a special case. They leave the composite
+  // entirely while empty and re-enter on their first finding (see
+  // SURFACE_SPECIFIC_DRIFT_CATEGORIES). Re-entering must never RAISE the
+  // headline — a repo that just grew its first security drift finding cannot
+  // become MORE consistent — but a category entering above the mean of the
+  // always-measured ones does exactly that (measured: 65.0 -> 74.9 on one added
+  // security finding, and a Fix-Plan projection that fell after a fix). So a
+  // surface-specific category contributes `min(its health, the geometric mean of
+  // the always-measured categories)`: entering can only lower or hold the
+  // composite. The category's own reported score is untouched — the bar still
+  // states the health that category actually has.
+  const alwaysMeasured: number[] = [];
+  const surfaceSpecific: number[] = [];
   for (const cat of ALL_CATEGORIES) {
     const s = scores[cat];
     if (!s.applicable) continue;
-    appCount++;
     const health = s.maxScore > 0 ? s.score / s.maxScore : 0;
     const clamped = Math.max(0, Math.min(1, health));
-    logSum += Math.log(Math.max(HEALTH_FLOOR, clamped));
+    if (kind === "drift" && SURFACE_SPECIFIC_DRIFT_CATEGORIES.has(cat)) surfaceSpecific.push(clamped);
+    else alwaysMeasured.push(clamped);
+  }
+
+  let logSum = 0;
+  const appCount = alwaysMeasured.length + surfaceSpecific.length;
+  let baseLogSum = 0;
+  for (const h of alwaysMeasured) baseLogSum += Math.log(Math.max(HEALTH_FLOOR, h));
+  logSum += baseLogSum;
+  // No always-measured category to compare against (nothing to be raised above)
+  // ⇒ no clamp; the surface category is the whole composite.
+  const baseMean =
+    alwaysMeasured.length > 0 ? Math.exp(baseLogSum / alwaysMeasured.length) : Infinity;
+  for (const h of surfaceSpecific) {
+    logSum += Math.log(Math.max(HEALTH_FLOOR, Math.min(h, baseMean)));
   }
 
   let compositeScore: number;
@@ -760,6 +917,28 @@ function computeScoresForKind(
   const maxCompositeScore = 100;
 
   return { scores, compositeScore, maxCompositeScore };
+}
+
+/**
+ * Total indexed function count for a file set, memoized on the array identity.
+ *
+ * The count is the DENOMINATOR for every size-fair count-based magnitude, so it
+ * is needed by the composite AND by the per-category drift bars, and
+ * `estimateScoreAfterFixes` calls `computeScores` twice. Re-extracting every
+ * function in the repo on each of those is the single most expensive thing the
+ * scoring layer does and it is pure, so cache it against the `files` array the
+ * caller already holds. A WeakMap keyed on that array means the entry dies with
+ * the scan context and nothing has to be invalidated. `ctx.functionCount` still
+ * wins when the pipeline supplied one.
+ */
+const FUNCTION_COUNT_CACHE = new WeakMap<object, number>();
+
+export function functionCountFor(files: AnalysisContext["files"]): number {
+  const cached = FUNCTION_COUNT_CACHE.get(files);
+  if (cached !== undefined) return cached;
+  const count = extractAllFunctions(files).length;
+  FUNCTION_COUNT_CACHE.set(files, count);
+  return count;
 }
 
 export function computeScores(
@@ -835,9 +1014,7 @@ export function computeScores(
   // (structural-similarity findings scale with functions, not lines). Reuse a
   // pre-computed ctx.functionCount when the pipeline supplied one; otherwise
   // derive it once here. 0 → engine falls back to per-KLOC density.
-  const functionCount = ctx
-    ? (ctx.functionCount ?? extractAllFunctions(ctx.files).length)
-    : 0;
+  const functionCount = ctx ? (ctx.functionCount ?? functionCountFor(ctx.files)) : 0;
 
   // Drift track: populates consistencyImpact on drift findings when
   // mutateImpact is true. Composite is the Vibe Drift Score.
