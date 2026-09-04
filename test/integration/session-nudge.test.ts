@@ -1,8 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Every test here spawns tsx processes (hook entry, baseline builder, CLI);
+// on a CI runner one test takes 4 to 8 s, past vitest's default 5 s.
+vi.setConfig({ testTimeout: 60_000 });
 
 /** Write an executable shell script that records its first two argv into `marker`. */
 function markerScript(marker: string): string {
