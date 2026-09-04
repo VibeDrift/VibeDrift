@@ -11,6 +11,10 @@
  * either by passing explicit `exclude` globs or `applyDetectedExcludes: true`.
  * The CLI gathers that opt-in from the user via prompts; an agent passes it on
  * the user's behalf. We never silently exclude files.
+ *
+ * Root-dir plausibility: this core does NOT gate on project markers, so the
+ * CLI can initialize a brand-new directory. The MCP adapter adds
+ * `assertPlausibleProjectRoot` because its rootDir is agent-controlled.
  */
 import { z } from "zod";
 import { join, resolve } from "path";
@@ -25,7 +29,6 @@ import {
   PROJECT_CONFIG_VERSION,
   type ProjectConfig,
 } from "../../core/project-config.js";
-
 export const inputSchema = {
   rootDir: z.string().describe("Absolute path to the repository root"),
   exclude: z
@@ -93,6 +96,13 @@ export async function run(args: {
   // Normalize so a relative path behaves the same whether called from the CLI
   // (which already resolves) or directly from the MCP adapter.
   const rootDir = resolve(args.rootDir);
+
+  // No root-dir plausibility check here, deliberately. The interactive CLI
+  // (`vibedrift init`) runs in the user's own cwd by explicit command, and a
+  // brand-new project legitimately has no .git / package.json yet — refusing
+  // at the end of the prompt walkthrough would be wrong. The MCP adapter
+  // (src/mcp/tools/init.ts), whose rootDir is agent-controlled, applies
+  // `assertPlausibleProjectRoot` before delegating here.
 
   const detected = await detectExcludeCandidates(rootDir);
 

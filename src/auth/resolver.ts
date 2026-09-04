@@ -39,6 +39,30 @@ export async function resolveToken(input: TokenResolutionInput = {}): Promise<Re
   return null;
 }
 
+const DEFAULT_API_URL = "https://vibedrift-api.fly.dev";
+const LOCALHOST_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+
+/**
+ * Guard against sending the Bearer token to a plaintext endpoint. An
+ * `apiUrl` override can come from a CLI flag, an env var, or the on-disk
+ * config — any of which could be attacker- or mistake-controlled (a bad
+ * copy-paste, a compromised dotfile, a malicious wrapper script) — and every
+ * `resolveToken`-derived Bearer token gets sent to whatever URL this
+ * resolves to. `http://` to anything but localhost ships the token in the
+ * clear over the network, so it's refused outright rather than silently
+ * downgraded. Throws `TypeError` (via `new URL`) for a genuinely malformed
+ * URL, which callers already need to handle.
+ */
+function assertSafeApiUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol === "https:") return url;
+  if (parsed.protocol === "http:" && LOCALHOST_HOSTNAMES.has(parsed.hostname)) return url;
+  throw new Error(
+    `vibedrift: refusing to send credentials to insecure API URL "${url}" — ` +
+      `use https:// (or http://localhost / http://127.0.0.1 for local development).`,
+  );
+}
+
 /**
  * API base URL resolution.
  *
@@ -46,15 +70,39 @@ export async function resolveToken(input: TokenResolutionInput = {}): Promise<Re
  *   2. VIBEDRIFT_API_URL environment variable
  *   3. ~/.vibedrift/config.json `apiUrl` field
  *   4. Built-in default (production)
+ *
+ * Any override (flags 1-3) is validated by `assertSafeApiUrl` and warned
+ * about loudly — the Bearer token is sent to this URL on every API call, so
+ * a non-default endpoint is a meaningful trust boundary the user should
+ * notice, not a silent redirect.
  */
 export async function resolveApiUrl(explicitUrl?: string): Promise<string> {
-  if (explicitUrl && explicitUrl.trim().length > 0) return explicitUrl.trim();
+  if (explicitUrl && explicitUrl.trim().length > 0) {
+    const url = assertSafeApiUrl(explicitUrl.trim());
+    warnNonDefaultApiUrl(url, "--api-url flag");
+    return url;
+  }
   if (process.env.VIBEDRIFT_API_URL && process.env.VIBEDRIFT_API_URL.trim().length > 0) {
-    return process.env.VIBEDRIFT_API_URL.trim();
+    const url = assertSafeApiUrl(process.env.VIBEDRIFT_API_URL.trim());
+    warnNonDefaultApiUrl(url, "VIBEDRIFT_API_URL");
+    return url;
   }
   const config = await readConfig();
-  if (config.apiUrl && config.apiUrl.trim().length > 0) return config.apiUrl.trim();
-  return "https://vibedrift-api.fly.dev";
+  if (config.apiUrl && config.apiUrl.trim().length > 0) {
+    const url = assertSafeApiUrl(config.apiUrl.trim());
+    warnNonDefaultApiUrl(url, getConfigPath());
+    return url;
+  }
+  return DEFAULT_API_URL;
+}
+
+/** Mirrors the existing config.ts warn-loudly-to-stderr pattern. */
+function warnNonDefaultApiUrl(url: string, source: string): void {
+  if (url === DEFAULT_API_URL) return;
+  process.stderr.write(
+    `vibedrift: warning — using non-default API URL "${url}" (from ${source}). ` +
+      `The auth token is sent to this endpoint.\n`,
+  );
 }
 
 /**

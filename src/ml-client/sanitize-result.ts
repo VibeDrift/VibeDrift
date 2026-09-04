@@ -54,6 +54,24 @@ function createSanitizeNode(stripPath: StripPathFn): SanitizeNodeFn {
   return sanitizeNode;
 }
 
+// Verbatim-source-bearing keys that must never reach the upload payload,
+// regardless of where in the tree they show up. `codeDnaResult.functions[]`
+// (ExtractedFunction) is the reachable path today: `rawBody` is the full
+// function body, `declarationCode` is the signature line, and `bodyTokens`
+// is a near-lossless token reconstruction of the body (identifiers, numbers,
+// punctuation survive; only string/comment literals are blanked) — all three
+// are complete-enough to reconstitute the source, not a bounded citation.
+// This is distinct from `FileLocation.snippet` (findings) and drift
+// `Evidence.code` (a single trimmed line, capped at 3 per file) and taint
+// `TaintSink.expression` (capped at 100 chars): those are short, bounded
+// excerpts cited as proof for one specific finding — the dashboard renders
+// them as "Evidence" — and are deliberately kept (see
+// sanitize-result.test.ts's pinned "keeps the finding evidence snippet"
+// test). `rawBody`/`declarationCode`/`bodyTokens` carry every extracted
+// function's full body with no such bound, which is exactly what the
+// header above promises never to upload.
+const CONTENT_BEARING_KEYS = new Set(["rawBody", "declarationCode", "bodyTokens"]);
+
 function sanitizeObjectNode(
   node: Record<string, unknown>,
   stripPath: StripPathFn,
@@ -67,6 +85,7 @@ function sanitizeObjectNode(
       continue;
     }
     if (k === "ast" || k === "treeSitterNode") continue;
+    if (CONTENT_BEARING_KEYS.has(k)) continue;
     out[k] = sanitizeNode(v);
   }
   return out;

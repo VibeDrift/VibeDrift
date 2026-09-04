@@ -7,6 +7,10 @@ import { run, detectExcludeCandidates } from "../../../src/tools-core/tools/init
 let dir: string;
 
 async function seedRepo(root: string): Promise<void> {
+  // A .git marker so this looks like a typical repo root. The core `run` does
+  // not require one (see "initializes a marker-less directory" below); the
+  // root-dir guard applies only in the MCP adapter.
+  await mkdir(join(root, ".git"), { recursive: true });
   await mkdir(join(root, "src"), { recursive: true });
   await mkdir(join(root, "test", "fixtures"), { recursive: true });
   await writeFile(join(root, "src", "index.ts"), "export const a = 1;\n");
@@ -63,6 +67,23 @@ describe("tools-core init", () => {
     expect(res.excludesAdded).toEqual(["dist/**"]);
     const ignore = await readFile(join(dir, ".vibedriftignore"), "utf-8");
     expect(ignore).toContain("dist/**");
+  });
+
+  // The interactive `vibedrift init` CLI calls this core in the user's own
+  // cwd by explicit command. A brand-new project has no .git / package.json
+  // yet, so the core must NOT apply the root-dir plausibility guard — that
+  // belongs to the MCP adapter, whose rootDir is agent-controlled (see
+  // test/unit/mcp/tools/init.test.ts).
+  it("initializes a marker-less directory (no root-dir guard in the core)", async () => {
+    const bare = await mkdtemp(join(tmpdir(), "vd-init-bare-"));
+    try {
+      const res = await run({ rootDir: bare, format: "json" });
+      expect(res.wrote).toBe(true);
+      const cfg = JSON.parse(await readFile(join(bare, ".vibedrift", "config.json"), "utf-8"));
+      expect(cfg).toMatchObject({ version: 1, format: "json" });
+    } finally {
+      await rm(bare, { recursive: true, force: true });
+    }
   });
 
   it("merges config across calls without clobbering prior fields", async () => {

@@ -69,3 +69,34 @@ describe("synthesizeFixPrompts", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("synthesizeFixPrompts: request timeout", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("passes an abort signal and clears its timer, so a hung API cannot wedge the scan", async () => {
+    // The call had no timeout at all: an API that accepts the connection and
+    // then never answers held `vibedrift scan` open indefinitely, because this
+    // runs on the render path before the command returns. Binds both halves of
+    // the fix — the signal reaching fetch, and the timer being cleared on the
+    // way out so it cannot keep the event loop alive (the same leak shape the
+    // scan beacon had).
+    vi.useFakeTimers();
+    const ctx = ctxWith([
+      { relativePath: "src/order.ts", content: "export function loadOrder(id){ const r = db.query('select * from orders'); return r; }" },
+      { relativePath: "src/repo.ts", content: "export async function findOrder(id){ return await OrderRepo.findById(id); }" },
+    ]);
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ prompts: {} }) }) as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await synthesizeFixPrompts([driftFinding()], ctx, { token: "tok" });
+
+    expect(fetchMock).toHaveBeenCalled();
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal!.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

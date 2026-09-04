@@ -1046,7 +1046,12 @@ async function renderToFormat(
     const writeLocalReport = !dashboardUrl || !!options.output;
 
     if (writeLocalReport) {
-      const scanId = (result as ScanResultAugmented).__scanId;
+      // The report-open beacon is an inline <script> in the generated HTML,
+      // gated only by the presence of scanId here, so the telemetry opt-out has
+      // to be applied at this point: a user who disabled telemetry must never
+      // get a report that phones home when opened.
+      const { isTelemetryEnabled } = await import("../../telemetry/beacon.js");
+      const scanId = (await isTelemetryEnabled()) ? (result as ScanResultAugmented).__scanId : undefined;
       const beaconApiUrl = (result as ScanResultAugmented).__apiUrl;
       const beaconOpts = { ...(scanId ? { scanId, beaconApiUrl } : {}), isPaid: paid };
       const summaryHtml = renderHtmlReport(result, "summary", {}, beaconOpts);
