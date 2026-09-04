@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +7,10 @@ import { collectFileNames } from "@/session/file-names";
 import { UploadStateStore } from "@/session/upload-state";
 import { toUploadEvent } from "@/session/upload-schema";
 import type { SessionEvent } from "@/session/types";
+
+// Every test here spawns tsx processes (hook entry, baseline builder, CLI);
+// on a CI runner one test takes 4 to 8 s, past vitest's default 5 s.
+vi.setConfig({ testTimeout: 60_000 });
 
 const ENTRY = join(process.cwd(), "src", "session", "hook-entry.ts");
 const BUILDER = join(process.cwd(), "test", "helpers", "session-build-baseline.ts");
