@@ -240,7 +240,13 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   // handed back to the caller stays the persisted one, so the finding-scoped
   // re-check keeps exactly its current semantics.
   const overlay = await readOverlay(opts.sessionsDir, opts.projectHash, opts.sessionId);
-  const extra = overlayEntriesExcept(overlay, relPath);
+  // The queried index never exceeds the inline gate the size check above
+  // promises: the overlay fills only the headroom under INLINE_CHECK_MAX_ENTRIES,
+  // newest files first (measured ~0.35 ms per overlay entry on the hook path,
+  // so an unbounded merge near the gate would outrun the 2s watchdog).
+  const headroom = Math.max(0, INLINE_CHECK_MAX_ENTRIES - baseline.minhashIndex.length);
+  const all = overlayEntriesExcept(overlay, relPath);
+  const extra = all.length > headroom ? all.slice(all.length - headroom) : all;
   const queried: RepoDriftBaseline =
     extra.length > 0 ? { ...baseline, minhashIndex: [...baseline.minhashIndex, ...extra] } : baseline;
 

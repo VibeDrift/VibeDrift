@@ -12,6 +12,8 @@ import {
   OVERLAY_MAX_ENTRIES,
 } from "@/session/overlay";
 import { findSimilarToBody } from "@/codedna/find-similar-to-body";
+import { buildBaseline } from "@/core/baseline";
+import { runEditChecks, INLINE_CHECK_MAX_ENTRIES } from "@/session/check";
 
 const MONTH_TITLE = `export function monthTitle(ym: string): string {
   const [y, m] = ym.split("-").map(Number);
@@ -67,3 +69,36 @@ describe("overlay index", () => {
     expect((await readOverlay(dir, "hash1", "never")).files.size).toBe(0);
   });
 });
+
+describe("overlay merge respects the inline gate", () => {
+  it("fills only the headroom under INLINE_CHECK_MAX_ENTRIES, newest files first", async () => {
+    const repo = tmp();
+    const sessions = tmp();
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "a.ts"), "export async function a(){ return await fetch('/a'); }\n");
+    const real = await buildBaseline(repo);
+    // a baseline one entry under the gate: exactly one overlay entry fits
+    const padded = { ...real, minhashIndex: Array.from({ length: INLINE_CHECK_MAX_ENTRIES - 1 }, (_, i) => ({ ...real.minhashIndex[0], relativePath: `pad/${i}.ts`, name: `pad${i}` })) };
+    const older = overlayEntriesFor("src/older.tsx", MONTH_TITLE.replace("monthTitle", "olderTitle"));
+    const newer = overlayEntriesFor("src/newer.tsx", MONTH_TITLE.replace("monthTitle", "newerTitle"));
+    let o = updateOverlay({ files: new Map() }, "src/older.tsx", older);
+    o = updateOverlay(o, "src/newer.tsx", newer);
+    await writeOverlay(sessions, "hash1", "s1", o);
+    const target = join(repo, "src", "target.tsx");
+    writeFileSync(target, `${MONTH_TITLE}\n`);
+    const out = await runEditChecks({
+      rootDir: repo,
+      projectHash: "hash1",
+      sessionId: "s1",
+      sessionsDir: sessions,
+      file: target,
+      body: MONTH_TITLE,
+      loadBaselineFor: async () => padded,
+    });
+    const dup = out.flags.find((f) => f.detail.category === "redundancy");
+    expect(dup?.detail.similarTo).toBe("src/newer.tsx:1"); // the older file fell outside the headroom
+    expect(out.checked).toBe(true);
+  }, 60_000);
+});
+

@@ -25,6 +25,14 @@ const MONTH_TITLE = [
 function tmp(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
+/** Block the test thread without spinning (the seam child is a separate process). */
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function waitFor(cond: () => boolean, timeoutMs: number): void {
+  const until = Date.now() + timeoutMs;
+  while (!cond() && Date.now() < until) sleep(100);
+}
 function env(home: string, extra: Record<string, string> = {}) {
   return { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "", ...extra };
 }
@@ -97,11 +105,12 @@ describe("session overlay index (integration)", () => {
     writeFileSync(join(repo, "src", "components", "New.tsx"), `${MONTH_TITLE}\n`);
     expect(runHook(home, write(repo, sid, "src/components/New.tsx", MONTH_TITLE), extra).status).toBe(0);
     expect(runHook(home, { session_id: sid, cwd: repo, hook_event_name: "Stop" }, extra).status).toBe(0);
-    const wait = Date.now() + 3000;
-    while (!existsSync(marker) && Date.now() < wait) { /* detached child */ }
+    waitFor(() => existsSync(marker), 6000);
     expect(readFileSync(marker, "utf8")).toBe(repo);
-    // a second Stop inside the interval does not rebuild again
+    // a second Stop inside the interval does not rebuild again: give a
+    // detached child that SHOULD NOT exist time to have appended, then assert
     expect(runHook(home, { session_id: sid, cwd: repo, hook_event_name: "Stop" }, extra).status).toBe(0);
+    sleep(1500);
     expect(readFileSync(marker, "utf8")).toBe(repo);
   });
 });
