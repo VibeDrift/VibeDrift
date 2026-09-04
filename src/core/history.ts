@@ -266,11 +266,17 @@ export async function loadLatestScan(rootDir: string): Promise<SavedScan | null>
  * Load a specific saved scan by its scan file name (e.g. `scan-1234567.json`
  * or the prefix `1234567`). Returns null if the scan doesn't exist or is
  * unreadable. Used by `vibedrift scan --since <scanId>`.
+ *
+ * `scanId` comes straight from the user-supplied `--since` flag, so it is
+ * untrusted: a value containing a path separator or `..` (e.g.
+ * `../../../../etc/passwd`) is rejected outright rather than woven into the
+ * filename, closing a path-traversal read outside the scan-history directory.
  */
 export async function loadScanById(
   rootDir: string,
   scanId: string,
 ): Promise<SavedScan | null> {
+  if (/[\\/]/.test(scanId) || scanId.includes("..")) return null;
   const dir = projectDir(rootDir);
   const filename = scanId.startsWith("scan-")
     ? (scanId.endsWith(".json") ? scanId : `${scanId}.json`)

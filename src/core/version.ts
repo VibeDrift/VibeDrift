@@ -40,9 +40,3 @@ export function getVersion(): string {
   cached = "0.0.0";
   return cached;
 }
-// Action validation test
-// npx -y fix
-// shell fix
-// composite action
-// npm global fix
-// report link fix

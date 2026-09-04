@@ -169,6 +169,15 @@ export function globToRegex(glob: string): RegExp {
         inClass = true;
         result += "[";
         i++;
+        // A leading "!" (glob's negation, e.g. "[!abc]") or "^" (already
+        // regex-native) negates the class. Without this, "!" fell through to
+        // escapeInClass and was emitted as a LITERAL "!" character inside the
+        // class — so "[!_]*.ts" matched a literal "!" or "_" instead of
+        // negating, silently breaking every negated character class.
+        if (pattern[i] === "!" || pattern[i] === "^") {
+          result += "^";
+          i++;
+        }
         break;
       }
       case "{": {

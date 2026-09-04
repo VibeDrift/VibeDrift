@@ -4,6 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { getChangedFiles } from "../../../src/core/git-metadata.js";
 
 const execP = promisify(exec);
 
@@ -156,5 +157,42 @@ describe("collectGitMetadata", () => {
     // Allow ±1 day tolerance for timing
     expect(meta!.lastModifiedDaysAgo).toBeGreaterThanOrEqual(29);
     expect(meta!.lastModifiedDaysAgo).toBeLessThanOrEqual(31);
+  });
+});
+
+// Regression: `--diff <ref>` shells out as `git diff --name-only --relative
+// <ref>`. A ref value starting with '-' (e.g. an option-injection attempt
+// like "--upload-pack=evil") was passed straight through as a bare
+// positional argument, so git parsed it as a FLAG instead of a revision.
+describe("getChangedFiles — ref validation", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "vibedrift-diff-test-"));
+    await initRepo(dir);
+    await writeFile(join(dir, "a.ts"), "v1");
+    await commitWithDate(dir, "2026-04-10T00:00:00Z", "initial");
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("throws on a ref starting with '-' instead of shelling out", async () => {
+    await expect(getChangedFiles(dir, "--upload-pack=evil")).rejects.toThrow(/invalid git ref/i);
+  });
+
+  it("throws on a bare '-' ref", async () => {
+    await expect(getChangedFiles(dir, "-")).rejects.toThrow(/invalid git ref/i);
+  });
+
+  it("still accepts a normal ref", async () => {
+    const result = await getChangedFiles(dir, "HEAD");
+    expect(result).not.toBeNull();
+  });
+
+  it("still accepts the default (no ref, uncommitted changes vs HEAD)", async () => {
+    const result = await getChangedFiles(dir);
+    expect(result).not.toBeNull();
   });
 });
