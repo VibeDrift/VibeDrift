@@ -18,6 +18,7 @@
 
 import { askConfirm } from "../prompt.js";
 import { homedir } from "node:os";
+import { vibedriftPluginActive } from "../../session/plugin-detect.js";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
 import { repoIdentity, defaultSessionsDir } from "../../session/repo.js";
@@ -136,9 +137,17 @@ export async function runEnable(targetPath: string, options: EnableOptions = {})
   }
 
   const already = await hooksStatus(rootDir);
-  // A pre-existing install missing a hook group (the Bash group, added later)
-  // is upgraded in place: installHooks adds only what is absent.
-  if (!already.installed || already.missing.length > 0) {
+  // With the Claude Code plugin installed and enabled, the plugin's own hooks
+  // (hooks/hooks.json) capture this repo now that it is active: a repo-local
+  // copy would only make both fire and the plugin yield. An EXISTING
+  // repo-local install still owns capture and is kept up to date below.
+  if (!already.installed && vibedriftPluginActive(home)) {
+    console.log(
+      `${chalk.green("✓")} Drift Sessions enabled — the VibeDrift Claude Code plugin provides the hooks for this repo (no repo-local install needed).`,
+    );
+  } else if (!already.installed || already.missing.length > 0) {
+    // A pre-existing install missing a hook group (the Bash group, added
+    // later) is upgraded in place: installHooks adds only what is absent.
     const res = await installHooks(rootDir, {
       hookCommand: options.hookCommand ?? resolveHookCommand(),
       sessionsDir,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runEnable, runDecline } from "@/cli/commands/enable";
@@ -28,7 +28,7 @@ describe("runEnable — single repo", () => {
     const sessionsDir = tmp("vd-en-sess-");
     const activationHome = tmp("vd-en-act-");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const status = await runEnable(repo, { sessionsDir, activationHome });
+    const status = await runEnable(repo, { sessionsDir, activationHome, homeDir: tmp("vd-en-home-") });
     expect(status).toBe("enabled");
     expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(true);
 
@@ -40,6 +40,46 @@ describe("runEnable — single repo", () => {
     const receipt = JSON.parse(readFileSync(join(sessionsDir, projectHash, "consent.log"), "utf8").trim());
     expect(receipt.action).toBe("enable");
     expect(receipt.surface).toBe("cli-enable");
+  });
+
+  it("with the Claude Code plugin installed and enabled, records active but writes NO repo-local hooks", async () => {
+    // The plugin ships the hooks; a repo-local copy would only make both fire
+    // and the plugin yield. Activation alone is the whole step.
+    const repo = repoWithAgent();
+    const sessionsDir = tmp("vd-en-sess-");
+    const activationHome = tmp("vd-en-act-");
+    const homeDir = tmp("vd-en-home-");
+    mkdirSync(join(homeDir, ".claude", "plugins"), { recursive: true });
+    writeFileSync(join(homeDir, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "vibedrift@vibedrift": true } }));
+    writeFileSync(
+      join(homeDir, ".claude", "plugins", "installed_plugins.json"),
+      JSON.stringify({ version: 2, plugins: { "vibedrift@vibedrift": [{ scope: "user", installPath: "/x", version: "0.21.0" }] } }),
+    );
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const status = await runEnable(repo, { sessionsDir, activationHome, homeDir });
+    expect(status).toBe("enabled");
+    expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(false);
+    expect(projectStatus(loadActivation(activationHome), repoIdentity(repo).projectHash)).toBe("active");
+    expect(log.mock.calls.flat().join("\n")).toContain("plugin provides the hooks");
+  });
+
+  it("keeps and upgrades an EXISTING repo-local install even when the plugin is active", async () => {
+    const repo = repoWithAgent();
+    const sessionsDir = tmp("vd-en-sess-");
+    const activationHome = tmp("vd-en-act-");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await runEnable(repo, { sessionsDir, activationHome, homeDir: tmp("vd-en-home-") }); // repo-local install, no plugin
+    expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(true);
+    const homeDir = tmp("vd-en-home-");
+    mkdirSync(join(homeDir, ".claude", "plugins"), { recursive: true });
+    writeFileSync(join(homeDir, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "vibedrift@vibedrift": true } }));
+    writeFileSync(
+      join(homeDir, ".claude", "plugins", "installed_plugins.json"),
+      JSON.stringify({ version: 2, plugins: { "vibedrift@vibedrift": [{ scope: "user", installPath: "/x", version: "0.21.0" }] } }),
+    );
+    const status = await runEnable(repo, { sessionsDir, activationHome, homeDir });
+    expect(status).toBe("enabled");
+    expect(existsSync(join(repo, ".claude", "settings.local.json"))).toBe(true);
   });
 
   it("records the answer even with no agent, but does not install hooks", async () => {
@@ -62,7 +102,7 @@ describe("runEnable — single repo", () => {
     const sessionsDir = tmp("vd-en-sess-");
     const activationHome = tmp("vd-en-act-");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const status = await runEnable(dir, { sessionsDir, activationHome });
+    const status = await runEnable(dir, { sessionsDir, activationHome, homeDir: tmp("vd-en-home-") });
     expect(status).toBe("enabled");
     // identity falls back to the directory itself when no .git ancestor exists
     const { rootDir, projectHash } = repoIdentity(dir);
@@ -77,10 +117,10 @@ describe("runEnable — single repo", () => {
     const sessionsDir = tmp("vd-en-sess-");
     const activationHome = tmp("vd-en-act-");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(await runEnable(repo, { sessionsDir, activationHome })).toBe("enabled");
+    expect(await runEnable(repo, { sessionsDir, activationHome, homeDir: tmp("vd-en-home-") })).toBe("enabled");
     const settings = join(repo, ".claude", "settings.local.json");
     const before = readFileSync(settings, "utf8");
-    expect(await runEnable(repo, { sessionsDir, activationHome })).toBe("enabled");
+    expect(await runEnable(repo, { sessionsDir, activationHome, homeDir: tmp("vd-en-home-") })).toBe("enabled");
     expect(readFileSync(settings, "utf8")).toBe(before);
     const { projectHash } = repoIdentity(repo);
     expect(projectStatus(loadActivation(activationHome), projectHash)).toBe("active");
@@ -97,7 +137,7 @@ describe("runEnable — single repo", () => {
     await runDecline(repo, { sessionsDir, activationHome });
     const { projectHash } = repoIdentity(repo);
     expect(projectStatus(loadActivation(activationHome), projectHash)).toBe("declined");
-    await runEnable(repo, { sessionsDir, activationHome });
+    await runEnable(repo, { sessionsDir, activationHome, homeDir: tmp("vd-en-home-") });
     expect(projectStatus(loadActivation(activationHome), projectHash)).toBe("active");
   });
 });
@@ -107,7 +147,7 @@ describe("runEnable --dir (O19)", () => {
     const work = tmp("vd-en-work-");
     const activationHome = tmp("vd-en-act-");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const status = await runEnable(".", { dir: work, activationHome, confirm: async () => true });
+    const status = await runEnable(".", { dir: work, activationHome, confirm: async () => true, homeDir: tmp("vd-en-home-") });
     expect(status).toBe("dir_granted");
     const store = loadActivation(activationHome);
     expect(store.dirGrants.map((g) => g.path)).toContain(work);
@@ -121,7 +161,7 @@ describe("runEnable --dir (O19)", () => {
     const work = tmp("vd-en-work-");
     const activationHome = tmp("vd-en-act-");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const status = await runEnable(".", { dir: work, activationHome, confirm: async () => false });
+    const status = await runEnable(".", { dir: work, activationHome, confirm: async () => false, homeDir: tmp("vd-en-home-") });
     expect(status).toBe("dir_declined");
     expect(loadActivation(activationHome).dirGrants).toHaveLength(0);
   });
@@ -129,7 +169,7 @@ describe("runEnable --dir (O19)", () => {
   it("refuses $HOME with a nonzero exit and no grant", async () => {
     const activationHome = tmp("vd-en-act-");
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const status = await runEnable(".", { dir: homedir(), activationHome, confirm: async () => true });
+    const status = await runEnable(".", { dir: homedir(), activationHome, confirm: async () => true, homeDir: tmp("vd-en-home-") });
     expect(status).toBe("dir_refused");
     expect(process.exitCode).toBe(1);
     expect(loadActivation(activationHome).dirGrants).toHaveLength(0);
