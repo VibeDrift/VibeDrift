@@ -666,6 +666,12 @@ export async function logAndRender(
   // directly, as before.
   const localReportServerPath = !bearerToken && format === "html";
   const failOnScore = options.failOnScore !== undefined && compositeScore < options.failOnScore;
+  // Only an interactive terminal session is going to open the served report,
+  // so only such a session is worth keeping alive for it. A CI job or a
+  // scripted/piped invocation is waiting on the exit code: for those,
+  // --fail-on-score must still exit immediately, as it did before the server
+  // took over process termination on this path.
+  const keepServerAliveForReport = localReportServerPath && isInteractiveSession();
 
   // Rich fix-prompt prose (PAID). Attaches metadata.fixPromptProse used by the
   // dashboard/HTML report. Skipped if already synthesized (--write-context does
@@ -739,7 +745,7 @@ export async function logAndRender(
   // other path has nothing else keeping the event loop open, so exit
   // immediately, as before.
   if (failOnScore) {
-    if (localReportServerPath) {
+    if (keepServerAliveForReport) {
       process.exitCode = 1;
     } else {
       process.exit(1);
@@ -749,6 +755,16 @@ export async function logAndRender(
 
 // Test-only re-export (kept at module scope, tree-shaken from the bundle).
 export const __test_serveHtmlReportOnLocalhost = serveHtmlReportOnLocalhost;
+
+/**
+ * True when this process is attached to a human at a terminal. Used to decide
+ * whether the local report server is worth keeping alive: a CI job or a piped
+ * invocation is waiting on an exit code, not on a browser window.
+ */
+function isInteractiveSession(): boolean {
+  if (process.env.CI) return false;
+  return process.stdout.isTTY === true;
+}
 
 /** One deferred, post-summary step on the html loader path: a labeled spinner
  *  wrapping a best-effort async task (fix-prompt synthesis, dashboard sync). */

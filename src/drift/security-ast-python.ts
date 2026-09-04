@@ -214,7 +214,12 @@ const PERMISSION_AUTH = new Set(["IsAuthenticated", "IsAdminUser"]);
 // are specific multi-character tokens (slowapi, marshmallow) that no ordinary
 // middleware name contains by accident, so they never reintroduce the
 // Unlimited/Invalid class the bare substrings created.
-const MIDDLEWARE_RATE_SEGMENTS = new Set(["limit", "limits", "limiter", "throttle", "throttling"]);
+// The bare segment "limit" is NOT a rate-limit word on its own: a limit can be
+// a request-size limit (RequestSizeLimitMiddleware, BodyLimitMiddleware,
+// UploadLimitMiddleware) or a connection limit, none of which throttles request
+// rate. "RateLimit" / "rate_limit" is covered by RATE_NAMES, which requires the
+// "rate" prefix.
+const MIDDLEWARE_RATE_SEGMENTS = new Set(["limiter", "throttle", "throttling"]);
 const MIDDLEWARE_VAL_SEGMENTS = new Set(["validate", "validator", "validation"]);
 
 // ─── Body-signature lexicons (addendum: hook body classification) ────────────
