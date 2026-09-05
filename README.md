@@ -156,11 +156,36 @@ No MCP client? The five query tools above, everything except `init`, `enable`, a
 
 **VibeDrift pushes.** A scan finds drift after the code exists, and MCP only helps when the agent thinks to ask. Drift Sessions flags a drifting edit while your agent is still typing, asked or not.
 
-`vibedrift watch-session` rides inside a Claude Code session through the agent's own hooks, which Claude Code runs at session start, on each prompt, after each edit, after each Bash command, and when the session stops. With the plugin installed the hooks are already there and `vibedrift enable` (or `/vibedrift:setup`) is all it takes, writing no repo-local copy; `watch-session` installs them repo-locally for anyone without the plugin, and follows the live tape either way. When an edit diverges from the patterns your repo already follows, VibeDrift writes a one line advisory straight into the agent's context, so the agent can correct itself on the spot instead of waiting for a review it will never see.
+### Turn it on
+
+Run this once inside the project you want it for. Typing the command is the consent.
+
+```bash
+cd ~/your/project
+vibedrift enable
+```
+
+That is the whole setup. It records the activation and makes sure the hooks are in place, then gets out of your way: your next Claude Code session in that repo is watched, with nothing else to run and no terminal to keep open.
+
+To turn several repositories on at once, point `--dir` at the directory that holds them. It shows you the resolved path and asks you to confirm by typing, and it refuses your home directory and filesystem roots.
+
+```bash
+vibedrift enable --dir ~/work        # activates every repo underneath
+vibedrift watch-session --status     # is this repo set up?
+vibedrift decline                    # turn it off; reversible with enable
+```
+
+Drift Sessions ride inside a Claude Code session through the agent's own hooks, which Claude Code runs at session start, on each prompt, after each edit, after each Bash command, and when the session stops. When an edit diverges from the patterns your repo already follows, VibeDrift writes a one line advisory straight into the agent's context, so the agent can correct itself on the spot instead of waiting for a review it will never see.
+
+### Watch it happen (optional)
+
+`vibedrift enable` is all you need. If you also want to see the session as it runs, `watch-session` opens a live event tape and follows along until you stop it. It is a viewer, not a second setup step, though it will install the hooks itself if the repo does not have them yet.
 
 ```bash
 vibedrift watch-session
 ```
+
+The two commands differ in one way worth knowing. `enable` will let the Claude Code plugin provide the hooks when the installed plugin ships them, so nothing is written into your repo. `watch-session` always writes the hooks into `.claude/settings.local.json` for that repo, and that copy then owns the capture.
 
 <div align="center">
 <img src="docs/media/drift-sessions-live-tape.gif" alt="The Drift Sessions live event tape: prompts, edits, and drift flags streaming in real time" width="840" />
