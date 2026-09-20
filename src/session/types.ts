@@ -35,6 +35,10 @@ export type SessionEventType =
   | "decision"
   | "session_end";
 
+/** Why an edit carries `checked: false`. Closed set: the dashboard turns each
+ *  of these into a sentence, and an unknown value is dropped at ingest. */
+export type CheckSkipReason = "no_baseline" | "too_large" | "not_code" | "out_of_repo" | "budget";
+
 export interface SessionEventDetail {
   file?: string;
   promptText?: string;
@@ -94,6 +98,18 @@ export interface SessionEvent {
    *  back as one workspace. An opaque id exactly like `projectHash`, never a
    *  path, and absent for a single-repo session. */
   workspaceKey?: string;
+  /** This repo's identity independent of WHERE it is checked out: sha256 of
+   *  the repo's first commit, truncated like a project hash. Two worktrees of
+   *  one repo share it, so the dashboard can group them instead of reading
+   *  them as strangers. Opaque, never a path. */
+  repoKey?: string;
+  /** This repo's own folder NAME ("billing-worker"), so a project a person
+   *  never scanned still reads as itself rather than as a hash. Never a path
+   *  and never a file name. */
+  projectName?: string;
+  /** Why the in-loop check did not run on this edit, so a zero is never
+   *  mistaken for "looked and found nothing". */
+  checkReason?: CheckSkipReason;
   /** Which side of the conversation produced the event. */
   channel: "hook" | "mcp";
   type: SessionEventType;

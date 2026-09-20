@@ -35,6 +35,11 @@ export const BASH_CHECK_BUDGET_MS = 1200;
  * cooldown, the file-name manifest — is keyed on the scope, never on the folder
  * the agent happened to start in.
  */
+/** A repo folder name we are willing to put on the wire: no separator, no
+ *  control or format characters, bounded. Mirrors the wire's own rule in
+ *  upload-schema.ts, and a name that fails it is simply not sent. */
+const PROJECT_NAME_SHAPE = /^[^/\\\p{C}]{1,64}$/u;
+
 interface Scope {
   rootDir: string;
   projectHash: string;
@@ -222,7 +227,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
   const [
     { appendEvent, newActivityId, sessionFilePath },
     { normalizeHookPayload },
-    { repoIdentity, repoOwningFile, defaultSessionsDir },
+    { repoIdentity, repoOwningFile, defaultSessionsDir, hashRepoKey, repoKey },
     { runEditChecks, HOOK_BASELINE_MAX_BYTES },
     { processPrompt, checkScope },
     { recheckFile, detectRevert, readOutcomeState, writeOutcomeState },
@@ -464,6 +469,38 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     return ok;
   };
 
+  /**
+   * A scope's two labels, worked out once per process.
+   *
+   * `projectName` is the repo's own folder name, and nothing more: it exists so
+   * a repo nobody has scanned still reads as itself on the dashboard instead of
+   * as a hash. `repoKey` is that repo's identity across checkouts, hashed so it
+   * stays opaque on the wire — two worktrees of one repo carry the same one and
+   * can be grouped, without it ever becoming the id that keys anything, which
+   * would re-salt every file pseudonym already uploaded.
+   *
+   * `repoKey()` shells out to git, so the cache matters: it runs at most once
+   * per repo per hook call, and never on the path of an edit that is not
+   * recorded.
+   */
+  const labelCache = new Map<string, { repoKey?: string; projectName?: string }>();
+  const scopeLabel = (scope: Scope): { repoKey?: string; projectName?: string } => {
+    const cached = labelCache.get(scope.projectHash);
+    if (cached) return cached;
+    let label: { repoKey?: string; projectName?: string } = {};
+    try {
+      const name = basename(scope.rootDir);
+      label = {
+        repoKey: hashRepoKey(repoKey(scope.rootDir)),
+        ...(PROJECT_NAME_SHAPE.test(name) ? { projectName: name } : {}),
+      };
+    } catch {
+      // fail-open: an unlabelled scope is still a recorded scope
+    }
+    labelCache.set(scope.projectHash, label);
+    return label;
+  };
+
   /** Remember, once per scope per process, that this session wrote into that
    *  repo. The Stop hook reads it to learn the patterns of every repo the
    *  session touched; it is local state beside the ledgers and never uploaded
@@ -484,6 +521,9 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
   const record = async (scope: Scope, ev: SessionEvent): Promise<void> => {
     ev.projectHash = scope.projectHash;
     if (scope.workspaceKey) ev.workspaceKey = scope.workspaceKey;
+    const label = scopeLabel(scope);
+    if (label.repoKey) ev.repoKey = label.repoKey;
+    if (label.projectName) ev.projectName = label.projectName;
     await appendEvent(sessionsDir, scope.projectHash, ev.sid, ev);
     await noteScope(scope);
   };
@@ -579,6 +619,11 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
       });
     }
     event.detail.checked = editCheck?.checked ?? false;
+    // An edit with no body to check (a delete, a tool shape we do not read) is
+    // out of the check's reach rather than blocked by a repo state, so it says
+    // so plainly instead of borrowing one of the repo-state reasons.
+    const skipReason = editCheck ? editCheck.reason : ("out_of_repo" as const);
+    if (!event.detail.checked && skipReason) event.checkReason = skipReason;
     await record(scope, event);
     if (!body || !event.detail.file) return null;
     const relFile = event.detail.file;

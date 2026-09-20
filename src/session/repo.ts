@@ -13,6 +13,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { vibedriftHome } from "../core/vibedrift-home.js";
@@ -80,6 +81,18 @@ export function repoOwningFile(filePath: string): { rootDir: string; projectHash
  * Never throws, and never used to decide what is captured — only to link this
  * machine's own records for one repo across its project hashes.
  */
+/**
+ * `repoKey` as an opaque id, in the same 16-hex shape as a project hash.
+ *
+ * The raw key is either a commit sha or, when git cannot answer, `path:` plus
+ * a machine path — which must never leave the machine. Hashing makes one shape
+ * of both and keeps the promise the wire makes about ids: a consumer can tell
+ * that two checkouts are one repo, and can learn nothing else from it.
+ */
+export function hashRepoKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+
 export function repoKey(rootDir: string): string {
   try {
     const out = execFileSync("git", ["rev-list", "--max-parents=0", "HEAD"], {

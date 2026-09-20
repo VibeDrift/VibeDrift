@@ -21,7 +21,7 @@ import { detectDrift } from "./detect.js";
 import type { AnchorSite, FindingAnchor } from "./finding-anchor.js";
 import { newActivityId, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
-import type { SessionEvent } from "./types.js";
+import type { CheckSkipReason, SessionEvent } from "./types.js";
 import { directoryOf, isInLoopCheckable } from "../drift/utils.js";
 import { verifyCounterpart } from "./counterpart.js";
 import { writeFileAtomic } from "./atomic-write.js";
@@ -138,6 +138,10 @@ export interface EditCheckOptions {
 export interface EditCheckOutcome {
   flags: SessionEvent[];
   fyi: string | null;
+  /** Why the check did not run, when it did not. The dashboard turns each of
+   *  these into a sentence, so a repo with no patterns yet is never reported
+   *  the same way as a repo that was looked at and came back clean. */
+  reason?: CheckSkipReason;
   /** the baseline that was loaded (if any), so callers can reuse it for the
    *  finding-scoped outcome re-check without loading it twice */
   baseline: RepoDriftBaseline | null;
@@ -233,16 +237,6 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineUnchecked(rootDir, HOOK_BASELINE_MAX_BYTES));
   const now = opts.now ?? Date.now;
 
-  let baseline: RepoDriftBaseline | null;
-  try {
-    baseline = await load(opts.rootDir);
-  } catch {
-    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false };
-  }
-  if (!baseline) {
-    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false };
-  }
-
   // Forward slashes on every platform: the baseline stores its relative paths
   // that way (core/discovery.ts) and so does the edit event the hook records,
   // so a Windows separator here would both miss the baseline and hash a flag to
@@ -260,9 +254,25 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   // on purpose, so judging them against application conventions is measurably
   // wrong: 8 of 21 findings in the recorded population landed on such files and
   // every one was a false positive.
+  //
+  // Judged BEFORE the baseline is loaded: whether a file is checkable is a
+  // property of the file, not of the repo's state, so a prose edit in a repo
+  // that has no patterns yet says "not code" rather than "no baseline" — and
+  // no baseline is read to answer it.
   if (detectLanguage(relPath) === null || !isInLoopCheckable(relPath)) {
-    return { flags: [], fyi: null, notice: null, baseline, anchors: {}, checked: false };
+    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false, reason: "not_code" };
   }
+
+  let baseline: RepoDriftBaseline | null;
+  try {
+    baseline = await load(opts.rootDir);
+  } catch {
+    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false, reason: "no_baseline" };
+  }
+  if (!baseline) {
+    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false, reason: "no_baseline" };
+  }
+
 
   // Size gate, with the directory fallback (issue #118). The cost is the LCS
   // pass over the duplicate index, about 0.1 ms per entry, so a workspace-sized
@@ -294,7 +304,7 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
           inDir: sameDir.length,
         });
       }
-      return { flags: [], fyi: null, notice, baseline: null, anchors: {}, checked: false };
+      return { flags: [], fyi: null, notice, baseline: null, anchors: {}, checked: false, reason: "too_large" };
     }
     indexed = sameDir;
     scopedToDir = true;

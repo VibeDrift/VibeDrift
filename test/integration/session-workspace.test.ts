@@ -154,6 +154,47 @@ describe("one session, many repos (integration)", () => {
     expect(events(home, repoIdentity(workspace).projectHash, sid)).toEqual([]);
   });
 
+  it("labels each repo with its own name and a cross-checkout identity", () => {
+    // Without these two a repo nobody scanned reads as "project 396c5243", and
+    // two worktrees of one repo read as two unrelated projects.
+    const { home, workspace, alpha, beta } = stage();
+    grant(home, workspace);
+    const sid = "it-ws-labels";
+    expect(runHook(home, writeFileEvent(workspace, sid, join(alpha, "src", "a.ts"), BODY)).status).toBe(0);
+    expect(runHook(home, writeFileEvent(workspace, sid, join(beta, "src", "b.ts"), BODY)).status).toBe(0);
+
+    const [aEdit] = events(home, repoIdentity(alpha).projectHash, sid).filter((e) => e.type === "edit");
+    const [bEdit] = events(home, repoIdentity(beta).projectHash, sid).filter((e) => e.type === "edit");
+
+    expect(aEdit.projectName).toBe("alpha");
+    expect(bEdit.projectName).toBe("beta");
+    // opaque on the wire: an id, never a path
+    expect(aEdit.repoKey).toMatch(/^[0-9a-f]{16}$/);
+    expect(bEdit.repoKey).toMatch(/^[0-9a-f]{16}$/);
+    // different repos, different identities
+    expect(aEdit.repoKey).not.toBe(bEdit.repoKey);
+  });
+
+  it("says WHY an edit went unchecked, rather than leaving a bare zero", () => {
+    const { home, workspace, alpha } = stage();
+    grant(home, workspace);
+    const sid = "it-ws-reason";
+    // a repo with no baseline: recorded, unchecked, and it says so
+    expect(runHook(home, writeFileEvent(workspace, sid, join(alpha, "src", "a.ts"), BODY)).status).toBe(0);
+    const [code] = events(home, repoIdentity(alpha).projectHash, sid).filter((e) => e.type === "edit");
+    expect(code.detail.checked).toBe(false);
+    expect(code.checkReason).toBe("no_baseline");
+
+    // prose is out of the check's reach for a different reason, and says that
+    expect(
+      runHook(home, writeFileEvent(workspace, sid, join(alpha, "NOTES.md"), "# notes\n")).status,
+    ).toBe(0);
+    const prose = events(home, repoIdentity(alpha).projectHash, sid)
+      .filter((e) => e.type === "edit")
+      .pop();
+    expect(prose.checkReason).toBe("not_code");
+  });
+
   it("covers a repo nested inside the active repo the agent is running in", () => {
     // A vendored checkout or an example app under a project someone activated
     // is part of that project: asking again per nested checkout would be a
