@@ -306,6 +306,25 @@ program
   });
 
 program
+  .command("respond")
+  .description(
+    "Drift Sessions: record YOUR call on a flag (accept, park or decline), the same way the agent's respond_to_flag does",
+  )
+  .argument("<flag>", "the flag id from the advisory, e.g. DF-1")
+  .argument("<decision>", "accept | park | decline")
+  .argument("[path]", "path to project directory", ".")
+  .option("--reason <text>", "one line on why; stays on this machine unless team sharing is on")
+  .option("--json", "machine-readable output")
+  .action(async (flag: string, decision: string, path: string, options) => {
+    const { runRespond } = await import("./commands/respond.js");
+    const status = await runRespond(flag, decision, path, {
+      reason: options.reason,
+      json: options.json === true,
+    });
+    if (status !== "ok") process.exitCode = 1;
+  });
+
+program
   .command("recheck-session")
   .description(
     "Drift Sessions: re-check this repo's open findings against the tree as it stands and clear the ones whose flagged construct is gone (recorded as cleared on re-check, apart from in-loop fixes)",
