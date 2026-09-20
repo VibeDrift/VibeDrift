@@ -5,15 +5,19 @@
  * the caller gets an empty outcome rather than an exception.
  *
  * Phase 0 measurement: the check scales ~0.1ms per indexed function, so the
- * inline path is gated to baselines at or under INLINE_CHECK_MAX_ENTRIES;
- * larger repos record the edit and stay quiet (deferred checking is a later
- * phase).
+ * queried index is gated to INLINE_CHECK_MAX_ENTRIES entries. A repo over that
+ * is no longer silently skipped: the comparison set falls back to the edited
+ * file's OWN DIRECTORY, which is where the dominant pattern lives anyway (the
+ * dimension votes are already read per directory, and `get_dominant_pattern`
+ * takes a path for the same reason). Only when that is over the gate too does
+ * the check skip, and then it says so once instead of going quiet.
  */
 
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { loadBaselineUnchecked, type RepoDriftBaseline } from "../core/baseline.js";
+import { loadBaselineUnchecked, type RepoDriftBaseline, type MinhashEntry } from "../core/baseline.js";
 import { detectLanguage } from "../core/language.js";
+import { directoryOf } from "../drift/utils.js";
 import { detectDrift } from "./detect.js";
 import type { AnchorSite, FindingAnchor } from "./finding-anchor.js";
 import { newActivityId, safeSegment } from "./ledger.js";
@@ -68,6 +72,10 @@ export function rankAdvisoryCandidates(candidates: AdvisoryCandidate[]): Advisor
 export interface CooldownState {
   nextFindingSeq: number;
   lastFyi: Record<string, number>;
+  /** The "checks are paused here" line was already delivered for this session
+   *  and repo. Not a timed cooldown: it is a fact about the repo's size that
+   *  will not change mid-session, so it is said once and then never again. */
+  pausedNoticed?: boolean;
 }
 
 /** Merge two cooldown snapshots (this write's local state and whatever is
@@ -86,6 +94,8 @@ export function mergeCooldownState(local: CooldownState, onDisk: CooldownState):
   return {
     nextFindingSeq: Math.max(local.nextFindingSeq, onDisk.nextFindingSeq),
     lastFyi,
+    // Once either writer has said it, it stays said.
+    ...(local.pausedNoticed || onDisk.pausedNoticed ? { pausedNoticed: true } : {}),
   };
 }
 
@@ -139,6 +149,12 @@ export interface EditCheckOutcome {
    *  clean); false when it was skipped (missing/oversized baseline, load or
    *  detect error). The honest denominator for drift density (P1.7). */
   checked: boolean;
+  /** A one-off operational line for the agent, delivered once per session per
+   *  repo and never repeated: today the only one is "this repo is too large to
+   *  check in the loop". It is not a finding, carries no finding id, and never
+   *  asks for a decision — it exists so a repo that cannot be checked says so
+   *  instead of looking clean. */
+  notice: string | null;
 }
 
 function statePath(opts: EditCheckOptions): string {
@@ -156,6 +172,7 @@ async function readState(opts: EditCheckOptions): Promise<CooldownState> {
     return {
       nextFindingSeq: typeof parsed.nextFindingSeq === "number" ? parsed.nextFindingSeq : 1,
       lastFyi: parsed.lastFyi && typeof parsed.lastFyi === "object" ? parsed.lastFyi : {},
+      ...(parsed.pausedNoticed === true ? { pausedNoticed: true } : {}),
     };
   } catch {
     return { nextFindingSeq: 1, lastFyi: {} };
@@ -198,6 +215,21 @@ async function readFileOrNull(path: string): Promise<string | null> {
 // caller's read and its write, which no public entry point can interleave.
 export const __test_writeCooldownState = writeState;
 
+/**
+ * The line an agent gets when a repo is too large to check in the loop, even
+ * after narrowing to the edited file's own directory. Numbers are the real
+ * measured ones, never a round-up: the point is that "no flags here" is not the
+ * same claim as "this code was looked at".
+ */
+export function formatChecksPausedNotice(a: { dir: string; indexed: number; inDir: number }): string {
+  const where = a.dir === "." ? "the repo root" : a.dir;
+  return (
+    `[vibedrift] checks are paused in this repo for this session: its index holds ${a.indexed} functions ` +
+    `and ${where} alone holds ${a.inDir}, both past the ${INLINE_CHECK_MAX_ENTRIES} the in-loop check can ` +
+    `compare inside a hook. Edits here are still recorded, marked as not checked.`
+  );
+}
+
 export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOutcome> {
   const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineUnchecked(rootDir, HOOK_BASELINE_MAX_BYTES));
   const now = opts.now ?? Date.now;
@@ -206,10 +238,10 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   try {
     baseline = await load(opts.rootDir);
   } catch {
-    return { flags: [], fyi: null, baseline: null, anchors: {}, checked: false };
+    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false };
   }
-  if (!baseline || baseline.minhashIndex.length > INLINE_CHECK_MAX_ENTRIES) {
-    return { flags: [], fyi: null, baseline: null, anchors: {}, checked: false };
+  if (!baseline) {
+    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false };
   }
 
   // Forward slashes on every platform: the baseline stores its relative paths
@@ -230,8 +262,46 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   // wrong: 8 of 21 findings in the recorded population landed on such files and
   // every one was a false positive.
   if (detectLanguage(relPath) === null || !isInLoopCheckable(relPath)) {
-    return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
+    return { flags: [], fyi: null, notice: null, baseline, anchors: {}, checked: false };
   }
+
+  // Size gate, with the directory fallback (issue #118). The cost is the LCS
+  // pass over the duplicate index, about 0.1 ms per entry, so a workspace-sized
+  // index would outrun the hook's 2 s watchdog. Rather than go quiet, narrow the
+  // comparison set to the edited file's OWN DIRECTORY: the dimension votes are
+  // already read per directory (validate-change's effectiveDominant), so the
+  // only thing narrowing costs is a duplicate whose twin lives in another
+  // directory — a smaller loss than checking nothing at all. The narrowed
+  // baseline is also what the caller gets back, so the finding-scoped re-check
+  // stays inside the same bound and can only ever re-check findings raised
+  // against this very file (recheckFile filters to it).
+  let indexed: MinhashEntry[] = baseline.minhashIndex;
+  const editedDir = directoryOf(relPath);
+  let scopedToDir = false;
+  if (indexed.length > INLINE_CHECK_MAX_ENTRIES) {
+    const sameDir = indexed.filter((e) => directoryOf(e.relativePath) === editedDir);
+    if (sameDir.length > INLINE_CHECK_MAX_ENTRIES) {
+      // Nothing can be compared in time. Say so ONCE per session and repo, then
+      // stay quiet: silence here is what made "0 flags" unreadable on a large
+      // repo (#118). `checked` stays false, which is the honest answer.
+      const state = await readState(opts);
+      let notice: string | null = null;
+      if (!state.pausedNoticed) {
+        state.pausedNoticed = true;
+        await writeState(opts, state);
+        notice = formatChecksPausedNotice({
+          dir: editedDir,
+          indexed: indexed.length,
+          inDir: sameDir.length,
+        });
+      }
+      return { flags: [], fyi: null, notice, baseline: null, anchors: {}, checked: false };
+    }
+    indexed = sameDir;
+    scopedToDir = true;
+  }
+  const scopedBaseline: RepoDriftBaseline =
+    scopedToDir ? { ...baseline, minhashIndex: indexed } : baseline;
 
   // The session overlay: functions this session has written, signed like the
   // baseline's, so a duplicate of something written minutes ago is seen even
@@ -244,18 +314,23 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
   // promises: the overlay fills only the headroom under INLINE_CHECK_MAX_ENTRIES,
   // newest files first (measured ~0.35 ms per overlay entry on the hook path,
   // so an unbounded merge near the gate would outrun the 2s watchdog).
-  const headroom = Math.max(0, INLINE_CHECK_MAX_ENTRIES - baseline.minhashIndex.length);
-  const all = overlayEntriesExcept(overlay, relPath);
+  const headroom = Math.max(0, INLINE_CHECK_MAX_ENTRIES - indexed.length);
+  // In fallback mode the overlay narrows the same way the index did, so the
+  // promise "compared against this directory" holds for what the session wrote
+  // as well as for what the scan found.
+  const all = overlayEntriesExcept(overlay, relPath).filter(
+    (e) => !scopedToDir || directoryOf(e.relativePath) === editedDir,
+  );
   const extra = all.length > headroom ? all.slice(all.length - headroom) : all;
   const queried: RepoDriftBaseline =
-    extra.length > 0 ? { ...baseline, minhashIndex: [...baseline.minhashIndex, ...extra] } : baseline;
+    extra.length > 0 ? { ...scopedBaseline, minhashIndex: [...indexed, ...extra] } : scopedBaseline;
 
   let detected: ReturnType<typeof detectDrift>;
   try {
     detected = detectDrift(queried, relPath, opts.body);
   } catch {
     // the check errored, so it did NOT run — never report an errored edit as checked
-    return { flags: [], fyi: null, baseline, anchors: {}, checked: false };
+    return { flags: [], fyi: null, notice: null, baseline: scopedBaseline, anchors: {}, checked: false };
   }
   const conflictsByDim = detected.conflicts;
   const dupsByLoc = detected.dups;
@@ -370,5 +445,5 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     opts.sessionId,
     updateOverlay(overlay, relPath, overlayEntriesFor(relPath, current)),
   );
-  return { flags, fyi, baseline, anchors, checked: true };
+  return { flags, fyi, notice: null, baseline: scopedBaseline, anchors, checked: true };
 }

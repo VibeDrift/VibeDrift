@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoIdentity } from "@/session/repo";
@@ -17,6 +25,15 @@ const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 
 function tmp(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+/** Block the test thread without spinning (the seam child is a separate process). */
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function waitFor(cond: () => boolean, timeoutMs: number): void {
+  const until = Date.now() + timeoutMs;
+  while (!cond() && Date.now() < until) sleep(100);
 }
 
 function runHook(home: string, payload: unknown, extra: Record<string, string> = {}) {
@@ -148,4 +165,22 @@ describe("one session, many repos (integration)", () => {
     expect(events(home, repoIdentity(alpha).projectHash, sid)).toHaveLength(1);
   });
 
+  it("builds a baseline in the background for a touched repo that has none", () => {
+    const { home, workspace, alpha } = stage();
+    grant(home, workspace);
+    const sid = "it-ws-learn";
+    const marker = join(tmp("vd-ws-seam-"), "roots");
+    const seam = join(tmp("vd-ws-seam-"), "seam.sh");
+    writeFileSync(seam, `#!/usr/bin/env bash\nprintf '%s\\n' "$@" >> ${marker}\n`, { mode: 0o755 });
+    chmodSync(seam, 0o755);
+    const extra = { VIBEDRIFT_BASELINE_REBUILD_CMD: seam };
+
+    expect(runHook(home, writeFileEvent(workspace, sid, join(alpha, "src", "x.ts"), BODY), extra).status).toBe(0);
+    // nothing was checked: alpha has no baseline yet, and the ledger says so
+    expect(events(home, repoIdentity(alpha).projectHash, sid)[0].detail.checked).toBe(false);
+
+    expect(runHook(home, { session_id: sid, cwd: workspace, hook_event_name: "Stop" }, extra).status).toBe(0);
+    waitFor(() => existsSync(marker), 6000);
+    expect(readFileSync(marker, "utf8").trim().split("\n")).toContain(alpha);
+  });
 });

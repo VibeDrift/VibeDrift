@@ -117,15 +117,22 @@ export const REBUILD_MIN_INTERVAL_MS = 10 * 60_000;
 export const MAX_REBUILD_TARGETS = 4;
 
 /**
- * Spawn ONE detached baseline builder at Stop for the repos this session wrote
- * code the persisted baseline never saw (their overlay sidecar is non-empty)
- * and whose last rebuild is older than REBUILD_MIN_INTERVAL_MS.
+ * Spawn ONE detached baseline builder at Stop for the repos this session
+ * touched that need one. A repo qualifies on either count:
  *
- * It takes a LIST because one sitting can span several repos, and each of them
- * has its own baseline, its own overlay and its own interval stamp. The work is
- * a full scan run out of process (src/session/baseline-rebuild.ts), so the hook
- * returns at once; the next session's checks compare against a tree that
- * includes this one's work. Fail-open: any error means no rebuild.
+ *   - it has NO persisted baseline. Nothing in that repo could be checked this
+ *     session (the inline check needs a baseline and says so honestly), and
+ *     with the old rule — rebuild only when the session's overlay is non-empty
+ *     — it never would be, because the overlay is only written by a check that
+ *     ran. That is the loop this breaks: the first session in a repo records
+ *     unchecked edits, the builder learns its patterns while the turn ends, and
+ *     the next session is checked without anyone running a scan.
+ *   - its persisted baseline never saw what this session wrote (the overlay
+ *     sidecar for that repo is non-empty) — the original stale-baseline case.
+ *
+ * Either way the work is a full scan run out of process
+ * (src/session/baseline-rebuild.ts), so the hook returns at once, and each repo
+ * keeps its own interval stamp. Fail-open: any error means no rebuild.
  * `VIBEDRIFT_BASELINE_REBUILD_CMD` is a test seam (invoked with the roots).
  */
 async function maybeSpawnBaselineRebuild(
@@ -134,9 +141,10 @@ async function maybeSpawnBaselineRebuild(
   sid: string,
 ): Promise<void> {
   try {
-    const [{ readOverlay }, { safeSegment }] = await Promise.all([
+    const [{ readOverlay }, { safeSegment }, { baselineCachePath }] = await Promise.all([
       import("./overlay.js"),
       import("./ledger.js"),
+      import("../core/baseline.js"),
     ]);
     const { mkdir, writeFile } = await import("node:fs/promises");
     const now = Date.now();
@@ -144,8 +152,9 @@ async function maybeSpawnBaselineRebuild(
 
     for (const scope of scopes) {
       if (roots.length >= MAX_REBUILD_TARGETS) break;
+      const hasBaseline = existsSync(baselineCachePath(scope.rootDir));
       const overlay = await readOverlay(sessionsDir, scope.projectHash, sid);
-      if (overlay.files.size === 0) continue;
+      if (hasBaseline && overlay.files.size === 0) continue;
       const stampPath = join(sessionsDir, safeSegment(scope.projectHash), "baseline-rebuild.json");
       let lastMs = 0;
       try {
@@ -529,7 +538,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     await record(scope, event);
     if (!body || !event.detail.file) return null;
     const relFile = event.detail.file;
-    let fyi: string | null = null;
+    let fyi: string | null = editCheck?.notice ?? null;
     const outcomes = await readOutcomeState(sessionsDir, scope.projectHash, event.sid);
 
     if (checkAbsFile && editCheck) {

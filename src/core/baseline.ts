@@ -119,6 +119,14 @@ export function projectHash(rootDir: string): string {
   return createHash("sha256").update(rootDir).digest("hex").slice(0, 16);
 }
 
+/** Where this repo's baseline is persisted. Exported so a caller can ask
+ *  whether a repo has one at all: `loadBaselineUnchecked` answers null both for
+ *  "never built" and for "too big to read here", and the Stop-time background
+ *  builder has to tell those apart. */
+export function baselineCachePath(rootDir: string): string {
+  return join(CACHE_DIR, `${projectHash(rootDir)}.json`);
+}
+
 /**
  * Content merkle over (path, content-hash). Sorted by path so the key is
  * order-independent; prefixed with BASELINE_VERSION so a logic bump invalidates
@@ -312,7 +320,7 @@ export async function writeBaseline(b: RepoDriftBaseline): Promise<void> {
     ...b,
     minhashIndex: b.minhashIndex.map((e) => ({ ...e, signature: Array.from(e.signature) })),
   };
-  await writeFile(join(CACHE_DIR, `${projectHash(b.rootDir)}.json`), JSON.stringify(serial), "utf8");
+  await writeFile(baselineCachePath(b.rootDir), JSON.stringify(serial), "utf8");
 }
 
 /**
@@ -324,7 +332,7 @@ export async function writeBaseline(b: RepoDriftBaseline): Promise<void> {
  * baseline is persisted.
  */
 export async function deletePersistedBaseline(rootDir: string): Promise<void> {
-  await rm(join(CACHE_DIR, `${projectHash(rootDir)}.json`), { force: true });
+  await rm(baselineCachePath(rootDir), { force: true });
 }
 
 function hydrate(parsed: SerializedBaseline): RepoDriftBaseline {
@@ -341,7 +349,7 @@ function hydrate(parsed: SerializedBaseline): RepoDriftBaseline {
  *  cannot preempt a multi-MB JSON.parse, so an oversized cache reads as
  *  "no baseline" (a checked=false skip) rather than a session stall. */
 export async function loadBaselineUnchecked(rootDir: string, maxBytes?: number): Promise<RepoDriftBaseline | null> {
-  const path = join(CACHE_DIR, `${projectHash(rootDir)}.json`);
+  const path = baselineCachePath(rootDir);
   let raw: string;
   try {
     if (maxBytes !== undefined) {
