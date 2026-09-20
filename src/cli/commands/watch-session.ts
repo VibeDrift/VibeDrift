@@ -567,13 +567,16 @@ async function followLiveTape(
   onFirstEdit?: (sessionId: string) => void,
   upload?: UploadPlan,
 ): Promise<void> {
-  // Staleness honesty: convention/redundancy checks need a baseline. Scope drift
-  // still works without one, so this is a hint, not a blocker.
+  // Staleness honesty: convention/redundancy checks need a baseline, and this
+  // session will not have one. It is no longer a chore, though — the Stop hook
+  // learns this repo's patterns in the background once the session has recorded
+  // something, so the honest line is "this session, not forever". Scope drift
+  // works without a baseline either way, so this is a hint, not a blocker.
   try {
     const { loadBaselineUnchecked } = await import("../../core/baseline.js");
     if (!(await loadBaselineUnchecked(rootDir))) {
       console.log(
-        chalk.dim("  note: no baseline yet — run `vibedrift scan` for convention + duplicate checks (scope drift works without one)."),
+        chalk.dim("  note: no patterns learned yet — this session's edits are recorded but not checked; VibeDrift learns them in the background when the turn ends, and the next session is checked (`vibedrift scan` does it now)."),
       );
     }
   } catch {

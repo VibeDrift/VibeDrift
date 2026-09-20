@@ -156,26 +156,32 @@ No MCP client? The five query tools above, everything except `init`, `enable`, a
 
 **VibeDrift pushes.** A scan finds drift after the code exists, and MCP only helps when the agent thinks to ask. Drift Sessions flags a drifting edit while your agent is still typing, asked or not.
 
-### Turn it on
+### Turn it on, once
 
-Run this once inside the project you want it for. Typing the command is the consent.
+Point `--dir` at the folder you keep your work in. It shows you the resolved path and asks you to confirm by typing, and it refuses your home directory and filesystem roots.
+
+```bash
+vibedrift enable --dir ~/work        # every repo under it, including new ones
+```
+
+That is the whole setup, for every repo in that folder and every repo you clone into it later. There is nothing to initialize and no scan to run: a repo VibeDrift has not seen yet records its edits and marks them as not checked, learns its own patterns in the background when the turn ends, and is checked from the next session on.
+
+One repo at a time works the same way, and typing the command is the consent:
 
 ```bash
 cd ~/your/project
 vibedrift enable
-```
-
-That is the whole setup. It records the activation and makes sure the hooks are in place, then gets out of your way: your next Claude Code session in that repo is watched, with nothing else to run and no terminal to keep open.
-
-To turn several repositories on at once, point `--dir` at the directory that holds them. It shows you the resolved path and asks you to confirm by typing, and it refuses your home directory and filesystem roots.
-
-```bash
-vibedrift enable --dir ~/work        # activates every repo underneath
 vibedrift watch-session --status     # is this repo set up?
 vibedrift decline                    # turn it off; reversible with enable
 ```
 
 Drift Sessions ride inside a Claude Code session through the agent's own hooks, which Claude Code runs at session start, on each prompt, after each edit, after each Bash command, and when the session stops. When an edit diverges from the patterns your repo already follows, VibeDrift writes a one line advisory straight into the agent's context, so the agent can correct itself on the spot instead of waiting for a review it will never see.
+
+### One session, many repos
+
+An agent session that moves across several repos is one sitting, and each repo in it is tracked on its own. An edit belongs to the repo that owns the edited file, so it lands in that repo's ledger and is judged against that repo's patterns, never against whichever folder your agent happened to start in. Files that belong to no repo stay with the working folder, which gets a scope of its own.
+
+Consent stays per repo. A repo covered by your folder grant records, a repo where you typed `vibedrift decline` records nothing even inside that folder, and a repo nobody has answered for records nothing at all. Each repo you touch also gets its own patterns learned in the background, one repo at a time, so the setup work does not come back as the workspace grows.
 
 ### Watch it happen (optional)
 
@@ -197,11 +203,13 @@ Outcomes are real, not guessed. A finding is marked resolved only when the same 
 
 ### What it records, and where
 
-Everything lands in one append-only JSONL ledger per session:
+Everything lands in an append-only JSONL ledger, one per session per repo:
 
 ```
 ~/.vibedrift/sessions/<projectHash>/<sessionId>.jsonl
 ```
+
+A session that touched three repos therefore writes three ledgers, one under each repo's own id, and all three ship at the end of every turn.
 
 | Recorded | Never recorded |
 | --- | --- |
@@ -342,6 +350,7 @@ To gate locally instead, `vibedrift hook install` writes a git pre-push hook tha
 | `vibedrift watch [path]` | Re-scan and refresh `.vibedrift/` on file changes (Pro) |
 | `vibedrift watch-session [path]` | [Drift Sessions](#drift-sessions-preview), the live agent tape (preview) |
 | `vibedrift enable [path]` | [Drift Sessions](#drift-sessions-preview): activate this repo — typing this is the consent; records prompts (secrets masked) + edit metadata to a local ledger |
+| `vibedrift enable --dir <dir>` | Activate every repo under a folder, including ones added later — asks you to confirm the resolved path; refuses `$HOME` and filesystem roots |
 | `vibedrift decline [path]` | [Drift Sessions](#drift-sessions-preview): decline for this repo — never asked again, capture stays off (reverse anytime with `vibedrift enable`) |
 | `vibedrift recheck-session [path]` | Re-check open Drift Session findings against the tree; clears are recorded apart from in-loop fixes (`--dry-run`, `--session`, `--json`) |
 | `vibedrift mcp` | Run the [MCP server](#the-mcp-server-your-agent-asks) over stdio |
