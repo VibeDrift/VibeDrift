@@ -6,6 +6,10 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Added — you can answer a flag yourself
+
+- **`vibedrift respond DF-1 accept|park|decline`.** A flag could only ever be answered by the agent, through its `respond_to_flag` tool. That left one state with no way out of it: the agent parks a flag *for a person*, the dashboard says "waiting on you", and the person had nowhere to say anything — the dashboard reads the ledger and never writes to it, and there was no command here either. The loop asked a question it gave you no way to answer. Your call is now recorded exactly the way the agent's is: the same event in the same local ledger, shipped by the next flush, with an optional `--reason` that stays on your machine unless team sharing is on.
+
 ### Fixed — a running session reaches the dashboard while it is still running
 
 - **Your work no longer waits for the turn to end.** Drift Sessions shipped a turn's events when that turn finished, which is fine for a short exchange and wrong for a long one: an agent working for twenty minutes sent nothing until it stopped, so the dashboard showed a session that had gone quiet, and a live tape you were watching sat still while the work happened. A session that keeps editing now ships what it has about once a minute, alongside the flush at the end of the turn. Nothing else changes: the same detached child does the work, off the hook's critical path, and an upload that fails still costs you nothing and resumes on the next one.
