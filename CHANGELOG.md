@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed — a session that spans several repos now reaches the dashboard
+
+- **Every repo a session touched is uploaded, not just the one the turn ended in.** The per-turn flush took a single project, the repo the agent's working folder pointed at when the turn finished. An agent moving between repos in a workspace (or between two git worktrees of one repo) wrote a ledger per repo and shipped one of them; the rest sat on disk with nothing to show they existed, and the dashboard reported a fraction of the work as if it were all of it. The flush now drains the repos the session actually wrote to, newest first, then catches up any other repo with a backlog, capped per turn and inside one shared time budget. Offsets stay durable, so whatever does not fit goes next turn. On a real multi-repo day this moved 645 KB of stranded events across 19 repos down to 34 KB in one eight-second run.
+
 ## 0.20.3 — 2026-09-04
 
 ### Added — the in-loop duplicate check sees what the session wrote

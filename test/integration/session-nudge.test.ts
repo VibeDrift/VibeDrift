@@ -8,10 +8,10 @@ import { join } from "node:path";
 // on a CI runner one test takes 4 to 8 s, past vitest's default 5 s.
 vi.setConfig({ testTimeout: 60_000 });
 
-/** Write an executable shell script that records its first two argv into `marker`. */
+/** Write an executable shell script that records its first three argv into `marker`. */
 function markerScript(marker: string): string {
   const path = join(tmp("vd-flush-seam-"), "seam.sh");
-  writeFileSync(path, `#!/usr/bin/env bash\nprintf '%s %s' "$1" "$2" > ${marker}\n`, { mode: 0o755 });
+  writeFileSync(path, `#!/usr/bin/env bash\nprintf '%s %s %s' "$1" "$2" "$3" > ${marker}\n`, { mode: 0o755 });
   chmodSync(path, 0o755);
   return path;
 }
@@ -191,9 +191,11 @@ describe("Stop-hook session-flush spawn (integration)", () => {
       spawnSync("sleep", ["0.05"]);
     }
     expect(existsSync(marker)).toBe(true);
-    const [hash, dir] = readFileSync(marker, "utf8").split(" ");
+    const [hash, dir, sid] = readFileSync(marker, "utf8").split(" ");
     expect(hash).toMatch(/^[0-9a-f]{16}$/); // projectHash
     expect(dir).toContain(".vibedrift"); // sessionsDir
+    // the session id lets the child drain the other repos this session touched
+    expect(sid).toBe("end-1");
   });
 
   it("spawns nothing when hosted sync is off (local-only stays offline)", () => {

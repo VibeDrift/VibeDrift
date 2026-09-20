@@ -32,7 +32,11 @@ export const BASH_CHECK_BUDGET_MS = 1200;
  * Fail-open: any error just means no flush (watch-session / the next turn cover
  * delivery). `VIBEDRIFT_SESSION_FLUSH_CMD` is a test seam.
  */
-async function maybeSpawnFlush(projectHash: string, sessionsDir: string): Promise<void> {
+async function maybeSpawnFlush(
+  projectHash: string,
+  sessionsDir: string,
+  sessionId?: string,
+): Promise<void> {
   try {
     const [{ readConfig }, { shouldSync }] = await Promise.all([
       import("../auth/config.js"),
@@ -42,16 +46,24 @@ async function maybeSpawnFlush(projectHash: string, sessionsDir: string): Promis
     if (!shouldSync(cfg, false) || !cfg.token) return;
 
     const { spawn } = await import("node:child_process");
-    // Test seam: an executable path invoked with (projectHash, sessionsDir).
+    // Test seam: an executable path invoked with (projectHash, sessionsDir,
+    // sessionId). The id lets the child drain the OTHER repos this session
+    // wrote to first (session/flush-targets.ts).
+    const sidArgs = sessionId ? [sessionId] : [];
     const override = process.env.VIBEDRIFT_SESSION_FLUSH_CMD;
     const [cmd, args] = override
-      ? [override, [projectHash, sessionsDir]]
+      ? [override, [projectHash, sessionsDir, ...sidArgs]]
       : [
           process.execPath,
           // Every bundle entry lives one level under dist/ (cli/, session/), so
           // the sibling-tree math holds whether this module was inlined into the
           // hook entry or into the CLI (the `session-hook` subcommand).
-          [resolve(dirname(fileURLToPath(import.meta.url)), "..", "session", "session-flush.js"), projectHash, sessionsDir],
+          [
+            resolve(dirname(fileURLToPath(import.meta.url)), "..", "session", "session-flush.js"),
+            projectHash,
+            sessionsDir,
+            ...sidArgs,
+          ],
         ];
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
     child.unref();
@@ -286,7 +298,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
       }
     }
     if (normalized.type === "session_end") {
-      await maybeSpawnFlush(projectHash, defaultSessionsDir());
+      await maybeSpawnFlush(projectHash, defaultSessionsDir(), normalized.sid);
     }
     return 0;
   }
@@ -563,7 +575,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     // events so the dashboard streams live WITHOUT watch-session open. The hook
     // stays offline — it only spawns a detached child (fail-open, opt-in gated).
     if (event.type === "session_end") {
-      await maybeSpawnFlush(projectHash, sessionsDir);
+      await maybeSpawnFlush(projectHash, sessionsDir, event.sid);
       await maybeSpawnBaselineRebuild(rootDir, projectHash, sessionsDir, event.sid);
     }
 
