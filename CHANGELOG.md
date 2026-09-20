@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed — a running session reaches the dashboard while it is still running
+
+- **Your work no longer waits for the turn to end.** Drift Sessions shipped a turn's events when that turn finished, which is fine for a short exchange and wrong for a long one: an agent working for twenty minutes sent nothing until it stopped, so the dashboard showed a session that had gone quiet, and a live tape you were watching sat still while the work happened. A session that keeps editing now ships what it has about once a minute, alongside the flush at the end of the turn. Nothing else changes: the same detached child does the work, off the hook's critical path, and an upload that fails still costs you nothing and resumes on the next one.
+
 ## 0.21.0 — 2026-09-20
 
 ### Added — one session, many repos
