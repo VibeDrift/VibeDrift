@@ -224,3 +224,40 @@ describe("resolve via recheck", () => {
   });
 });
 
+
+describe("workspaceKey — one sitting, many repos", () => {
+  const base = {
+    v: 1 as const,
+    sid: "s1",
+    aid: "a1",
+    ts: "2026-09-19T12:00:00.000Z",
+    agent: "claude-code" as const,
+    projectHash: "aaaabbbbccccdddd",
+    channel: "hook" as const,
+    mode: "passive" as const,
+  };
+
+  it("carries the workspace hash on an edit that belongs to another repo", () => {
+    const u = toUploadEvent({
+      ...base,
+      workspaceKey: "feedfacefeedface",
+      type: "edit",
+      detail: { file: "src/x.ts", diffstat: "+3", checked: true },
+    });
+    expect(u).toMatchObject({ projectHash: "aaaabbbbccccdddd", workspaceKey: "feedfacefeedface" });
+  });
+
+  it("stays absent for a single-repo session", () => {
+    const u = toUploadEvent({ ...base, type: "edit", detail: { file: "src/x.ts" } });
+    expect(u).toBeTruthy();
+    expect("workspaceKey" in u!).toBe(false);
+  });
+
+  it("refuses anything that is not an opaque project hash, so a path can never ride in it", () => {
+    for (const bad of ["/Users/someone/work", "../work", "FEEDFACEFEEDFACE", "feedface", ""]) {
+      const u = toUploadEvent({ ...base, workspaceKey: bad, type: "edit", detail: { file: "src/x.ts" } });
+      expect(u).toBeTruthy();
+      expect("workspaceKey" in u!).toBe(false);
+    }
+  });
+});

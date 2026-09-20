@@ -86,7 +86,14 @@ export interface SessionEvent {
   /** ISO-8601 timestamp. */
   ts: string;
   agent: HostAgent;
+  /** The repo this event belongs to. For an edit that is the repo that OWNS the
+   *  edited file, which is not always the folder the agent is running in. */
   projectHash: string;
+  /** The session's own folder, as a project hash, stamped only when this event's
+   *  repo is a DIFFERENT one — so a sitting that spans three repos can be read
+   *  back as one workspace. An opaque id exactly like `projectHash`, never a
+   *  path, and absent for a single-repo session. */
+  workspaceKey?: string;
   /** Which side of the conversation produced the event. */
   channel: "hook" | "mcp";
   type: SessionEventType;

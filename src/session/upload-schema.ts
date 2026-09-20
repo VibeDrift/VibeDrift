@@ -54,6 +54,11 @@ export interface UploadEvent {
   ts: string;
   agent: HostAgent;
   projectHash: string;
+  /** The session's own folder as a project hash, present only when this event's
+   *  repo is a different one. Groups a multi-repo sitting server-side; an
+   *  opaque 16-hex id like `projectHash`, and validated as one below so no
+   *  future producer can ship a path in this field. */
+  workspaceKey?: string;
   type: UploadEventType;
   /** sha256(relPath)[:16] — group by file without revealing the path. */
   fileHash?: string;
@@ -103,6 +108,11 @@ const UPLOADABLE = new Set<SessionEventType>([
   "session_end",
 ]);
 
+/** The 16-hex shape a project hash takes. `workspaceKey` is copied onto the
+ *  wire only when it matches: the field is an opaque id by contract, and this
+ *  is the one place that can keep it one. */
+const PROJECT_HASH_RE = /^[0-9a-f]{16}$/;
+
 /** A per-repo grouping pseudonym for a path: salted by the project hash so the
  *  same file groups within a repo but a global path rainbow table can't reverse
  *  it. NUL separator so `a`+`bc` and `ab`+`c` never collide. */
@@ -143,6 +153,9 @@ export function toUploadEvent(ev: SessionEvent, opts: UploadMapOptions = {}): Up
     projectHash: ev.projectHash,
     type: ev.type as UploadEventType,
   };
+  if (typeof ev.workspaceKey === "string" && PROJECT_HASH_RE.test(ev.workspaceKey)) {
+    u.workspaceKey = ev.workspaceKey;
+  }
 
   switch (ev.type) {
     case "edit": {
