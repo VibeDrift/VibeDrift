@@ -83,7 +83,7 @@ export interface UploadEvent {
   /** resolve events only: "recheck" when the CLI's recheck-session command
    *  produced the resolve (a re-check against the tree, not the agent's next
    *  edit). Absent on hook resolves. */
-  via?: "recheck";
+  via?: "recheck" | "human";
   /** the +N line count only, never the diff. */
   diffLines?: number;
   /** edit events only: whether the inline drift check actually ran on this
@@ -223,6 +223,11 @@ export function toUploadEvent(ev: SessionEvent, opts: UploadMapOptions = {}): Up
       if (ev.findingId) u.findingId = ev.findingId;
       if (d.decision === "accept" || d.decision === "park" || d.decision === "decline") u.decision = d.decision;
       if (opts.teamIntentOptIn && d.reason) u.reason = maskSecrets(d.reason).slice(0, MAX_REASON_LEN);
+      // A person's call, delivered back from the dashboard. It rides out
+      // even without team opt-in: WHO answered is not free text, and a
+      // dashboard that renders a person's judgement as the agent's would be
+      // stating something false about the agent.
+      if (d.via === "human") u.via = "human";
       break;
     }
     case "intent_lock": {

@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Added — your answer reaches the agent
+
+- **Answer a flag from the dashboard, and the agent gets it.** `vibedrift respond` let you answer a flag from the machine it happened on; this closes the other half. A call you make on the dashboard is queued, and the next time an agent works in that repo the CLI writes it into that repo's ledger beside the agent's own calls and puts it in front of the agent: what you decided, and why, in words it can act on. A session already running picks it up within about a minute; a session that starts tomorrow gets it as prior context, so nobody has to remember to repeat a decision that was already made. Your call is marked as yours, so nothing reports a person's judgement as the agent's.
+
 ## 0.21.1 — 2026-09-20
 
 ### Added — you can answer a flag yourself
