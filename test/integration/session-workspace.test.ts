@@ -5,8 +5,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -165,6 +167,31 @@ describe("one session, many repos (integration)", () => {
     expect(events(home, repoIdentity(alpha).projectHash, sid)).toHaveLength(1);
   });
 
+  it("attributes a Bash-made change to the repo that owns the file", () => {
+    // The Bash path walks the folder the agent runs in and has no tool payload
+    // to read a path from, so it is the easiest place for a workspace session to
+    // fall back to one project by accident.
+    const { home, workspace, alpha } = stage();
+    grant(home, workspace);
+    const sid = "it-ws-bash";
+    // one hook event first, so the per-session clock exists for the walk
+    expect(runHook(home, { session_id: sid, cwd: workspace, hook_event_name: "SessionStart", source: "startup" }).status).toBe(0);
+    const file = join(alpha, "src", "viaBash.ts");
+    writeFileSync(file, "export async function viaBash() {\n  return await fetch('/b');\n}\n");
+    const future = new Date(Date.now() + 2000);
+    utimesSync(file, future, future);
+    expect(runHook(home, { session_id: sid, cwd: workspace, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "..." } }).status).toBe(0);
+
+    const mine = events(home, repoIdentity(alpha).projectHash, sid).filter((e) => e.type === "edit");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({
+      workspaceKey: repoIdentity(workspace).projectHash,
+      detail: { file: "src/viaBash.ts", toolName: "Bash", inRepo: true },
+    });
+    // the workspace ledger holds the session events, never this repo's edit
+    expect(events(home, repoIdentity(workspace).projectHash, sid).some((e) => e.type === "edit")).toBe(false);
+  });
+
   it("builds a baseline in the background for a touched repo that has none", () => {
     const { home, workspace, alpha } = stage();
     grant(home, workspace);
@@ -182,5 +209,48 @@ describe("one session, many repos (integration)", () => {
     expect(runHook(home, { session_id: sid, cwd: workspace, hook_event_name: "Stop" }, extra).status).toBe(0);
     waitFor(() => existsSync(marker), 6000);
     expect(readFileSync(marker, "utf8").trim().split("\n")).toContain(alpha);
+  });
+
+  it("the background builder learns every repo it is handed, one after another", () => {
+    // The builder is spawned once with N roots. It used to read argv[2] alone,
+    // so the second repo of a two-repo session was silently never learned —
+    // which a test that only counts spawns cannot see.
+    const { home, alpha, beta } = stage();
+    for (const r of [alpha, beta]) {
+      writeFileSync(join(r, "src", "one.ts"), "export async function one() {\n  return await fetch('/one');\n}\n");
+    }
+    const r = spawnSync(TSX, [join(process.cwd(), "src", "session", "baseline-rebuild.ts"), alpha, beta], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      timeout: 60_000,
+    });
+    expect(r.status).toBe(0);
+    const cache = join(home, ".vibedrift", "baseline-cache");
+    const built = readdirSync(cache).sort();
+    expect(built).toEqual(
+      [`${repoIdentity(alpha).projectHash}.json`, `${repoIdentity(beta).projectHash}.json`].sort(),
+    );
+  });
+
+  it("never scans the workspace folder that holds the repos it just learned", () => {
+    const { home, workspace, alpha } = stage();
+    grant(home, workspace);
+    const sid = "it-ws-container";
+    const marker = join(tmp("vd-ws-seam2-"), "roots");
+    const seam = join(tmp("vd-ws-seam2-"), "seam.sh");
+    writeFileSync(seam, `#!/usr/bin/env bash\nprintf '%s\\n' "$@" >> ${marker}\n`, { mode: 0o755 });
+    chmodSync(seam, 0o755);
+    const extra = { VIBEDRIFT_BASELINE_REBUILD_CMD: seam };
+
+    // one edit in alpha, one loose file that belongs to the workspace itself
+    expect(runHook(home, writeFileEvent(workspace, sid, join(alpha, "src", "x.ts"), BODY), extra).status).toBe(0);
+    expect(runHook(home, writeFileEvent(workspace, sid, join(workspace, "notes.ts"), BODY), extra).status).toBe(0);
+    expect(runHook(home, { session_id: sid, cwd: workspace, hook_event_name: "Stop" }, extra).status).toBe(0);
+    waitFor(() => existsSync(marker), 6000);
+
+    const roots = readFileSync(marker, "utf8").trim().split("\n");
+    expect(roots).toContain(alpha);
+    // scanning the folder would re-scan alpha (and every other checkout) inside it
+    expect(roots).not.toContain(workspace);
   });
 });

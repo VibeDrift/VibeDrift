@@ -28,6 +28,48 @@ describe("SESSION_ACTIVE_WINDOW_MS", () => {
 });
 
 describe("teeMcpVerdict", () => {
+  it("carries the workspace this scope's own events already declare", async () => {
+    const sessionsDir = tmp();
+    const rootDir = tmp();
+    const hash = projectHash(rootDir);
+    // an edit recorded here by a session rooted in a wider workspace
+    await appendEvent(sessionsDir, hash, "live", {
+      ...ev("live"),
+      type: "edit",
+      projectHash: hash,
+      workspaceKey: "feedfacefeedface",
+      detail: { file: "src/a.ts" },
+    });
+
+    await teeMcpVerdict({
+      sessionsDir,
+      rootDir,
+      tool: "validate_change",
+      ask: "src/a.ts",
+      verdict: "in line",
+    });
+
+    const events = await readSessionEvents(sessionFilePath(sessionsDir, hash, "live"));
+    const teed = events.filter((e) => e.channel === "mcp");
+    expect(teed).toHaveLength(2);
+    for (const e of teed) {
+      expect(e.projectHash).toBe(hash);
+      expect(e.workspaceKey).toBe("feedfacefeedface");
+    }
+  });
+
+  it("stamps no workspace for a single-repo session", async () => {
+    const sessionsDir = tmp();
+    const rootDir = tmp();
+    const hash = projectHash(rootDir);
+    await appendEvent(sessionsDir, hash, "live", ev("live"));
+    await teeMcpVerdict({ sessionsDir, rootDir, tool: "check_file_drift", ask: "src/a.ts", verdict: "in line" });
+    const events = await readSessionEvents(sessionFilePath(sessionsDir, hash, "live"));
+    for (const e of events.filter((x) => x.channel === "mcp")) {
+      expect("workspaceKey" in e).toBe(false);
+    }
+  });
+
   it("appends mcp_ask + mcp_verdict to the active session", async () => {
     const sessionsDir = tmp();
     const rootDir = tmp();

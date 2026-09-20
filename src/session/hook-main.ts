@@ -10,7 +10,7 @@
  * delivers an advisory (2). Callers own process.exit.
  */
 
-import { relative, resolve, isAbsolute, basename, dirname, join } from "node:path";
+import { relative, resolve, isAbsolute, basename, dirname, join, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
@@ -149,10 +149,21 @@ async function maybeSpawnBaselineRebuild(
     const { mkdir, writeFile } = await import("node:fs/promises");
     const now = Date.now();
     const roots: string[] = [];
+    /** Does this scope CONTAIN another repo this session recorded into? */
+    const holdsAnother = (root: string): boolean =>
+      scopes.some((s) => s.rootDir !== root && s.rootDir.startsWith(root + sep));
 
     for (const scope of scopes) {
       if (roots.length >= MAX_REBUILD_TARGETS) break;
       const hasBaseline = existsSync(baselineCachePath(scope.rootDir));
+      // A workspace folder that holds the repos the session edited is a
+      // container, not a project waiting to be learned: scanning it would scan
+      // every repo inside it again, which on a folder of checkouts is minutes
+      // of work for an index nothing wants. Its own loose files stay recorded
+      // and honestly marked unchecked. If such a folder ever gets a baseline
+      // deliberately (someone ran a scan on it), the stale arm below still
+      // keeps it fresh, exactly as before.
+      if (!hasBaseline && holdsAnother(scope.rootDir)) continue;
       const overlay = await readOverlay(sessionsDir, scope.projectHash, sid);
       if (hasBaseline && overlay.files.size === 0) continue;
       const stampPath = join(sessionsDir, safeSegment(scope.projectHash), "baseline-rebuild.json");

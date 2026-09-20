@@ -5,10 +5,10 @@
  * active session for the repo. No active session -> no-op. Fail-open.
  */
 
-import { readdir, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { projectHash, canonicalizeRoot } from "../core/baseline.js";
-import { appendEvent, newActivityId, safeSegment } from "./ledger.js";
+import { appendEvent, newActivityId, parseJsonlLines, safeSegment } from "./ledger.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
 
@@ -59,6 +59,45 @@ export async function listActiveSessions(
   return out.sort((a, b) => b.mtime - a.mtime);
 }
 
+/** How much of a ledger's tail to read looking for the scope's workspace key.
+ *  A read, not a parse of the whole file: a long session's ledger runs to
+ *  megabytes and an MCP tool call should not pay for that. */
+const TAIL_BYTES = 16 * 1024;
+
+/**
+ * The workspace this scope's events already carry, if any.
+ *
+ * An MCP verdict joins the ledger of the repo the tool was asked about, which
+ * is the same repo that owns an edit to one of its files — the tee has followed
+ * the per-repo rule all along, because the tools take a rootDir. What it cannot
+ * know on its own is whether that repo is part of a wider sitting, so it reads
+ * the answer off the events already in the ledger rather than inventing one.
+ * Absent (a single-repo session, or a scope whose events predate the field)
+ * simply means nothing is stamped, which reads as "its own workspace".
+ *
+ * Fail-open: any error means no stamp.
+ */
+async function workspaceKeyOf(filePath: string): Promise<string | undefined> {
+  let handle;
+  try {
+    handle = await open(filePath, "r");
+    const { size } = await handle.stat();
+    const length = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.alloc(length);
+    await handle.read(buf, 0, length, size - length);
+    // The first line of a mid-file read is usually a fragment; parseJsonlLines
+    // drops what will not parse, which is exactly the right behaviour here.
+    for (const ev of parseJsonlLines(buf.toString("utf8")).reverse()) {
+      if (typeof ev.workspaceKey === "string" && ev.workspaceKey.length > 0) return ev.workspaceKey;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
 async function activeSession(
   dir: string,
   now: number,
@@ -74,6 +113,8 @@ export async function teeMcpVerdict(opts: TeeOptions): Promise<void> {
     const session = await activeSession(dir, now);
     if (!session) return;
 
+    const workspaceKey = await workspaceKeyOf(join(dir, `${safeSegment(session.sid)}.jsonl`));
+
     const mk = (type: SessionEvent["type"], detail: SessionEvent["detail"], channel: "mcp"): SessionEvent => ({
       v: SESSIONS_SCHEMA_VERSION,
       sid: session.sid,
@@ -81,6 +122,7 @@ export async function teeMcpVerdict(opts: TeeOptions): Promise<void> {
       ts: new Date().toISOString(),
       agent: "claude-code",
       projectHash: hash,
+      ...(workspaceKey ? { workspaceKey } : {}),
       channel,
       type,
       mode: "passive",
