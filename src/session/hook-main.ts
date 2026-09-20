@@ -72,6 +72,28 @@ async function hasRepoLocalInstall(root: string): Promise<boolean> {
  * Fail-open: any error just means no flush (watch-session / the next turn cover
  * delivery). `VIBEDRIFT_SESSION_FLUSH_CMD` is a test seam.
  */
+/** Ship what the session has so far, if it has been a minute. The Stop hook
+ *  still flushes at the end of every turn; this keeps a LONG turn from going
+ *  dark in between (flush-cadence.ts). */
+async function maybeFlushMidTurn(
+  workspaceHash: string,
+  sessionsDir: string,
+  sessionId: string | undefined,
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const { dueForFlush, markFlushed } = await import("./flush-cadence.js");
+    const now = Date.now();
+    if (!dueForFlush(sessionsDir, workspaceHash, sessionId, now)) return;
+    // Stamp BEFORE spawning: a child that fails must not turn into a child
+    // per edit. The next window retries, and nothing was lost meanwhile.
+    markFlushed(sessionsDir, workspaceHash, sessionId, now);
+    await maybeSpawnFlush(workspaceHash, sessionsDir, sessionId);
+  } catch {
+    // fail-open: the turn's own Stop flush still ships everything.
+  }
+}
+
 async function maybeSpawnFlush(
   projectHash: string,
   sessionsDir: string,
@@ -829,7 +851,13 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
   let fyi: string | null = null;
   if (event.type === "edit") {
     // The repo that owns the file decides whether this edit is recorded at all.
-    if (await scopeCaptures(editScope)) fyi = await processEdit(editScope, event, body, checkAbsFile);
+    if (await scopeCaptures(editScope)) {
+      fyi = await processEdit(editScope, event, body, checkAbsFile);
+      // A turn can run for twenty minutes. Ship what is on disk so the
+      // dashboard sees the session while it is still happening, instead of
+      // learning about it once the turn ends.
+      await maybeFlushMidTurn(workspaceHash, sessionsDir, event.sid);
+    }
   } else {
     // Everything that is not an edit belongs to the sitting, so it belongs to
     // the workspace: a prompt has no file and therefore no repo of its own.
@@ -842,6 +870,8 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
       // Both children cover every repo this session touched, not just the
       // workspace: the flush keys on the session id (flush-targets.ts) and the
       // builder reads the session's own scope index.
+      const { markFlushed } = await import("./flush-cadence.js");
+      markFlushed(sessionsDir, workspaceHash, event.sid, Date.now());
       await maybeSpawnFlush(workspaceHash, sessionsDir, event.sid);
       const touched = await readSessionScopes(sessionsDir, workspaceHash, event.sid);
       await maybeSpawnBaselineRebuild(touched, sessionsDir, event.sid);

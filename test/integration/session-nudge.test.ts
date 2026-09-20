@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, rmSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -219,6 +219,44 @@ describe("Stop-hook session-flush spawn (integration)", () => {
     expect(dir).toContain(".vibedrift"); // sessionsDir
     // the session id lets the child drain the other repos this session touched
     expect(sid).toBe("end-1");
+  });
+
+  it("ships mid-turn too, so a long turn is not invisible until it ends", () => {
+    // Measured before this existed: batches reached the dashboard 14 to 25
+    // minutes apart, because the only flush was the one at the end of a turn.
+    const home = tmp("vd-flush-home-");
+    const repo = repoDir();
+    const marker = join(tmp("vd-flush-marker-"), "fired");
+    config(home, { token: "t", plan: "pro", sessionsSyncEnabled: true });
+    const seam = { VIBEDRIFT_SESSION_FLUSH_CMD: markerScript(marker) };
+
+    const edit = (n: number) =>
+      spawnSync(TSX, [ENTRY], {
+        input: JSON.stringify({
+          session_id: "mid-1",
+          cwd: repo,
+          hook_event_name: "PostToolUse",
+          tool_name: "Write",
+          tool_input: { file_path: join(repo, `f${n}.ts`), content: "export const a = 1;\n" },
+        }),
+        encoding: "utf8",
+        env: { ...process.env, HOME: home, USERPROFILE: home, VIBEDRIFT_HOOK_DEBUG: "", ...seam },
+        timeout: 30_000,
+      });
+
+    edit(1);
+    const deadline = Date.now() + 4000;
+    while (!existsSync(marker) && Date.now() < deadline) spawnSync("sleep", ["0.05"]);
+    expect(existsSync(marker)).toBe(true);
+    // Keyed on the session, so the child drains every repo it touched.
+    expect(readFileSync(marker, "utf8").split(" ")[2]).toBe("mid-1");
+
+    // And it does not fire again on the very next edit: one child per window,
+    // not one per keystroke.
+    rmSync(marker);
+    edit(2);
+    spawnSync("sleep", ["0.4"]);
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("spawns nothing when hosted sync is off (local-only stays offline)", () => {
