@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, realpathSync, renameSync, rmSync } from "node:f
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveRepoRoot, repoIdentity, repoKey, defaultSessionsDir } from "@/session/repo";
+import { resolveRepoRoot, repoIdentity, repoOwningFile, repoKey, defaultSessionsDir } from "@/session/repo";
 import { projectHash } from "@/core/baseline";
 
 const tmp = (prefix: string) => realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -27,6 +27,41 @@ describe("resolveRepoRoot", () => {
   it("falls back to the input dir when no .git exists", () => {
     const d = tmp("vd-norepo-");
     expect(resolveRepoRoot(d)).toBe(d);
+  });
+});
+
+describe("repoOwningFile", () => {
+  it("answers the repo the FILE lives in, not the one the agent started in", () => {
+    const a = tmp("vd-own-");
+    mkdirSync(join(a, ".git"));
+    mkdirSync(join(a, "src"), { recursive: true });
+    const owner = repoOwningFile(join(a, "src", "x.ts"));
+    expect(owner).toEqual({ rootDir: a, projectHash: projectHash(a) });
+  });
+
+  it("prefers a NESTED repo over the workspace above it", () => {
+    const ws = tmp("vd-own-ws-");
+    mkdirSync(join(ws, ".git"));
+    mkdirSync(join(ws, "sub", ".git"), { recursive: true });
+    mkdirSync(join(ws, "sub", "src"), { recursive: true });
+    expect(repoOwningFile(join(ws, "sub", "src", "x.ts"))?.rootDir).toBe(join(ws, "sub"));
+  });
+
+  it("answers null for a file that belongs to no repo (it stays with the workspace)", () => {
+    const d = tmp("vd-own-none-");
+    expect(repoOwningFile(join(d, "notes.ts"))).toBeNull();
+  });
+
+  it("resolves a real git worktree, whose .git is a FILE", () => {
+    const main = tmp("vd-own-wt-");
+    execFileSync("git", ["init", "-q"], { cwd: main });
+    execFileSync("git", ["config", "user.email", "t@e.st"], { cwd: main });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: main });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "root"], { cwd: main });
+    const wt = join(tmp("vd-own-wt-out-"), "linked");
+    execFileSync("git", ["worktree", "add", "-q", wt], { cwd: main });
+    mkdirSync(join(wt, "src"), { recursive: true });
+    expect(repoOwningFile(join(wt, "src", "x.ts"))?.rootDir).toBe(realpathSync(wt));
   });
 });
 

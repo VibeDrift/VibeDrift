@@ -224,3 +224,92 @@ describe("resolve via recheck", () => {
   });
 });
 
+
+describe("workspaceKey — one sitting, many repos", () => {
+  const base = {
+    v: 1 as const,
+    sid: "s1",
+    aid: "a1",
+    ts: "2026-09-19T12:00:00.000Z",
+    agent: "claude-code" as const,
+    projectHash: "aaaabbbbccccdddd",
+    channel: "hook" as const,
+    mode: "passive" as const,
+  };
+
+  it("carries the workspace hash on an edit that belongs to another repo", () => {
+    const u = toUploadEvent({
+      ...base,
+      workspaceKey: "feedfacefeedface",
+      type: "edit",
+      detail: { file: "src/x.ts", diffstat: "+3", checked: true },
+    });
+    expect(u).toMatchObject({ projectHash: "aaaabbbbccccdddd", workspaceKey: "feedfacefeedface" });
+  });
+
+  it("stays absent for a single-repo session", () => {
+    const u = toUploadEvent({ ...base, type: "edit", detail: { file: "src/x.ts" } });
+    expect(u).toBeTruthy();
+    expect("workspaceKey" in u!).toBe(false);
+  });
+
+  it("refuses anything that is not an opaque project hash, so a path can never ride in it", () => {
+    for (const bad of ["/Users/someone/work", "../work", "FEEDFACEFEEDFACE", "feedface", ""]) {
+      const u = toUploadEvent({ ...base, workspaceKey: bad, type: "edit", detail: { file: "src/x.ts" } });
+      expect(u).toBeTruthy();
+      expect("workspaceKey" in u!).toBe(false);
+    }
+  });
+});
+
+
+describe("scope labels on the wire", () => {
+  const base = {
+    v: 1 as const,
+    sid: "s1",
+    aid: "a1",
+    ts: "2026-09-20T10:00:00.000Z",
+    agent: "claude-code" as const,
+    projectHash: "0123456789abcdef",
+    channel: "hook" as const,
+    type: "edit" as const,
+    mode: "advisory" as const,
+    detail: { file: "src/a.ts", diffLines: 3, checked: false },
+  };
+
+  it("carries a repo key, a folder name and a skip reason", () => {
+    const u = toUploadEvent({
+      ...base,
+      repoKey: "fedcba9876543210",
+      projectName: "billing-worker",
+      checkReason: "no_baseline",
+    } as never);
+    expect(u?.repoKey).toBe("fedcba9876543210");
+    expect(u?.projectName).toBe("billing-worker");
+    expect(u?.checkReason).toBe("no_baseline");
+  });
+
+  it("refuses a repo key that is not opaque", () => {
+    // the shape is the promise: an id can never carry a path
+    for (const bad of ["/Users/sami/work/repo", "git:abc", "NOTHEX0123456789", ""]) {
+      expect(toUploadEvent({ ...base, repoKey: bad } as never)?.repoKey).toBeUndefined();
+    }
+  });
+
+  it("refuses a name that could be a path", () => {
+    const withNul = "bad" + String.fromCharCode(0) + "name";
+    for (const bad of ["work/billing-worker", "a\\b", "x".repeat(65), withNul]) {
+      expect(toUploadEvent({ ...base, projectName: bad } as never)?.projectName).toBeUndefined();
+    }
+  });
+
+  it("keeps the names people actually give repos", () => {
+    for (const good of ["billing-worker", "admin_console", "Vibedrift Landing Page", "r\u00e9seau"]) {
+      expect(toUploadEvent({ ...base, projectName: good } as never)?.projectName).toBe(good);
+    }
+  });
+
+  it("refuses a skip reason it does not know", () => {
+    expect(toUploadEvent({ ...base, checkReason: "because" } as never)?.checkReason).toBeUndefined();
+  });
+});

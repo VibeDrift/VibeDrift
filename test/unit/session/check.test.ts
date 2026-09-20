@@ -130,14 +130,85 @@ describe("runEditChecks", () => {
     );
   });
 
-  it("stays quiet when the baseline exceeds the inline threshold", async () => {
-    const padded: RepoDriftBaseline = {
-      ...baseline,
-      minhashIndex: Array.from({ length: INLINE_CHECK_MAX_ENTRIES + 1 }, () => baseline.minhashIndex[0]),
-    };
-    const out = await runEditChecks(opts({ sessionId: "s-big", loadBaselineFor: async () => padded }));
-    expect(out.flags).toEqual([]);
-    expect(out.fyi).toBeNull();
+  // ---- the size gate and its directory fallback (#118) --------------------
+
+  /** A baseline whose index is over the gate, padded in `dir`. */
+  const oversized = (dir: string): RepoDriftBaseline => ({
+    ...baseline,
+    minhashIndex: [
+      ...baseline.minhashIndex,
+      ...Array.from({ length: INLINE_CHECK_MAX_ENTRIES + 1 }, (_, i) => ({
+        ...baseline.minhashIndex[0],
+        relativePath: `${dir}/pad${i}.ts`,
+        name: `pad${i}`,
+      })),
+    ],
+  });
+
+  it("falls back to the edited file's own directory when the repo is over the gate", async () => {
+    // 2001 padding entries live in pad/, so the whole index is over the gate
+    // but src/lib/ — where this edit lands — is not. The check must RUN against
+    // that directory and flag the clone of src/lib/backoff.ts sitting in it.
+    const out = await runEditChecks(
+      opts({
+        sessionId: "s-fallback",
+        file: join(repo, "src", "lib", "retry.ts"),
+        body: HELPER_BODY,
+        loadBaselineFor: async () => oversized("pad"),
+      }),
+    );
+    expect(out.checked).toBe(true);
+    expect(out.notice).toBeNull();
+    expect(out.flags.map((f) => f.detail.category)).toContain("redundancy");
+    expect(out.flags.find((f) => f.detail.category === "redundancy")?.detail.similarTo).toBe(
+      "src/lib/backoff.ts:1",
+    );
+  });
+
+  it("the fallback really is the file's own directory: a clone one directory over is not compared", async () => {
+    // Same padded baseline, same duplicated body — but the edit lands in src/,
+    // and the only copy of it is indexed under src/lib/. A whole-index check
+    // would flag this; a directory-scoped one cannot, and says so by staying
+    // clean rather than by staying silent.
+    const out = await runEditChecks(
+      opts({
+        sessionId: "s-fallback-other-dir",
+        file: join(repo, "src", "retry.ts"),
+        body: HELPER_BODY,
+        loadBaselineFor: async () => oversized("pad"),
+      }),
+    );
+    expect(out.checked).toBe(true);
+    expect(out.flags.map((f) => f.detail.category)).not.toContain("redundancy");
+  });
+
+  it("skips, and says so exactly once, when the file's own directory is over the gate too", async () => {
+    const tooBig = async () => oversized("src/lib");
+    const first = await runEditChecks(
+      opts({
+        sessionId: "s-paused",
+        file: join(repo, "src", "lib", "retry.ts"),
+        body: HELPER_BODY,
+        loadBaselineFor: tooBig,
+      }),
+    );
+    expect(first.checked).toBe(false);
+    expect(first.flags).toEqual([]);
+    expect(first.notice).toContain("checks are paused in this repo");
+    expect(first.notice).toContain("src/lib");
+    // real numbers, not a round-up: index size and directory size
+    expect(first.notice).toContain(String(INLINE_CHECK_MAX_ENTRIES + 1 + baseline.minhashIndex.length));
+
+    const second = await runEditChecks(
+      opts({
+        sessionId: "s-paused",
+        file: join(repo, "src", "lib", "other.ts"),
+        body: HELPER_BODY,
+        loadBaselineFor: tooBig,
+      }),
+    );
+    expect(second.checked).toBe(false);
+    expect(second.notice).toBeNull();
   });
 
   it("stays quiet when no baseline exists", async () => {
@@ -168,10 +239,13 @@ describe("runEditChecks", () => {
     expect(out.checked).toBe(true);
   });
 
-  it("reports checked=false when the baseline exceeds the size gate", async () => {
+  it("reports checked=false when even the file's own directory is over the size gate", async () => {
     const padded: RepoDriftBaseline = {
       ...baseline,
-      minhashIndex: Array.from({ length: INLINE_CHECK_MAX_ENTRIES + 1 }, () => baseline.minhashIndex[0]),
+      minhashIndex: Array.from({ length: INLINE_CHECK_MAX_ENTRIES + 1 }, () => ({
+        ...baseline.minhashIndex[0],
+        relativePath: "src/pad.ts",
+      })),
     };
     const out = await runEditChecks(opts({ sessionId: "s-chk-big", loadBaselineFor: async () => padded }));
     expect(out.checked).toBe(false);

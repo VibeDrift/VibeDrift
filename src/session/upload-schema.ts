@@ -54,6 +54,20 @@ export interface UploadEvent {
   ts: string;
   agent: HostAgent;
   projectHash: string;
+  /** The session's own folder as a project hash, present only when this event's
+   *  repo is a different one. Groups a multi-repo sitting server-side; an
+   *  opaque 16-hex id like `projectHash`, and validated as one below so no
+   *  future producer can ship a path in this field. */
+  workspaceKey?: string;
+  /** The repo's identity across checkouts (see SessionEvent.repoKey): an
+   *  opaque 16-hex id, validated below like the others. */
+  repoKey?: string;
+  /** The repo's own folder name. The one field here that is words rather than
+   *  a hash, so it is bounded and separator-free by construction below: a name
+   *  is "billing-worker", never a path. */
+  projectName?: string;
+  /** Why the in-loop check did not run on this edit. */
+  checkReason?: string;
   type: UploadEventType;
   /** sha256(relPath)[:16] — group by file without revealing the path. */
   fileHash?: string;
@@ -103,6 +117,18 @@ const UPLOADABLE = new Set<SessionEventType>([
   "session_end",
 ]);
 
+/** A repo's own folder name: no separator, no traversal, no control or
+ *  format characters, and short. The shape IS the privacy boundary — it is what keeps
+ *  a path from ever riding out in a field that is supposed to be a name. */
+const PROJECT_NAME_RE = /^[^/\\\p{C}]{1,64}$/u;
+/** The closed set the dashboard knows how to phrase. */
+const CHECK_REASONS = new Set(["no_baseline", "too_large", "not_code", "out_of_repo", "budget"]);
+
+/** The 16-hex shape a project hash takes. `workspaceKey` is copied onto the
+ *  wire only when it matches: the field is an opaque id by contract, and this
+ *  is the one place that can keep it one. */
+const PROJECT_HASH_RE = /^[0-9a-f]{16}$/;
+
 /** A per-repo grouping pseudonym for a path: salted by the project hash so the
  *  same file groups within a repo but a global path rainbow table can't reverse
  *  it. NUL separator so `a`+`bc` and `ab`+`c` never collide. */
@@ -143,6 +169,18 @@ export function toUploadEvent(ev: SessionEvent, opts: UploadMapOptions = {}): Up
     projectHash: ev.projectHash,
     type: ev.type as UploadEventType,
   };
+  if (typeof ev.workspaceKey === "string" && PROJECT_HASH_RE.test(ev.workspaceKey)) {
+    u.workspaceKey = ev.workspaceKey;
+  }
+  if (typeof ev.repoKey === "string" && PROJECT_HASH_RE.test(ev.repoKey)) {
+    u.repoKey = ev.repoKey;
+  }
+  if (typeof ev.projectName === "string" && PROJECT_NAME_RE.test(ev.projectName)) {
+    u.projectName = ev.projectName;
+  }
+  if (typeof ev.checkReason === "string" && CHECK_REASONS.has(ev.checkReason)) {
+    u.checkReason = ev.checkReason;
+  }
 
   switch (ev.type) {
     case "edit": {

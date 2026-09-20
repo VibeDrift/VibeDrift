@@ -35,7 +35,7 @@ So a claim about this codebase is not finished until it clears four bars, in ord
 
 **Bar 1: the mechanism exists in isolation.** You can point at the code and explain why it behaves the way you say. This is the easy bar and it is where most reports stop being wrong.
 
-**Bar 2: the path is reachable in practice.** The code you found is actually executed on the path you claim. In this repo that is a real question, because a lot of code is gated: an analyzer's output can be cached, a detector can be registered but scored as hygiene, an inline session check silently no-ops above a baseline size. Reaching bar 1 without bar 2 is how you file a bug about code that never runs.
+**Bar 2: the path is reachable in practice.** The code you found is actually executed on the path you claim. In this repo that is a real question, because a lot of code is gated: an analyzer's output can be cached, a detector can be registered but scored as hygiene, an inline session check narrows its comparison set above a baseline size. Reaching bar 1 without bar 2 is how you file a bug about code that never runs.
 
 **Bar 3: there is a user-visible outcome.** Name what a user sees differently. A wrong finding. A missing finding. A score that moves. A crash. If you cannot name the observable, you have found a code smell, not a bug, and it belongs in a PR description rather than an issue.
 
@@ -608,7 +608,7 @@ These come from this project's own incident history, and each is anchored in cod
 
 **The hook entrypoint is fail-open by contract.** `src/session/hook-entry.ts:10-12` exits 0 on malformed input, unknown events, missing baseline, internal errors, and timeout, and exits 2 only to deliver an advisory. The `SELF_TIMEOUT_MS = 2000` self-timeout (declared at line 30) is armed at line 33, **before** the dynamic imports, on purpose. Do not add a static heavy import, a throw path, or a network call there. The in-memory edit body is destructured off at line 229, under the comment at line 228, and must never reach the ledger.
 
-**The inline session check silently no-ops on large repos.** `src/session/check.ts:106` skips when the baseline exceeds `INLINE_CHECK_MAX_ENTRIES = 2000` (`check.ts:23`). It reports no error. If you are testing session flags on a big codebase and see nothing, check this gate before hunting for a bug.
+**The inline session check narrows itself on large repos.** Above `INLINE_CHECK_MAX_ENTRIES = 2000` indexed functions, `src/session/check.ts` no longer compares against the whole index: it falls back to the entries in the edited file's own directory, and only skips when that is over the gate too (and then it says so once per session and repo). So on a big codebase a flag you expected may be missing because its counterpart lives in a different directory, not because the detector is wrong. `checked` still means the detection really ran; the narrowed baseline is also what the caller gets back, so the finding-scoped re-check stays inside the same bound.
 
 **`vitest` blanks `VIBEDRIFT_HOME` for the whole suite** (`vitest.config.ts:12`) because a developer's sandbox override leaking into tests was a reproduced HIGH finding, and test writes would land in the sandbox. Do not remove it, and do not write a test that depends on inheriting it.
 

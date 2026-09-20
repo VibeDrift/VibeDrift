@@ -74,6 +74,16 @@ export async function checkScope(
   sessionId: string,
   relFile: string,
   body: string,
+  /** Where this session's INTENT state lives, when it is not this repo.
+   *
+   *  The task a person typed is one task for the sitting, not one per repo: a
+   *  prompt carries no file, so it has no owning repo, and keying the lock per
+   *  repo would leave every repo but the session's own folder with no lock at
+   *  all — this check would then silently never run there. So the lock is
+   *  SESSION-scoped (the workspace's hash) while the flag it produces belongs to
+   *  the repo that owns the edited file. Defaults to `projectHash`, so a
+   *  single-repo session behaves exactly as before. */
+  stateHash: string = projectHash,
 ): Promise<ScopeResult> {
   // A path outside the repo root can never match a repo-relative intent anchor,
   // so it would flag on every edit by construction. Measured on the recorded
@@ -85,7 +95,7 @@ export async function checkScope(
   // in-repo edit over the second-edit threshold.
   if (relFile.startsWith("../") || relFile.startsWith("/")) return { flag: null, fyi: null };
 
-  const state = await readIntentState(sessionsDir, projectHash, sessionId);
+  const state = await readIntentState(sessionsDir, stateHash, sessionId);
   if (!state.locked) return { flag: null, fyi: null };
   if (editRelatesToAnchors(relFile, body, state.anchors)) return { flag: null, fyi: null };
   if (state.scopeFlagged.includes(relFile)) return { flag: null, fyi: null };
@@ -94,7 +104,7 @@ export async function checkScope(
   // Conservative: only the 2nd+ unrelated edit is flaggable.
   const flaggable = state.unrelatedEdits >= 2;
   if (flaggable) state.scopeFlagged.push(relFile);
-  await writeIntentState(sessionsDir, projectHash, sessionId, state);
+  await writeIntentState(sessionsDir, stateHash, sessionId, state);
   if (!flaggable) return { flag: null, fyi: null };
 
   const flag: SessionEvent = {
