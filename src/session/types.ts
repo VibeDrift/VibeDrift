@@ -78,7 +78,10 @@ export interface SessionEventDetail {
   /** resolve events only: "recheck" when `vibedrift recheck-session` cleared
    *  the finding by re-checking it against the tree, rather than the hook's
    *  own re-check on the agent's next edit. Consumers count those apart. */
-  via?: "recheck";
+  /** Who produced this outcome when it was not the agent's own next edit:
+   *  "recheck" is the recheck-session pass, "human" is a person answering a
+   *  flag from the dashboard. An untagged decision is the agent's own. */
+  via?: "recheck" | "human";
 }
 
 export interface SessionEvent {

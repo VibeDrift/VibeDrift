@@ -72,6 +72,57 @@ async function hasRepoLocalInstall(root: string): Promise<boolean> {
  * Fail-open: any error just means no flush (watch-session / the next turn cover
  * delivery). `VIBEDRIFT_SESSION_FLUSH_CMD` is a test seam.
  */
+/**
+ * Deliver answers a person queued on the dashboard into this repo's ledger,
+ * and put them in front of the agent.
+ *
+ * Runs on SessionStart (so a new agent inherits every ruling made since the
+ * last one) and, cadence-gated, on the edit path (so a running session picks
+ * up an answer within about a minute of it being given). The gate is shared
+ * with the flush, because both are "has it been a minute" questions and one
+ * marker answers both without a second file to reason about.
+ *
+ * Silent and total on failure: nobody's turn breaks because someone else's
+ * answer could not be fetched.
+ */
+async function deliverAnswers(
+  projectHash: string,
+  sessionsDir: string,
+  announce: boolean,
+): Promise<void> {
+  try {
+    const [{ readConfig }, { shouldSync }, { resolveApiUrl }, { deliverQueuedResponses, responseBriefing }] =
+      await Promise.all([
+        import("../auth/config.js"),
+        import("./uploader.js"),
+        import("../auth/resolver.js"),
+        import("./flag-responses.js"),
+      ]);
+    const cfg = await readConfig();
+    if (!shouldSync(cfg, false) || !cfg.token) return;
+
+    const written = await deliverQueuedResponses({
+      sessionsDir,
+      projectHash,
+      // resolveApiUrl, not the raw config value: it refuses to send a Bearer
+      // token to a plaintext endpoint, and this call carries one.
+      apiUrl: await resolveApiUrl(cfg.apiUrl),
+      token: cfg.token,
+    });
+    if (!announce) return;
+    const briefing = responseBriefing(written);
+    if (briefing) {
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: briefing },
+        }) + "\n",
+      );
+    }
+  } catch {
+    // fail-open
+  }
+}
+
 /** Ship what the session has so far, if it has been a minute. The Stop hook
  *  still flushes at the end of every turn; this keeps a LONG turn from going
  *  dark in between (flush-cadence.ts). */
@@ -89,6 +140,9 @@ async function maybeFlushMidTurn(
     // per edit. The next window retries, and nothing was lost meanwhile.
     markFlushed(sessionsDir, workspaceHash, sessionId, now);
     await maybeSpawnFlush(workspaceHash, sessionsDir, sessionId);
+    // Same tick, opposite direction: anything a person answered while this
+    // turn ran lands in the ledger, so the agent's next check sees it.
+    await deliverAnswers(workspaceHash, sessionsDir, false);
   } catch {
     // fail-open: the turn's own Stop flush still ships everything.
   }
@@ -393,6 +447,9 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
         const line = buildTrialLine(readEntitlementCache());
         if (line) process.stdout.write(JSON.stringify({ systemMessage: line }) + "\n");
       }
+      // Answers a person gave since an agent last worked here become this
+      // agent's prior context, rather than waiting for someone to repeat them.
+      await deliverAnswers(workspaceHash, defaultSessionsDir(), true);
     } catch {
       // fail-open: no meter, capture proceeds untouched
     }
@@ -855,7 +912,8 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
       fyi = await processEdit(editScope, event, body, checkAbsFile);
       // A turn can run for twenty minutes. Ship what is on disk so the
       // dashboard sees the session while it is still happening, instead of
-      // learning about it once the turn ends.
+      // learning about it once the turn ends — and on the same tick, collect
+      // any answer a person gave while it ran.
       await maybeFlushMidTurn(workspaceHash, sessionsDir, event.sid);
     }
   } else {
