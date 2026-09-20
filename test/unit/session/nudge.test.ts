@@ -51,6 +51,23 @@ describe("buildNudgeInstruction", () => {
     expect(text).not.toContain("free trial");
   });
 
+  it("leads with the folder when one can be granted, and keeps the repo answer", () => {
+    const text = buildNudgeInstruction({ repoName: "alpha", grantDir: "/Users/sam/work" });
+    // the question names the folder first, with the narrower answer beside it
+    expect(text).toContain("watch every repo under /Users/sam/work");
+    expect(text).toContain("vibedrift enable --dir /Users/sam/work");
+    expect(text).toContain("just this repo");
+    // the folder grant is the person's to give, never the agent's
+    expect(text).toContain("cannot do this one for them");
+    expect(text).toContain('{"decline": true}');
+  });
+
+  it("asks about this repo alone when no folder can be granted", () => {
+    const text = buildNudgeInstruction({ repoName: "alpha", grantDir: null });
+    expect(text).toContain("Want me to enable VibeDrift live drift monitoring for this repo?");
+    expect(text).not.toContain("--dir");
+  });
+
   it("adds the honest trial usage line only on a trial entitlement", () => {
     expect(buildNudgeInstruction({ repoName: "r", entitlement: trial(2) })).toContain("2 of 5 sessions used");
     expect(buildNudgeInstruction({ repoName: "r", entitlement: pro })).not.toContain("trial");

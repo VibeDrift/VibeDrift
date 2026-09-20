@@ -58,6 +58,29 @@ describe("SessionStart nudge (integration)", () => {
     expect(out.hookSpecificOutput.additionalContext).toContain("NOT active");
   });
 
+  it("offers the folder the repo sits in, resolved and named", () => {
+    const home = tmp("vd-nudge-home-");
+    const workspace = tmp("vd-nudge-ws-");
+    const repo = join(workspace, "alpha");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    const out = JSON.parse(runStart(home, repo, "startup").stdout.trim());
+    const text = out.hookSpecificOutput.additionalContext;
+    expect(text).toContain(`watch every repo under ${workspace}`);
+    expect(text).toContain(`vibedrift enable --dir ${workspace}`);
+  });
+
+  it("never offers $HOME as the folder, so the ask falls back to this repo", () => {
+    const home = tmp("vd-nudge-home-");
+    // a repo directly in the home directory: its parent is $HOME, which a grant
+    // must refuse (that is auto-capture-everything)
+    const repo = join(home, "alpha");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    const out = JSON.parse(runStart(home, repo, "startup").stdout.trim());
+    const text = out.hookSpecificOutput.additionalContext;
+    expect(text).not.toContain("--dir");
+    expect(text).toContain("for this repo?");
+  });
+
   it("stays silent on resume/compact (continuation, not a new session)", () => {
     const home = tmp("vd-nudge-home-");
     const repo = repoDir();

@@ -281,7 +281,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
   // un-activated (unanswered) repo emits the SessionStart nudge but otherwise
   // captures per the legacy grandfather (a repo only carries these hooks via a
   // deliberate repo-local install, which post-activation records `active`).
-  const { loadActivation, projectStatus, consumeAsk } = await import("./activation.js");
+  const { loadActivation, projectStatus, consumeAsk, resolveGrantPath } = await import("./activation.js");
   const activation = loadActivation();
   const status = projectStatus(activation, workspaceHash, workspaceRoot);
   // A decline on the folder the agent is RUNNING in stops the whole run, not
@@ -304,10 +304,27 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     if (isNewInteractiveSource(source) && !isNonInteractive()) {
       const outcome = consumeAsk(workspaceHash);
       if (outcome.ask) {
+        // The folder to offer first. A repo sits in the folder a person keeps
+        // their work in, so that is the parent; a working folder that is not a
+        // repo IS the folder, and offering its parent would reach past what the
+        // agent is even working on. resolveGrantPath is the same validator the
+        // CLI uses, so $HOME, anything above it and a filesystem root are
+        // refused here exactly as they are there — and a refusal simply means
+        // the ask is about this repo alone, as it always was.
+        let grantDir: string | null = null;
+        try {
+          const candidate = existsSync(join(workspaceRoot, ".git"))
+            ? dirname(workspaceRoot)
+            : workspaceRoot;
+          grantDir = resolveGrantPath(candidate);
+        } catch {
+          // not grantable: offer this repo only
+        }
         const out = buildNudgeOutput({
           repoName: basename(workspaceRoot),
           entitlement: readEntitlementCache(),
           lastAsk: outcome.budgetExpired,
+          grantDir,
         });
         process.stdout.write(JSON.stringify(out) + "\n");
       }

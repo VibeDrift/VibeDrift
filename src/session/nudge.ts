@@ -57,6 +57,11 @@ export interface NudgeContext {
   entitlement?: SessionEntitlement | null;
   /** True on the final (budget-exhausting) ask: fold in the breadcrumb. */
   lastAsk?: boolean;
+  /** The folder this repo sits in, when granting it is allowed (the hook
+   *  resolves and validates it; $HOME, anything above it and a filesystem root
+   *  are refused outright). Present means the ask leads with "every repo under
+   *  this folder"; absent means the ask is about this repo alone, as before. */
+  grantDir?: string | null;
 }
 
 const BREADCRUMB =
@@ -82,19 +87,39 @@ export function buildTrialLine(e: SessionEntitlement | null | undefined): string
   return e.trialUsed === e.trialLimit - 1 ? `${line} This is your last free session.` : line;
 }
 
-/** The model-facing relay instruction. Imperative (relays reliably in testing)
- *  and carries the soft-decline path (N1: the concierge skill formalizes it in
- *  N2; until then it rides here). */
+/**
+ * The model-facing relay instruction. Imperative (relays reliably in testing)
+ * and carries the soft-decline path (N1: the concierge skill formalizes it in
+ * N2; until then it rides here).
+ *
+ * When a grantable folder is known the ask LEADS with it, because per-repo
+ * consent is the setup work people forget: one yes for the folder covers every
+ * repo in it, including the ones that do not exist yet, so nothing ever asks
+ * again. The folder answer is deliberately NOT something the agent can do on
+ * the user's behalf — `vibedrift enable --dir` shows the resolved path and
+ * takes a typed confirmation, which is the whole guard on a grant that broad,
+ * so the instruction hands that one to the person. The narrower "just this
+ * repo" answer stays a tool call, exactly as before.
+ */
 export function buildNudgeInstruction(ctx: NudgeContext): string {
   const trialLine =
     ctx.entitlement && ctx.entitlement.reason === "trial"
       ? ` The user is on the free trial (${ctx.entitlement.trialUsed} of ${ctx.entitlement.trialLimit} sessions used); mention that enabling starts a monitored session.`
       : "";
+  const question = ctx.grantDir
+    ? `  "Want VibeDrift to watch every repo under ${ctx.grantDir} for drift, or just this one?"`
+    : `  "Want me to enable VibeDrift live drift monitoring for this repo?"`;
+  const folderOption = ctx.grantDir
+    ? [
+        `- If they want the whole folder: tell them to run \`vibedrift enable --dir ${ctx.grantDir}\` in their terminal. It prints the folder and asks them to confirm, so only they can grant it — you cannot do this one for them. Nothing there is ever asked again.`,
+        `- If they want just this repo: call the VibeDrift \`enable\` tool for this repo, then continue.`,
+      ]
+    : [`- If they say yes: call the VibeDrift \`enable\` tool for this repo, then continue.`];
   return [
     `VibeDrift is installed but NOT active in this repository ("${ctx.repoName}").`,
     `Before starting the user's task, ask them once, in plain language:`,
-    `  "Want me to enable VibeDrift live drift monitoring for this repo?"`,
-    `- If they say yes: call the VibeDrift \`enable\` tool for this repo, then continue.`,
+    question,
+    ...folderOption,
     `- If they say no or "not now": call \`enable\` with {"decline": true} so this is not asked again.`,
     `- If they ignore the question or just restate their task: treat that as "not now" and call \`enable\` with {"decline": true} — do not keep asking.`,
     `Never enable anything without an explicit yes.${trialLine}`,
