@@ -154,6 +154,58 @@ describe("one session, many repos (integration)", () => {
     expect(events(home, repoIdentity(workspace).projectHash, sid)).toEqual([]);
   });
 
+  it("covers a repo nested inside the active repo the agent is running in", () => {
+    // A vendored checkout or an example app under a project someone activated
+    // is part of that project: asking again per nested checkout would be a
+    // question about their own tree, and silence would drop edits the hook
+    // used to record against the parent.
+    const home = tmp("vd-ws-home-");
+    const parent = tmp("vd-ws-parent-");
+    mkdirSync(join(parent, ".git"), { recursive: true });
+    const nested = join(parent, "vendor", "widget");
+    mkdirSync(join(nested, ".git"), { recursive: true });
+    mkdirSync(join(nested, "src"), { recursive: true });
+    writeActivation(home, { projects: { [repoIdentity(parent).projectHash]: { state: "active" } } });
+
+    const sid = "it-ws-nested";
+    expect(runHook(home, writeFileEvent(parent, sid, join(nested, "src", "z.ts"), BODY)).status).toBe(0);
+
+    const recorded = events(home, repoIdentity(nested).projectHash, sid);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].detail.file).toBe("src/z.ts");
+    expect(recorded[0].workspaceKey).toBe(repoIdentity(parent).projectHash);
+  });
+
+  it("a nested repo that declined still records nothing under an active parent", () => {
+    const home = tmp("vd-ws-home-");
+    const parent = tmp("vd-ws-parent-");
+    mkdirSync(join(parent, ".git"), { recursive: true });
+    const nested = join(parent, "vendor", "widget");
+    mkdirSync(join(nested, ".git"), { recursive: true });
+    mkdirSync(join(nested, "src"), { recursive: true });
+    writeActivation(home, {
+      projects: {
+        [repoIdentity(parent).projectHash]: { state: "active" },
+        [repoIdentity(nested).projectHash]: { state: "declined" },
+      },
+    });
+
+    const sid = "it-ws-nested-declined";
+    expect(runHook(home, writeFileEvent(parent, sid, join(nested, "src", "z.ts"), BODY)).status).toBe(0);
+    expect(events(home, repoIdentity(nested).projectHash, sid)).toEqual([]);
+    expect(events(home, repoIdentity(parent).projectHash, sid)).toEqual([]);
+  });
+
+  it("does not cover a sibling repo outside the active repo", () => {
+    // Inheritance follows the tree, not the session: a repo beside the one the
+    // agent is running in was never part of the yes that was given.
+    const { home, alpha, beta } = stage();
+    writeActivation(home, { projects: { [repoIdentity(alpha).projectHash]: { state: "active" } } });
+    const sid = "it-ws-sibling";
+    expect(runHook(home, writeFileEvent(alpha, sid, join(beta, "src", "z.ts"), BODY)).status).toBe(0);
+    expect(events(home, repoIdentity(beta).projectHash, sid)).toEqual([]);
+  });
+
   it("keeps the grandfather: an unanswered repo with its own hook install still records", () => {
     const { home, workspace, alpha } = stage();
     writeActivation(home, {});

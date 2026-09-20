@@ -294,17 +294,17 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
   // deliberate repo-local install, which post-activation records `active`).
   const { loadActivation, projectStatus, consumeAsk, resolveGrantPath } = await import("./activation.js");
   const activation = loadActivation();
-  const status = projectStatus(activation, workspaceHash, workspaceRoot);
+  const workspaceStatus = projectStatus(activation, workspaceHash, workspaceRoot);
   // A decline on the folder the agent is RUNNING in stops the whole run, not
   // just that folder's own scope. The per-repo rule below judges each other
   // repo on its own answer, but "not here" typed in the working folder is the
   // most visible no a person can give, and it is not worth reinterpreting as
   // "not here, but everywhere else you reach from here".
-  if (status === "declined") return 0;
+  if (workspaceStatus === "declined") return 0;
 
   if (
     normalized.type === "session_start" &&
-    status === "unanswered" &&
+    workspaceStatus === "unanswered" &&
     capturePermitted
   ) {
     const source =
@@ -347,7 +347,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
   // an edit that belongs to a repo of its own is judged on THAT repo's consent
   // below, so a granted repo under an un-activated folder still records.
   // (A repo-local install keeps the legacy grandfather.)
-  const workspaceCaptures = !(pluginMode && status === "unanswered");
+  const workspaceCaptures = !(pluginMode && workspaceStatus === "unanswered");
 
   // Trial meter (P0.3): the activated-repo counterpart of the nudge path's
   // trial line, same systemMessage channel, same new-interactive-only budget.
@@ -355,7 +355,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
   // count) and Pro never sees a meter (buildTrialLine owns both rules). Guarded
   // so a failure here changes nothing about how the rest of the event is
   // processed (hooks fail open).
-  if (normalized.type === "session_start" && status === "active" && capturePermitted) {
+  if (normalized.type === "session_start" && workspaceStatus === "active" && capturePermitted) {
     try {
       const source =
         typeof (payload as Record<string, unknown>).source === "string"
@@ -436,14 +436,30 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
    * inside a granted workspace, and a repo nobody has answered for records only
    * under the legacy grandfather — it carries a repo-local hook install of its
    * own, which is a deliberate act.
+   *
+   * One inheritance, deliberately: a repo NESTED INSIDE the active repo the
+   * agent is running in is covered by that same yes. A vendored checkout, a
+   * submodule or an example app under a project someone activated is part of
+   * the project they activated — asking again per nested checkout would be a
+   * question about their own tree, and staying silent would quietly drop edits
+   * this hook used to record. An explicit `decline` on the nested repo still
+   * wins, because it is judged before this.
    */
   const captureCache = new Map<string, boolean>();
+  const nestedInWorkspace = (rootDir: string): boolean =>
+    rootDir === workspaceRoot || rootDir.startsWith(workspaceRoot + sep);
   const scopeCaptures = async (scope: Scope): Promise<boolean> => {
     if (scope.projectHash === workspaceHash) return workspaceCaptures;
     const known = captureCache.get(scope.projectHash);
     if (known !== undefined) return known;
     const st = projectStatus(activation, scope.projectHash, scope.rootDir);
-    const ok = st === "declined" ? false : st === "active" ? true : await hasRepoLocalInstall(scope.rootDir);
+    const ok =
+      st === "declined"
+        ? false
+        : st === "active"
+          ? true
+          : (workspaceStatus === "active" && nestedInWorkspace(scope.rootDir)) ||
+            (await hasRepoLocalInstall(scope.rootDir));
     captureCache.set(scope.projectHash, ok);
     return ok;
   };
