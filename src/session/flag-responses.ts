@@ -27,11 +27,11 @@
  * even slow down, because a network call for someone else's answer failed.
  */
 
-import { appendEvent, newActivityId } from "./ledger.js";
+import { appendEvent, newActivityId, readSessionEvents, sessionFilePath } from "./ledger.js";
 import { maskSecrets } from "./mask.js";
 import { MAX_REASON_LEN } from "./decision.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
-import type { SessionEvent } from "./types.js";
+import type { SessionEvent, SessionEventDetail } from "./types.js";
 
 /** One answer as the API hands it over. */
 export interface QueuedResponse {
@@ -41,6 +41,34 @@ export interface QueuedResponse {
   findingId: string;
   decision: "accept" | "park" | "decline";
   reason?: string | null;
+}
+
+/**
+ * What the flag itself said, read back from this machine's own ledger.
+ *
+ * The answer that arrives from the API names a finding by id, and a finding
+ * id is only unique WITHIN a sitting: the first flag of every session is
+ * DF-1. So "DF-1 was accepted" handed to an agent whose own DF-1 is a
+ * different flag in a different file is worse than useless, because the
+ * agent will confidently change the wrong code.
+ *
+ * The fix does not need a bigger API payload. The flag is already described
+ * in the ledger this same function is about to write into, under the exact
+ * (project, session, finding) the answer names, with the REAL file path
+ * rather than the pseudonymised hash the cloud projection holds. So the
+ * briefing is assembled locally, and nothing further leaves the machine.
+ */
+export interface FlagContext {
+  /** The repo-relative file the flag was raised on. */
+  file?: string;
+  /** One phrase saying what drifted, in the tape's vocabulary. */
+  what?: string;
+}
+
+/** A queued answer, once written, with whatever the local ledger knows about
+ *  the flag it answers. */
+export interface AnsweredFlag extends QueuedResponse {
+  flag?: FlagContext;
 }
 
 const DECISIONS = new Set(["accept", "park", "decline"]);
@@ -95,6 +123,49 @@ export function decisionEventFor(r: QueuedResponse, nowIso: string): SessionEven
   };
 }
 
+/**
+ * One phrase for what a flag said, from the ledger's own structured fields.
+ *
+ * Built from `detail` rather than reused from the advisory text the agent
+ * originally saw, for two reasons: the advisory ends with an instruction to
+ * record a call, which is exactly wrong to repeat about a flag that has just
+ * been answered; and a flag that was recorded but never messaged (one
+ * advisory per edit, the rest stay silent) carries no advisory text at all,
+ * while every flag carries its detail.
+ */
+export function describeFlag(d: SessionEventDetail): string | undefined {
+  if (d.category === "redundancy") {
+    const target = d.similarTo ?? "code this project already has";
+    const sim = typeof d.similarity === "number" ? ` (${d.similarity.toFixed(2)} similar)` : "";
+    return `duplicates ${target}${sim}`;
+  }
+  if (d.dominant || d.observed) {
+    const what = d.category ?? "drift";
+    return `${what}: this project uses ${d.dominant ?? "an unrecorded pattern"}, that change used ${d.observed ?? "another"}`;
+  }
+  return d.category;
+}
+
+/** The flag a finding id names, from events already in hand. The LAST match
+ *  wins: a finding id is reused across sittings, and within one sitting the
+ *  most recent raise is the one an answer given today refers to. */
+export function flagContextFrom(
+  events: readonly SessionEvent[],
+  findingId: string,
+): FlagContext | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type !== "flag" || ev.findingId !== findingId) continue;
+    const d = ev.detail ?? {};
+    const ctx: FlagContext = {};
+    if (d.file) ctx.file = d.file;
+    const what = describeFlag(d);
+    if (what) ctx.what = what;
+    return ctx.file || ctx.what ? ctx : undefined;
+  }
+  return undefined;
+}
+
 export interface DeliverOptions {
   sessionsDir: string;
   projectHash: string;
@@ -110,7 +181,7 @@ export interface DeliverOptions {
  * Fetch, write, acknowledge. Returns the answers written, so a caller can put
  * them in front of the agent.
  */
-export async function deliverQueuedResponses(opts: DeliverOptions): Promise<QueuedResponse[]> {
+export async function deliverQueuedResponses(opts: DeliverOptions): Promise<AnsweredFlag[]> {
   const timeoutMs = opts.timeoutMs ?? 4000;
   const doFetch = opts.fetchImpl ?? fetch;
   const base = opts.apiUrl.replace(/\/+$/, "");
@@ -130,11 +201,26 @@ export async function deliverQueuedResponses(opts: DeliverOptions): Promise<Queu
   if (queued.length === 0) return [];
 
   const nowIso = (opts.now?.() ?? new Date()).toISOString();
-  const written: QueuedResponse[] = [];
+  // One read per sitting, not per answer: several answers usually come from
+  // the same session, and this runs on an agent's hook path.
+  const ledgers = new Map<string, SessionEvent[]>();
+  const eventsFor = async (projectHash: string, sessionId: string): Promise<SessionEvent[]> => {
+    const key = `${projectHash}/${sessionId}`;
+    const hit = ledgers.get(key);
+    if (hit) return hit;
+    const evs = await readSessionEvents(sessionFilePath(opts.sessionsDir, projectHash, sessionId));
+    ledgers.set(key, evs);
+    return evs;
+  };
+
+  const written: AnsweredFlag[] = [];
   for (const r of queued) {
     try {
+      // Read the flag BEFORE appending, so the lookup never sees the
+      // decision we are about to write.
+      const flag = flagContextFrom(await eventsFor(r.projectHash, r.sessionId), r.findingId);
       await appendEvent(opts.sessionsDir, r.projectHash, r.sessionId, decisionEventFor(r, nowIso));
-      written.push(r);
+      written.push(flag ? { ...r, flag } : r);
     } catch {
       // Leave it queued. The next pull tries again.
     }
@@ -156,10 +242,15 @@ export async function deliverQueuedResponses(opts: DeliverOptions): Promise<Queu
 }
 
 /**
- * What the agent is told about answers a person gave. One line each, in the
- * agent's own vocabulary, so it can act on them without being told how.
+ * What the agent is told about answers a person gave.
+ *
+ * Every line names the FILE the flag was raised on, never the finding id
+ * alone. An id is unique only within a sitting, so "DF-1 was accepted" read
+ * by an agent whose own DF-1 is a different flag is an instruction to change
+ * the wrong code. Where this machine's ledger no longer describes the flag,
+ * the sitting is named instead, which is at least unambiguous.
  */
-export function responseBriefing(written: readonly QueuedResponse[]): string | null {
+export function responseBriefing(written: readonly AnsweredFlag[]): string | null {
   if (written.length === 0) return null;
   const lines = written.map((r) => {
     const reason = (r.reason ?? "").trim();
@@ -169,7 +260,11 @@ export function responseBriefing(written: readonly QueuedResponse[]): string | n
         : r.decision === "decline"
           ? "declined, so leave it as written"
           : "parked, so leave it and do not raise it again this session";
-    return `- ${r.findingId}: a person ${verb}${reason ? ` — "${reason}"` : ""}`;
+    const where = r.flag?.file
+      ? ` in ${r.flag.file}`
+      : ` (raised in session ${r.sessionId.slice(0, 8)}, not this one)`;
+    const what = r.flag?.what ? ` The flag said: ${r.flag.what}.` : "";
+    return `- ${r.findingId}${where}: a person ${verb}${reason ? ` — "${reason}"` : ""}.${what}`;
   });
   const head =
     written.length === 1
