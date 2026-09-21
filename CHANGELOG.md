@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed — an answer tells the agent which file it is about
+
+- **A queued answer now names the file, not just the flag id.** Flags are numbered within a sitting, so the first flag of every session is `DF-1`. An answer travelling back as an id alone therefore arrived ambiguous: an agent told "DF-1 was accepted, change the code" whose own `DF-1` is a different flag in a different file would confidently change the wrong one. The briefing now names the file the flag was raised on and what it said, read out of the ledger on your own machine rather than sent over the wire, so nothing extra leaves the repo. Where that machine no longer has the flag on record, the sitting is named instead, which at least cannot be mistaken for the current one.
+
 ## 0.21.2 — 2026-09-20
 
 ### Added — your answer reaches the agent

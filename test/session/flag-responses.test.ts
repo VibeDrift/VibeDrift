@@ -14,16 +14,19 @@
  *   and every failure is silent, because this runs on an agent's hook path.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   decisionEventFor,
   deliverQueuedResponses,
+  describeFlag,
+  flagContextFrom,
   parseQueued,
   responseBriefing,
   type QueuedResponse,
 } from "../../src/session/flag-responses.js";
+import type { SessionEvent } from "../../src/session/types.js";
 
 let dir: string;
 const HASH = "81a512c4a735dfa8";
@@ -59,6 +62,26 @@ function ledgerEvents(): Array<Record<string, unknown>> {
   const path = join(dir, HASH, `${SID}.jsonl`);
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+/** Put a flag in the ledger the answer will be written into, the way a real
+ *  session would have left one there. */
+function seedFlag(detail: Record<string, unknown>, findingId = "DF-1"): void {
+  mkdirSync(join(dir, HASH), { recursive: true });
+  const ev = {
+    v: 1,
+    sid: SID,
+    aid: `evt-seed-${findingId}`,
+    ts: "2026-08-09T00:54:07.653Z",
+    agent: "claude-code",
+    projectHash: HASH,
+    channel: "hook",
+    type: "flag",
+    mode: "passive",
+    findingId,
+    detail,
+  };
+  writeFileSync(join(dir, HASH, `${SID}.jsonl`), `${JSON.stringify(ev)}\n`, { flag: "a" });
 }
 
 beforeEach(() => {
@@ -195,5 +218,78 @@ describe("what the agent is told", () => {
 
   it("says nothing when there is nothing to say", () => {
     expect(responseBriefing([])).toBeNull();
+  });
+});
+
+/**
+ * A finding id is unique only within a sitting: the first flag of every
+ * session is DF-1. An answer that travels as an id alone therefore arrives
+ * ambiguous, and an agent acting on it changes the wrong file. These are the
+ * tests that bind the fix.
+ */
+describe("an answer names the file, not just the finding id", () => {
+  it("reads what the flag said out of this machine's own ledger", () => {
+    const events = [
+      { type: "edit", findingId: undefined, detail: { file: "noise.ts" } },
+      { type: "flag", findingId: "DF-2", detail: { file: "other.ts", category: "redundancy" } },
+      {
+        type: "flag",
+        findingId: "DF-1",
+        detail: { file: "src/drift/report-helpers.ts", category: "redundancy", similarTo: "src/drift/utils.ts:204", similarity: 1 },
+      },
+    ] as unknown as SessionEvent[];
+    expect(flagContextFrom(events, "DF-1")).toEqual({
+      file: "src/drift/report-helpers.ts",
+      what: "duplicates src/drift/utils.ts:204 (1.00 similar)",
+    });
+  });
+
+  it("takes the most recent raise when one id was flagged twice", () => {
+    const events = [
+      { type: "flag", findingId: "DF-1", detail: { file: "first.ts", category: "redundancy" } },
+      { type: "flag", findingId: "DF-1", detail: { file: "second.ts", category: "redundancy" } },
+    ] as unknown as SessionEvent[];
+    expect(flagContextFrom(events, "DF-1")?.file).toBe("second.ts");
+  });
+
+  it("knows nothing rather than guessing when the flag is not in the ledger", () => {
+    expect(flagContextFrom([], "DF-1")).toBeUndefined();
+  });
+
+  it("describes a pattern conflict in the same words the tape uses", () => {
+    expect(
+      describeFlag({ category: "return_shape_consistency", dominant: "null/undefined sentinels", observed: "throws on error" }),
+    ).toBe("return_shape_consistency: this project uses null/undefined sentinels, that change used throws on error");
+  });
+
+  it("puts the file in the briefing, so the agent edits the right one", async () => {
+    seedFlag({
+      file: "src/drift/report-helpers.ts",
+      category: "redundancy",
+      similarTo: "src/drift/utils.ts:204",
+      similarity: 1,
+    });
+    const ok = (async (url: unknown) =>
+      String(url).includes("/pending")
+        ? new Response(JSON.stringify(wire({ decision: "accept", reason: "" })), { status: 200 })
+        : new Response(JSON.stringify({ delivered: 1 }), { status: 200 })) as unknown as typeof fetch;
+
+    const written = await deliverQueuedResponses({
+      sessionsDir: dir,
+      projectHash: HASH,
+      apiUrl: "https://api.example",
+      token: "t",
+      fetchImpl: ok,
+    });
+    const text = responseBriefing(written) ?? "";
+    expect(text).toContain("src/drift/report-helpers.ts");
+    expect(text).toContain("duplicates src/drift/utils.ts:204");
+    expect(text).toContain("change the code");
+  });
+
+  it("names the sitting instead of implying THIS session's DF-1", () => {
+    const text = responseBriefing([queued()]) ?? "";
+    expect(text).toContain("not this one");
+    expect(text).toContain(SID.slice(0, 8));
   });
 });
