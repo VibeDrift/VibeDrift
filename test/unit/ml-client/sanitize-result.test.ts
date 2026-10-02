@@ -148,12 +148,139 @@ describe("sanitizeResultForUpload — keeps what the dashboard needs", () => {
    * dashboard renders under "Evidence" (see ScanReport.tsx), so stripping it
    * would blank that view. It is a few lines cited as proof of a specific
    * finding, which is a different thing from shipping whole file bodies.
-   * Pinned so nobody "fixes" it into a regression.
+   * Since #112 the excerpt is kept THROUGH maskSecrets: the surrounding code
+   * survives, a credential literal inside it does not. Pinned so nobody
+   * "fixes" either half into a regression.
    */
-  it("keeps the finding evidence snippet the report renders", () => {
+  it("keeps the finding evidence snippet the report renders, with secrets masked", () => {
     const out = sanitizeResultForUpload(withCode()) as Record<string, unknown>;
     const loc = (out.findings as Array<{ locations: Array<Record<string, unknown>> }>)[0].locations[0];
-    expect(loc.snippet).toBe(SECRET_SNIPPET);
+    expect(loc.snippet).toBe("const API_TOKEN = [masked];");
+    expect(JSON.stringify(out)).not.toContain("tok_live_NEVER_UPLOAD_ME");
+  });
+});
+
+/**
+ * Secret-bearing excerpts (#112). Signed-in scans upload finding snippets,
+ * drift evidence lines, and taint expressions, and before this fix none of
+ * them passed through a secret masker: a credential inside a cited line
+ * reached `/v1/scans/log` verbatim (reproduced on published 0.21.3 with an
+ * AKIA-shaped line, telemetry disabled). The excerpts must keep flowing —
+ * the dashboard renders them as Evidence — but through `maskSecrets` first.
+ * Fake secret fixtures are assembled from split parts (the mask.test.ts
+ * pattern) so no contiguous secret-shaped literal appears in source.
+ */
+const jj = (...parts: string[]): string => parts.join("");
+const AWS_KEY = jj("AKIA", "IOSFODNN7EXAMPLE"); // AWS's official docs example key
+const DB_PASSWORD = jj("hunter2", "hunter2");
+
+function withSecrets(): ScanResult {
+  return mkResult({
+    context: {
+      rootDir: "/Users/someone/private-repo",
+      dominantLanguage: "typescript",
+      languageBreakdown: new Map(),
+      totalLines: 120,
+      files: [],
+    },
+    findings: [
+      {
+        id: "f-aws",
+        category: "security_posture",
+        message: "hardcoded credential in the billing service",
+        locations: [
+          {
+            file: "src/billing/aws-client.ts",
+            line: 14,
+            snippet: `const s3 = new S3Client({ credentials: { accessKeyId: "${AWS_KEY}" } });`,
+          },
+          { file: "src/billing/aws-client.ts", line: 18, snippet: `const logger = createLogger("billing");` },
+        ],
+      },
+    ],
+    driftFindings: [
+      {
+        detector: "security-consistency",
+        driftCategory: "security_posture",
+        severity: "error",
+        confidence: 0.9,
+        finding: "2 of 9 route handlers read credentials from literals",
+        dominantPattern: "process.env for credentials",
+        dominantCount: 7,
+        totalRelevantFiles: 9,
+        consistencyScore: 78,
+        deviatingFiles: [
+          {
+            path: "src/billing/aws-client.ts",
+            detectedPattern: "literal credential",
+            evidence: [{ line: 14, code: `const accessKeyId = "${AWS_KEY}";` }],
+          },
+        ],
+        recommendation: "move the credential to process.env",
+      },
+    ],
+    codeDnaResult: {
+      functions: [],
+      fingerprints: [],
+      duplicateGroups: [],
+      sequenceSimilarities: [],
+      patternDistributions: [],
+      taintFlows: [
+        {
+          file: "/Users/someone/private-repo/src/db/pool.ts",
+          relativePath: "src/db/pool.ts",
+          functionName: "createPool",
+          source: { type: "env", expression: "process.env.DATABASE_URL", line: 3, severity: "info" },
+          sink: {
+            type: "connection",
+            expression: `createPool("postgres://billing:${DB_PASSWORD}@db.internal:5432/billing")`,
+            line: 9,
+            severity: "warning",
+          },
+          sanitized: false,
+          language: "typescript",
+        },
+      ],
+      deviationJustifications: [],
+      findings: [],
+      timings: {},
+    },
+  } as unknown as Partial<ScanResult>);
+}
+
+describe("sanitizeResultForUpload — secrets are masked before upload (#112)", () => {
+  it("masks an AWS key inside a finding's evidence snippet and keeps the code around it", () => {
+    const out = sanitizeResultForUpload(withSecrets());
+    const locs = (out.findings as Array<{ locations: Array<Record<string, unknown>> }>)[0].locations;
+    expect(locs[0].snippet).toBe('const s3 = new S3Client({ credentials: { accessKeyId: "[masked]" } });');
+    // Non-secret excerpts pass through untouched, so the Evidence view stays useful.
+    expect(locs[1].snippet).toBe('const logger = createLogger("billing");');
+  });
+
+  it("masks a credential inside drift evidence code", () => {
+    const out = sanitizeResultForUpload(withSecrets());
+    const dev = (out.driftFindings as Array<{ deviatingFiles: Array<{ evidence: Array<Record<string, unknown>> }> }>)[0]
+      .deviatingFiles[0];
+    expect(dev.evidence[0].code).toBe('const accessKeyId = "[masked]";');
+  });
+
+  it("masks the password inside a taint sink's connection string and keeps scheme and user", () => {
+    const out = sanitizeResultForUpload(withSecrets());
+    const flow = (out.codeDnaResult as { taintFlows: Array<{ sink: Record<string, unknown> }> }).taintFlows[0];
+    expect(flow.sink.expression).toBe('createPool("postgres://billing:[masked]@db.internal:5432/billing")');
+  });
+
+  it("leaves detector prose and pattern labels intact (masking is not redaction)", () => {
+    const out = sanitizeResultForUpload(withSecrets());
+    const drift = (out.driftFindings as Array<Record<string, unknown>>)[0];
+    expect(drift.dominantPattern).toBe("process.env for credentials");
+    expect(drift.recommendation).toBe("move the credential to process.env");
+  });
+
+  it("no planted secret appears anywhere in the upload payload", () => {
+    const payload = JSON.stringify(sanitizeResultForUpload(withSecrets()));
+    expect(payload).not.toContain(AWS_KEY);
+    expect(payload).not.toContain(DB_PASSWORD);
   });
 });
 

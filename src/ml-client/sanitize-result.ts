@@ -1,4 +1,5 @@
 import type { ScanResult } from "../core/types.js";
+import { maskSecrets } from "../session/mask.js";
 
 /**
  * Convert a ScanResult into a JSON-safe object suitable for upload to the
@@ -11,7 +12,10 @@ import type { ScanResult } from "../core/types.js";
  *   - Any absolute path that starts with `rootDir` is rewritten relative
  *
  * What we keep:
- *   - All findings (metadata only — no file contents)
+ *   - All findings (metadata only — no file contents). Free-text fields that
+ *     quote user code or prose (snippet, evidence code, taint expressions,
+ *     finding/pattern prose) pass through `maskSecrets` before upload, so a
+ *     credential literal inside a cited excerpt cannot ride along (#112).
  *   - All drift findings + per-category scores
  *   - codeDnaResult summary (function names, hashes, deviation verdicts)
  *   - Composite scores, grade, language breakdown
@@ -65,12 +69,59 @@ function createSanitizeNode(stripPath: StripPathFn): SanitizeNodeFn {
 // `Evidence.code` (a single trimmed line, capped at 3 per file) and taint
 // `TaintSink.expression` (capped at 100 chars): those are short, bounded
 // excerpts cited as proof for one specific finding — the dashboard renders
-// them as "Evidence" — and are deliberately kept (see
-// sanitize-result.test.ts's pinned "keeps the finding evidence snippet"
-// test). `rawBody`/`declarationCode`/`bodyTokens` carry every extracted
+// them as "Evidence" — and are deliberately kept, but kept THROUGH
+// `maskSecrets` so a credential literal inside the excerpt is blanked first
+// (#112; see sanitize-result.test.ts's "keeps the finding evidence snippet"
+// tests). `rawBody`/`declarationCode`/`bodyTokens` carry every extracted
 // function's full body with no such bound, which is exactly what the
 // header above promises never to upload.
 const CONTENT_BEARING_KEYS = new Set(["rawBody", "declarationCode", "bodyTokens"]);
+
+/**
+ * Free-text keys, anywhere inside the findings / driftFindings /
+ * codeDnaResult subtrees, whose string values quote user code or user
+ * prose and so can carry a credential literal: `snippet` (FileLocation),
+ * `code` (drift Evidence), `expression` (taint source/sink), `message` and
+ * `finding` (detector prose that embeds identifiers), `detectedPattern` /
+ * `dominantPattern` / `recommendation` (pattern labels and advice that can
+ * quote code), `text` (intent-hint divergence quotes the user's own doc),
+ * `fixPromptProse` (server-synthesized prose derived from uploaded
+ * reference snippets — masked so a round trip cannot re-leak what a deep
+ * scan sent up unmasked).
+ *
+ * `maskSecrets` is deliberately prose-safe (it already runs on free-form
+ * session prompt text): only high-confidence credential shapes are
+ * blanked, so identifiers, paths, and pattern labels pass through
+ * unchanged. Paths are NOT in this set — they are handled by stripPath.
+ * `aiSummary` and `teaseMessages` are excluded: the first is
+ * server-generated, the second is static CLI copy; neither quotes the
+ * user's code.
+ */
+const SECRET_BEARING_TEXT_KEYS = new Set([
+  "snippet",
+  "code",
+  "expression",
+  "message",
+  "finding",
+  "text",
+  "detectedPattern",
+  "dominantPattern",
+  "recommendation",
+  "fixPromptProse",
+]);
+
+function maskNodeSecrets(node: unknown): unknown {
+  if (typeof node === "string") return maskSecrets(node);
+  if (Array.isArray(node)) return node.map(maskNodeSecrets);
+  if (node && typeof node === "object" && !(node instanceof Map) && !(node instanceof Set)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      out[k] = SECRET_BEARING_TEXT_KEYS.has(k) && typeof v === "string" ? maskSecrets(v) : maskNodeSecrets(v);
+    }
+    return out;
+  }
+  return node;
+}
 
 function sanitizeObjectNode(
   node: Record<string, unknown>,
@@ -210,10 +261,10 @@ export function sanitizeResultForUpload(result: ScanResult): Record<string, unkn
       max: result.maxHygieneScore,
       categories: sanitizeNode(result.hygieneScores),
     },
-    findings: sanitizeNode(result.findings),
-    driftFindings: sanitizeNode(result.driftFindings),
+    findings: maskNodeSecrets(sanitizeNode(result.findings)),
+    driftFindings: maskNodeSecrets(sanitizeNode(result.driftFindings)),
     driftScores: sanitizeNode(result.driftScores),
-    codeDnaResult: sanitizeNode(result.codeDnaResult),
+    codeDnaResult: maskNodeSecrets(sanitizeNode(result.codeDnaResult)),
     perFileScores: summarizePerFileScores(result.perFileScores, stripPath),
     teaseMessages: result.teaseMessages,
     aiSummary: result.aiSummary ?? null,

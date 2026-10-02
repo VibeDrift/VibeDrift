@@ -546,11 +546,14 @@ Environment:
   VIBEDRIFT_NO_BROWSER if "1", never auto-open the browser
 
 Telemetry:
-  Your code never leaves your machine. After each scan VibeDrift sends a
-  small anonymous usage beacon (language, file count, lines of code, scan
-  time, CLI version, finding count, and score; no code, no file paths, no
-  identifiers), on by default for everyone whether signed in or not. Turn
-  it off anytime, or run --local-only for a fully offline scan:
+  Analysis runs on your machine. Signed out, a scan sends only a small
+  anonymous usage beacon (language, file count, lines of code, scan time,
+  CLI version, finding count, and score; no code, no file paths, no
+  identifiers), on by default for everyone whether signed in or not.
+  Signed in, the scan also saves its findings to your dashboard
+  (repo-relative paths, function names, and short evidence excerpts, with
+  secrets masked before upload). Turn the beacon off anytime, or run
+  --local-only for a fully offline scan:
   $ vibedrift telemetry disable   (or set VIBEDRIFT_TELEMETRY_DISABLED=1)
 
 Learn more: https://vibedrift.ai`,
