@@ -15,7 +15,11 @@
  * ledger, secret-masked, and shipped by the next flush like anything else. A
  * human answer and an agent answer are the same kind of fact about a flag, so
  * they are stored the same way rather than in a second place with its own
- * rules.
+ * rules. Two deliberate differences: the event is stamped `via: "human"` so
+ * the dashboard never reports a person's judgement as the agent's, and the
+ * search for the session that raised the flag is not bounded by the
+ * live-session window, because a person answers on their own clock, often
+ * long after the session went quiet.
  *
  * Local only. Nothing here talks to the network.
  */
@@ -76,6 +80,12 @@ export async function runRespond(
     // than demanded: an empty one records the call honestly instead of
     // blocking it behind a sentence nobody wants to write.
     reason: options.reason ?? "",
+    // A person answers on their own clock, often days after the session went
+    // quiet, so the live-session window does not apply to this command.
+    sessionWindowMs: Number.POSITIVE_INFINITY,
+    // ...and the call is stamped as the person's, so the dashboard never
+    // reports a human's judgement as the agent's.
+    via: "human",
   });
 
   if (result.ok) {
