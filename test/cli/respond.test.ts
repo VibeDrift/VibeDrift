@@ -11,7 +11,7 @@
  * two sources of truth about one flag.
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runRespond } from "../../src/cli/commands/respond.js";
@@ -97,6 +97,18 @@ describe("a person can answer a flag the agent left for them", () => {
     expect(await runRespond("DF-1", "park", repo, { sessionsDir })).toBe("ok");
     const decision = events(path).find((e) => e.type === "decision");
     expect((decision?.detail as Record<string, unknown>).reason).toBe("");
+  });
+
+  it("answers a flag from a session that went quiet days ago, stamped as the person's", async () => {
+    const path = ledger();
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60_000);
+    utimesSync(path, threeDaysAgo, threeDaysAgo);
+
+    const status = await runRespond("DF-1", "accept", repo, { sessionsDir, reason: "back from holiday" });
+    expect(status).toBe("ok");
+
+    const decision = events(path).find((e) => e.type === "decision");
+    expect(decision?.via).toBe("human");
   });
 });
 

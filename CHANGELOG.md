@@ -6,6 +6,10 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Fixed — `vibedrift respond` works when you actually need it
+
+- **Answer a flag days later, and be counted as yourself.** `vibedrift respond` looked for the session that raised the flag only among sessions touched in the last 15 minutes, the window the dashboard uses to call a session live. A flag parked for a person gets answered on the person's clock, usually long after the session went quiet, so the command refused with "No Drift Session ledger" exactly when it was needed most. It now searches every session this repo has had, and the call it records is stamped as yours, so the dashboard no longer reports a person's judgement as the agent's. The agent's own `respond_to_flag` keeps the live-session gate.
+
 ### Fixed — secrets inside uploaded finding excerpts are masked before they leave
 
 - **A credential cited by a finding can no longer ride the dashboard upload.** Signed-in scans sync their findings to your dashboard, and the excerpts those findings cite — the snippet under Evidence, a drift evidence line, a taint expression — used to leave exactly as written. If the flagged line itself contained a key, the key went with it. Those excerpts now pass through the same secret masker Drift Sessions already uses before anything is uploaded: the excerpt survives so the dashboard's Evidence view keeps working, and the credential is blanked to `[masked]`. The three places that claimed "your code never leaves your machine" (the `--help` telemetry block, the HTML report footer, the DOCX footer) now describe what actually happens in each sign-in state instead.

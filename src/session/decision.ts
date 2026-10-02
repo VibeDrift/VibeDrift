@@ -20,7 +20,7 @@
 import { join } from "node:path";
 import { projectHash, canonicalizeRoot } from "../core/baseline.js";
 import { appendEvent, newActivityId, readSessionEvents, safeSegment, sessionFilePath } from "./ledger.js";
-import { listActiveSessions } from "./mcp-tee.js";
+import { listActiveSessions, SESSION_ACTIVE_WINDOW_MS } from "./mcp-tee.js";
 import { maskSecrets } from "./mask.js";
 import { SESSIONS_SCHEMA_VERSION } from "./types.js";
 import type { SessionEvent } from "./types.js";
@@ -35,6 +35,22 @@ export interface RecordDecisionOptions {
   findingId: string;
   decision: Decision;
   reason: string;
+  /**
+   * How far back to look for the session that raised the flag. Defaults to
+   * SESSION_ACTIVE_WINDOW_MS, the live-session gate the agent's
+   * respond_to_flag shares with the dashboard's freshness window. The human
+   * `vibedrift respond` command passes Infinity: a flag parked for a person
+   * is usually answered long after the session went quiet, and gating the
+   * human escape hatch on liveness meant it was closed exactly when it was
+   * needed.
+   */
+  sessionWindowMs?: number;
+  /**
+   * Who made the call, when it was not the agent. Stamped on the event so
+   * the dashboard never reports a person's judgement as the agent's. The
+   * API's `via` allow-list already accepts "human" and "recheck".
+   */
+  via?: "human" | "recheck";
   now?: () => number;
 }
 
@@ -84,7 +100,7 @@ export async function recordFlagDecision(opts: RecordDecisionOptions): Promise<R
     const now = (opts.now ?? Date.now)();
     const hash = projectHash(canonicalizeRoot(opts.rootDir));
     const dir = join(opts.sessionsDir, safeSegment(hash));
-    const sessions = await listActiveSessions(dir, now);
+    const sessions = await listActiveSessions(dir, now, opts.sessionWindowMs ?? SESSION_ACTIVE_WINDOW_MS);
     if (sessions.length === 0) return { ok: false, code: "no_active_session" };
 
     // Per-session `DF-<n>` ids are NOT globally unique, so two concurrent same-repo
@@ -122,6 +138,7 @@ export async function recordFlagDecision(opts: RecordDecisionOptions): Promise<R
       type: "decision",
       mode: "passive",
       findingId: opts.findingId,
+      ...(opts.via ? { via: opts.via } : {}),
       detail: { decision: opts.decision, reason },
     };
     await appendEvent(opts.sessionsDir, hash, target, event);

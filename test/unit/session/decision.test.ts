@@ -165,6 +165,43 @@ describe("recordFlagDecision", () => {
     expect(res).toEqual({ ok: false, code: "no_active_session" });
   });
 
+  it("records a decision days later when the window is unbounded (the human respond path)", async () => {
+    const sessionsDir = tmp();
+    const rootDir = tmp();
+    const hash = projectHash(rootDir);
+    await appendEvent(sessionsDir, hash, "old", flag("old", "DF-3"));
+    const base = Date.now();
+    utimesSync(sessionFilePath(sessionsDir, hash, "old"), new Date(base), new Date(base));
+
+    const res = await recordFlagDecision({
+      sessionsDir,
+      rootDir,
+      findingId: "DF-3",
+      decision: "accept",
+      reason: "parked for me on friday, answering on monday",
+      sessionWindowMs: Number.POSITIVE_INFINITY,
+      via: "human",
+      now: () => base + 3 * 24 * 60 * 60_000,
+    });
+
+    expect(res).toMatchObject({ ok: true, sid: "old", findingId: "DF-3" });
+    const events = await readSessionEvents(sessionFilePath(sessionsDir, hash, "old"));
+    const dec = events.find((e) => e.type === "decision")!;
+    expect(dec.via).toBe("human");
+  });
+
+  it("stamps no via on the agent path, so the two callers stay distinguishable", async () => {
+    const sessionsDir = tmp();
+    const rootDir = tmp();
+    const hash = projectHash(rootDir);
+    await appendEvent(sessionsDir, hash, "live", flag("live", "DF-1"));
+
+    await recordFlagDecision({ sessionsDir, rootDir, findingId: "DF-1", decision: "park", reason: "agent's own call" });
+
+    const events = await readSessionEvents(sessionFilePath(sessionsDir, hash, "live"));
+    expect(events.find((e) => e.type === "decision")!.via).toBeUndefined();
+  });
+
   it("reports no_active_session when the repo has no ledger", async () => {
     const sessionsDir = tmp();
     const rootDir = tmp(); // never wrote a ledger for this hash
