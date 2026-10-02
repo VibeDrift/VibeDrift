@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed — secrets inside uploaded finding excerpts are masked before they leave
+
+- **A credential cited by a finding can no longer ride the dashboard upload.** Signed-in scans sync their findings to your dashboard, and the excerpts those findings cite — the snippet under Evidence, a drift evidence line, a taint expression — used to leave exactly as written. If the flagged line itself contained a key, the key went with it. Those excerpts now pass through the same secret masker Drift Sessions already uses before anything is uploaded: the excerpt survives so the dashboard's Evidence view keeps working, and the credential is blanked to `[masked]`. The three places that claimed "your code never leaves your machine" (the `--help` telemetry block, the HTML report footer, the DOCX footer) now describe what actually happens in each sign-in state instead.
+
 ## 0.21.3 — 2026-09-20
 
 ### Fixed — an answer tells the agent which file it is about

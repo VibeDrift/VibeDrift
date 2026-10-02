@@ -950,7 +950,7 @@ function buildFooter(result: ScanResult, mode: "summary" | "detailed"): string {
 
   const disclosure = hasDeep
     ? `Function snippets were sent to VibeDrift's AI API for analysis. No full files were transmitted; snippets are processed in memory and not stored.`
-    : `Your source code never leaves your machine. VibeDrift sends one anonymous event per scan and per report open (counts and timing only, no code, no file contents, no paths) to improve its detectors. Turn it off with <code class="mono">--local-only</code>.`;
+    : `Analysis ran on your machine. Signed out, VibeDrift sends one anonymous event per scan (counts and timing only; no code, no file contents, no paths) to improve its detectors. Signed in, the scan also saves its findings to your dashboard (repo-relative paths, function names, and short evidence excerpts, with secrets masked) and this report pings once when opened. Run with <code class="mono">--local-only</code> for zero network calls.`;
 
   const upsell = (mode === "summary" && !hasDeep)
     ? `<div class="va-upsell"><b>Catch what static analysis misses:</b> semantic duplicates, intent mismatches, and the full coherence audit. Your first deep scan each month is free. Run <code>vibedrift login</code>, then <code>vibedrift . --deep</code>. No card required.</div>`
