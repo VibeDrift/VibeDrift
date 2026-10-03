@@ -82,6 +82,15 @@ async function hasRepoLocalInstall(root: string): Promise<boolean> {
  * with the flush, because both are "has it been a minute" questions and one
  * marker answers both without a second file to reason about.
  *
+ * Returns the briefing whenever answers were written, announced or not. The
+ * SessionStart caller passes `announce: true` and this writes the
+ * additionalContext itself; the mid-turn caller gets the string back and
+ * speaks through the edit path's own channel. The return value existing is
+ * the fix for the mid-turn answer that never arrived: `deliverQueuedResponses`
+ * writes the ledger AND acks the server in one call, so a caller that did
+ * not announce left the answer delivered-but-never-shown, and no later
+ * SessionStart would ever see it queued again.
+ *
  * Silent and total on failure: nobody's turn breaks because someone else's
  * answer could not be fetched.
  */
@@ -89,7 +98,7 @@ async function deliverAnswers(
   projectHash: string,
   sessionsDir: string,
   announce: boolean,
-): Promise<void> {
+): Promise<string | null> {
   try {
     const [{ readConfig }, { shouldSync }, { resolveApiUrl }, { deliverQueuedResponses, responseBriefing }] =
       await Promise.all([
@@ -99,7 +108,7 @@ async function deliverAnswers(
         import("./flag-responses.js"),
       ]);
     const cfg = await readConfig();
-    if (!shouldSync(cfg, false) || !cfg.token) return;
+    if (!shouldSync(cfg, false) || !cfg.token) return null;
 
     const written = await deliverQueuedResponses({
       sessionsDir,
@@ -109,42 +118,49 @@ async function deliverAnswers(
       apiUrl: await resolveApiUrl(cfg.apiUrl),
       token: cfg.token,
     });
-    if (!announce) return;
     const briefing = responseBriefing(written);
-    if (briefing) {
+    if (!briefing) return null;
+    if (announce) {
       process.stdout.write(
         JSON.stringify({
           hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: briefing },
         }) + "\n",
       );
     }
+    return briefing;
   } catch {
     // fail-open
+    return null;
   }
 }
 
 /** Ship what the session has so far, if it has been a minute. The Stop hook
  *  still flushes at the end of every turn; this keeps a LONG turn from going
- *  dark in between (flush-cadence.ts). */
+ *  dark in between (flush-cadence.ts). Returns the briefing for any answer a
+ *  person gave mid-turn, so the edit path can put it in front of the agent;
+ *  null when nothing was due, written, or fetchable. */
 async function maybeFlushMidTurn(
   workspaceHash: string,
   sessionsDir: string,
   sessionId: string | undefined,
-): Promise<void> {
-  if (!sessionId) return;
+): Promise<string | null> {
+  if (!sessionId) return null;
   try {
     const { dueForFlush, markFlushed } = await import("./flush-cadence.js");
     const now = Date.now();
-    if (!dueForFlush(sessionsDir, workspaceHash, sessionId, now)) return;
+    if (!dueForFlush(sessionsDir, workspaceHash, sessionId, now)) return null;
     // Stamp BEFORE spawning: a child that fails must not turn into a child
     // per edit. The next window retries, and nothing was lost meanwhile.
     markFlushed(sessionsDir, workspaceHash, sessionId, now);
     await maybeSpawnFlush(workspaceHash, sessionsDir, sessionId);
     // Same tick, opposite direction: anything a person answered while this
-    // turn ran lands in the ledger, so the agent's next check sees it.
-    await deliverAnswers(workspaceHash, sessionsDir, false);
+    // turn ran lands in the ledger, and comes back here so the edit path can
+    // announce it — the answer is already acked at this point, so handing it
+    // back unannounced is the only way it can still be lost.
+    return await deliverAnswers(workspaceHash, sessionsDir, false);
   } catch {
     // fail-open: the turn's own Stop flush still ships everything.
+    return null;
   }
 }
 
@@ -182,6 +198,13 @@ async function maybeSpawnFlush(
           ],
         ];
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    // spawn() reports a missing executable ASYNCHRONOUSLY, as an 'error'
+    // event: without a listener the event throws and takes the whole hook
+    // down, which is the opposite of the fail-open promise above. The
+    // default path (process.execPath) cannot hit this; the
+    // VIBEDRIFT_SESSION_FLUSH_CMD seam can (a value like /bin/true, absent
+    // on modern macOS).
+    child.on("error", () => {});
     child.unref();
   } catch {
     // fail-open: no flush spawned
@@ -913,8 +936,11 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
       // A turn can run for twenty minutes. Ship what is on disk so the
       // dashboard sees the session while it is still happening, instead of
       // learning about it once the turn ends — and on the same tick, collect
-      // any answer a person gave while it ran.
-      await maybeFlushMidTurn(workspaceHash, sessionsDir, event.sid);
+      // any answer a person gave while it ran and put it in front of the
+      // agent. A person's ruling outranks the tool's advisory, so it leads:
+      // "DF-1 accepted, change the code" first, the drift note after.
+      const answered = await maybeFlushMidTurn(workspaceHash, sessionsDir, event.sid);
+      if (answered) fyi = fyi ? `${answered}\n\n${fyi}` : answered;
     }
   } else {
     // Everything that is not an edit belongs to the sitting, so it belongs to

@@ -6,6 +6,10 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Fixed — a mid-turn answer reaches the agent, not just the ledger
+
+- **The 0.21.2 promise, kept.** "A session already running picks it up within about a minute" was only half true. The once-a-minute tick did collect a person's answer into the ledger and acknowledge it to the dashboard, but it never said it out loud — and because it was acknowledged, no later session start would ever announce it either. An answer given while the agent was mid-turn disappeared. The edit path now announces the answer through the same channel a drift advisory uses, and when both fire in one tick the person's ruling leads the message. SessionStart delivery is unchanged. Same PR: the flush-command test seam could crash the whole hook if it pointed at a missing executable; a spawned child's async error is now handled, as the fail-open comment above it always promised.
+
 ### Fixed — `vibedrift respond` works when you actually need it
 
 - **Answer a flag days later, and be counted as yourself.** `vibedrift respond` looked for the session that raised the flag only among sessions touched in the last 15 minutes, the window the dashboard uses to call a session live. A flag parked for a person gets answered on the person's clock, usually long after the session went quiet, so the command refused with "No Drift Session ledger" exactly when it was needed most. It now searches every session this repo has had, and the call it records is stamped as yours, so the dashboard no longer reports a person's judgement as the agent's. The agent's own `respond_to_flag` keeps the live-session gate.
