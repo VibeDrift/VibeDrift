@@ -6,6 +6,10 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Fixed — monorepos: ignore files in subfolders are honored
+
+- **A nested `.gitignore` used to be invisible to the scan (#111).** Only the root file was read, so a monorepo scanned — and reported findings on — files git itself ignores, and a finding could store a source line from a folder the repo had deliberately excluded. Ignore files are now found anywhere in the tree and applied the way git applies them: patterns anchor to the folder their file sits in, deeper files win over shallower ones, and nothing leaks outside its own folder. Directory names with glob-like characters (a Next.js `[slug]` route folder) are treated literally, and `.vibedriftignore` gets the same treatment as `.gitignore`.
+
 ### Fixed — a repo too large to check says so, instead of claiming it has no patterns
 
 - **The oversized-baseline mislabel is gone (#118).** Drift Sessions reads the repo's saved patterns inside the hook's time budget, capped at 8 MB. A repo whose patterns file crossed the cap had every edit recorded as `no_baseline` — "no patterns yet" — for a repo that had megabytes of them. Those edits are now stamped `too_large`, and the session says so once, with the measured size: "its saved patterns file is 9.0 MB, past the 8.0 MB the hook can read inside its time budget. Edits here are still recorded, marked as not checked." A genuinely missing baseline keeps its own `no_baseline` label, and a corrupt cache file now reads as "no usable baseline" everywhere (scan, MCP, watch) instead of throwing. The entry-count gate was already honest on this; the byte gate now matches.
