@@ -120,9 +120,9 @@ export function projectHash(rootDir: string): string {
 }
 
 /** Where this repo's baseline is persisted. Exported so a caller can ask
- *  whether a repo has one at all: `loadBaselineUnchecked` answers null both for
- *  "never built" and for "too big to read here", and the Stop-time background
- *  builder has to tell those apart. */
+ *  whether a repo has one at all (existsSync is the cheap yes/no); when the
+ *  reason matters — "never built" vs "too big to read here" vs "corrupt" —
+ *  `loadBaselineStatus` reports it, `loadBaselineUnchecked` collapses to null. */
 export function baselineCachePath(rootDir: string): string {
   return join(CACHE_DIR, `${projectHash(rootDir)}.json`);
 }
@@ -342,25 +342,47 @@ function hydrate(parsed: SerializedBaseline): RepoDriftBaseline {
   };
 }
 
-/** Read the persisted baseline regardless of freshness (caller checks staleness).
+/** Why a persisted baseline could not be handed back. "missing" and
+ *  "too_large" must never share a label: a repo that HAS patterns it took a
+ *  scan to build is not a repo with "no patterns yet" (#118). */
+export type BaselineLoadStatus =
+  | { ok: true; baseline: RepoDriftBaseline }
+  | { ok: false; reason: "missing" | "unreadable"; bytes?: number }
+  | { ok: false; reason: "too_large"; bytes: number };
+
+/** Read the persisted baseline regardless of freshness (caller checks
+ *  staleness), reporting WHY it could not be read when it could not.
  *
  *  `maxBytes` stat-gates the read BEFORE parsing: the hook path runs this
  *  synchronously ahead of its ledger append, and its 2s fail-open watchdog
- *  cannot preempt a multi-MB JSON.parse, so an oversized cache reads as
- *  "no baseline" (a checked=false skip) rather than a session stall. */
-export async function loadBaselineUnchecked(rootDir: string, maxBytes?: number): Promise<RepoDriftBaseline | null> {
+ *  cannot preempt a multi-MB JSON.parse, so an oversized cache is a
+ *  checked=false skip rather than a session stall. */
+export async function loadBaselineStatus(rootDir: string, maxBytes?: number): Promise<BaselineLoadStatus> {
   const path = baselineCachePath(rootDir);
-  let raw: string;
+  let size: number | undefined;
   try {
-    if (maxBytes !== undefined) {
-      const { size } = await stat(path);
-      if (size > maxBytes) return null;
+    const st = await stat(path);
+    size = st.size;
+    if (maxBytes !== undefined && size > maxBytes) {
+      return { ok: false, reason: "too_large", bytes: size };
     }
-    raw = await readFile(path, "utf8");
   } catch {
-    return null;
+    return { ok: false, reason: "missing" };
   }
-  return hydrate(JSON.parse(raw) as SerializedBaseline);
+  try {
+    const raw = await readFile(path, "utf8");
+    return { ok: true, baseline: hydrate(JSON.parse(raw) as SerializedBaseline) };
+  } catch {
+    return { ok: false, reason: "unreadable", bytes: size };
+  }
+}
+
+/** Read the persisted baseline regardless of freshness (caller checks
+ *  staleness), collapsing every failure to null. Prefer `loadBaselineStatus`
+ *  where the reason matters (the hook's skip labeling does). */
+export async function loadBaselineUnchecked(rootDir: string, maxBytes?: number): Promise<RepoDriftBaseline | null> {
+  const res = await loadBaselineStatus(rootDir, maxBytes);
+  return res.ok ? res.baseline : null;
 }
 
 /** Read the persisted baseline only if its key matches `expectKey` (else null → rebuild). */

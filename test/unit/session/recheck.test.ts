@@ -47,7 +47,7 @@ async function raiseDup(sid: string): Promise<string> {
     sessionsDir,
     file,
     body: HELPER,
-    loadBaselineFor: async () => baseline,
+    loadBaselineFor: async () => ({ ok: true as const, baseline }),
   });
   const flag = out.flags.find((f) => f.detail.category === "redundancy")!;
   await writeOutcomeState(sessionsDir, HASH, sid, {

@@ -68,7 +68,7 @@ async function raise(
     sessionsDir,
     file: join(repo, relFile),
     body,
-    loadBaselineFor: async () => baseline,
+    loadBaselineFor: async () => ({ ok: true as const, baseline }),
   });
   const open = out.flags.map((f) => ({
     findingId: f.findingId!,

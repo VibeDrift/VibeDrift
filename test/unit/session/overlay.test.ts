@@ -94,7 +94,7 @@ describe("overlay merge respects the inline gate", () => {
       sessionsDir: sessions,
       file: target,
       body: MONTH_TITLE,
-      loadBaselineFor: async () => padded,
+      loadBaselineFor: async () => ({ ok: true as const, baseline: padded }),
     });
     const dup = out.flags.find((f) => f.detail.category === "redundancy");
     expect(dup?.detail.similarTo).toBe("src/newer.tsx:1"); // the older file fell outside the headroom
