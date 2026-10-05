@@ -6,6 +6,10 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Fixed — one long line no longer vanishes a whole file, and every exclusion is said out loud
+
+- **A hand-written file used to disappear from the scan for a single long line (#110).** The rule meant to skip minified bundles dropped any file whose longest line passed 2,000 characters — a React component with an inline SVG path, a file holding one wide type union. Now the rule judges the file, not the line: only bundle-shaped files, whose over-cap lines carry at least half the file's bytes, are dropped. And nothing is dropped silently anymore — the bundle rule, the vendored-filename rule, and the 1 MB file cap each record what they excluded and why, and the scan prints the list in every interactive flow (it previously printed discovery warnings only with `--format terminal`).
+
 ### Fixed — monorepos: ignore files in subfolders are honored
 
 - **A nested `.gitignore` used to be invisible to the scan (#111).** Only the root file was read, so a monorepo scanned — and reported findings on — files git itself ignores, and a finding could store a source line from a folder the repo had deliberately excluded. Ignore files are now found anywhere in the tree and applied the way git applies them: patterns anchor to the folder their file sits in, deeper files win over shallower ones, and nothing leaks outside its own folder. Directory names with glob-like characters (a Next.js `[slug]` route folder) are treated literally, and `.vibedriftignore` gets the same treatment as `.gitignore`.

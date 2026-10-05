@@ -208,8 +208,10 @@ async function discoverAndFilterFiles(
 
   const discoveryMs = Date.now() - t0;
 
-  // Report discovery warnings
-  if (isTerminal) {
+  // Report discovery warnings in every interactive flow (never into JSON
+  // output): a scan that skipped files must say so regardless of report
+  // format (#110).
+  if (!options.json) {
     if (warnings.truncated) {
       console.warn(chalk.yellow(`\nWarning: File limit reached (${warnings.truncatedAt}). Only partial coverage — results may be incomplete.`));
     }
@@ -218,6 +220,10 @@ async function discoverAndFilterFiles(
     }
     if (warnings.unreadableFiles.length > 0) {
       console.warn(chalk.yellow(`Warning: ${warnings.unreadableFiles.length} files unreadable: ${warnings.unreadableFiles.slice(0, 3).join(", ")}${warnings.unreadableFiles.length > 3 ? "..." : ""}`));
+    }
+    if (warnings.excludedFiles.length > 0) {
+      const why = { vendored: "vendored", too_large: "over 1 MB", minified_bundle: "bundle-shaped (long lines)" } as const;
+      console.warn(chalk.yellow(`Warning: ${warnings.excludedFiles.length} files excluded: ${warnings.excludedFiles.slice(0, 3).map((e) => `${e.path} (${why[e.reason]})`).join(", ")}${warnings.excludedFiles.length > 3 ? "..." : ""}`));
     }
   }
 
