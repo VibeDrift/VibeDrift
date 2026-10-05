@@ -77,11 +77,11 @@ export function generateTeaseMessages(
     // A pair is a credible candidate only when it is cross-file and at least
     // one side is shippable — two test/fixture/generated helpers sharing a
     // shape are not actionable (mirrors the deep-scan pre-filter).
-    const isCandidate = (s: { similarity: number; functionA: { file: string }; functionB: { file: string } }) =>
+    const isCandidate = (s: { similarity: number; functionA: { file: string; relativePath: string }; functionB: { file: string; relativePath: string } }) =>
       s.similarity >= NEAR_DUP_LOWER &&
       s.similarity < NEAR_DUP_UPPER &&
       s.functionA.file !== s.functionB.file &&
-      !(isNonShippablePath(s.functionA.file) && isNonShippablePath(s.functionB.file));
+      !(isNonShippablePath(s.functionA.relativePath) && isNonShippablePath(s.functionB.relativePath));
 
     const nearDups = codeDnaResult.sequenceSimilarities
       .filter(isCandidate)

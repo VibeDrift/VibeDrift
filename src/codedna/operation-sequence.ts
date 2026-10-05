@@ -338,8 +338,8 @@ export function findSequenceSimilarities(
         // fixtures, generated) — two test helpers sharing a workflow shape are
         // not actionable. Mirrors the deep-scan pre-filter's all-sides rule.
         if (
-          isNonShippablePath(seqA.functionRef.file) &&
-          isNonShippablePath(seqB.functionRef.file)
+          isNonShippablePath(seqA.functionRef.relativePath) &&
+          isNonShippablePath(seqB.functionRef.relativePath)
         ) {
           continue;
         }
