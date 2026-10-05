@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed — the duplicates analyzer can read typed functions again
+
+- **Typed TypeScript functions were invisible to one of the duplicate detectors (#88).** Its own extraction pattern expected the closing parenthesis of a signature to be followed immediately by the opening brace, so any function with a return-type annotation matched zero times and the analyzer quietly under-reported on TypeScript codebases. Extraction now goes through the shared function extractor the fingerprint tier, baselines, and MCP tools already use, which also covers typed arrows, typed Python signatures, methods, and generics. The analyzer's cache version bumped so existing projects pick up the wider net immediately.
+
 ## 0.21.6 — 2026-10-05
 
 ### Fixed

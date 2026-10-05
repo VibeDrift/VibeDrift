@@ -2,13 +2,13 @@ import { describe, it, expect } from "vitest";
 import { duplicatesAnalyzer } from "../../../src/analyzers/duplicates.js";
 import type { AnalysisContext } from "../../../src/core/types.js";
 
-function makeCtx(files: { relativePath: string; content: string }[]): AnalysisContext {
+function makeCtx(files: { relativePath: string; content: string; language?: "typescript" | "python" }[]): AnalysisContext {
   return {
     rootDir: "/test",
     files: files.map((f) => ({
       path: "/test/" + f.relativePath,
       relativePath: f.relativePath,
-      language: "typescript" as const,
+      language: f.language ?? ("typescript" as const),
       content: f.content,
       lineCount: f.content.split("\n").length,
     })),
@@ -24,6 +24,83 @@ function makeCtx(files: { relativePath: string; content: string }[]): AnalysisCo
 }
 
 describe("duplicates analyzer", () => {
+  it("detects duplicates in typed TypeScript functions with return-type annotations (#88)", async () => {
+    // The issue's own reproduction: byte-identical bodies, typed signatures.
+    // The analyzer's local regex required `)` immediately followed by `{`,
+    // so typed functions were never extracted and this pair was invisible.
+    const ctx = makeCtx([
+      {
+        relativePath: "src/a.ts",
+        content: `export function clamp01(n: number): number {
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+export function pad01(n: number): number {
+  const v = clamp01(n);
+  return v * 2;
+}`,
+      },
+      {
+        relativePath: "src/b.ts",
+        content: `export function clampOne(n: number): number {
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+export function padOne(n: number): number {
+  const v = clampOne(n);
+  return v * 2;
+}`,
+      },
+    ]);
+
+    const findings = await duplicatesAnalyzer.analyze(ctx);
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings[0].analyzerId).toBe("duplicates");
+  });
+
+  it("detects duplicates in typed arrow functions (#88, same bug class)", async () => {
+    const ctx = makeCtx([
+      {
+        relativePath: "src/a.ts",
+        content: `export const clampLow = (n: number): number => {
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+};`,
+      },
+      {
+        relativePath: "src/b.ts",
+        content: `export const clampHigh = (n: number): number => {
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+};`,
+      },
+    ]);
+    const findings = await duplicatesAnalyzer.analyze(ctx);
+    expect(findings.length).toBeGreaterThan(0);
+  });
+
+  it("detects duplicates in typed Python signatures (#88, same bug class)", async () => {
+    const body = [
+      "    if n < 0:",
+      "        return 0",
+      "    if n > 1:",
+      "        return 1",
+      "    return n",
+    ].join("\n");
+    const ctx = makeCtx([
+      { relativePath: "src/a.py", language: "python", content: `def clamp_low(n: int) -> int:\n${body}` },
+      { relativePath: "src/b.py", language: "python", content: `def clamp_high(n: int) -> int:\n${body}` },
+    ]);
+    const findings = await duplicatesAnalyzer.analyze(ctx);
+    expect(findings.length).toBeGreaterThan(0);
+  });
+
   it("detects duplicate functions with similar token structure across files", async () => {
     const ctx = makeCtx([
       {
