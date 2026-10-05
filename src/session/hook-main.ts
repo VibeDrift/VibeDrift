@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 import type { TrialRecapTotals } from "./trial-recap.js";
 import type { EditCheckOutcome } from "./check.js";
 import type { SessionEvent } from "./types.js";
-import type { RepoDriftBaseline } from "../core/baseline.js";
+import type { BaselineLoadStatus } from "../core/baseline.js";
 
 /** Wall-time budget for the per-file checks after one Bash call; the rest of
  *  the batch is recorded unchecked. Sized to leave the watchdog headroom for
@@ -331,7 +331,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     { processPrompt, checkScope },
     { recheckFile, detectRevert, readOutcomeState, writeOutcomeState },
     { readHookClock, writeHookClock, changedSourceFiles },
-    { loadBaselineUnchecked },
+    { loadBaselineStatus },
     { readSessionScopes, recordSessionScope },
   ] = await Promise.all([
     import("./ledger.js"),
@@ -706,7 +706,7 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     event: SessionEvent,
     body: string | undefined,
     checkAbsFile: string | null,
-    loadBaselineFor?: (root: string) => Promise<RepoDriftBaseline | null>,
+    loadBaselineFor?: (root: string) => Promise<BaselineLoadStatus>,
   ): Promise<string | null> {
     let editCheck: EditCheckOutcome | null = null;
     if (body && checkAbsFile) {
@@ -867,11 +867,11 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     // One batch can span several repos (a workspace walk descends into every
     // checkout under it), so the baseline and its file digests are cached PER
     // REPO rather than once for the batch.
-    const cached = new Map<string, Promise<RepoDriftBaseline | null>>();
-    const loadBaselineFor = (root: string): Promise<RepoDriftBaseline | null> => {
+    const cached = new Map<string, Promise<BaselineLoadStatus>>();
+    const loadBaselineFor = (root: string): Promise<BaselineLoadStatus> => {
       let p = cached.get(root);
       if (!p) {
-        p = loadBaselineUnchecked(root, HOOK_BASELINE_MAX_BYTES);
+        p = loadBaselineStatus(root, HOOK_BASELINE_MAX_BYTES);
         cached.set(root, p);
       }
       return p;
@@ -880,7 +880,8 @@ export async function runHook(raw: string, argv: string[] = []): Promise<number>
     const knownHashesFor = async (root: string): Promise<Map<string, string>> => {
       const hit = digests.get(root);
       if (hit) return hit;
-      const baseline = await loadBaselineFor(root);
+      const res = await loadBaselineFor(root);
+      const baseline = res.ok ? res.baseline : null;
       const byRel = new Map<string, string>();
       for (const f of baseline?.ctxFiles ?? []) {
         const rel = (isAbsolute(f.path) ? relative(root, f.path) : f.path).replace(/\\/g, "/");

@@ -55,7 +55,7 @@ async function raise(sessionId: string, relFile: string, body: string): Promise<
     sessionsDir,
     file: join(repo, relFile),
     body,
-    loadBaselineFor: async () => baseline,
+    loadBaselineFor: async () => ({ ok: true as const, baseline }),
   });
   expect(out.flags.length).toBeGreaterThanOrEqual(1);
   return out.flags.map((f) => ({

@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed — a repo too large to check says so, instead of claiming it has no patterns
+
+- **The oversized-baseline mislabel is gone (#118).** Drift Sessions reads the repo's saved patterns inside the hook's time budget, capped at 8 MB. A repo whose patterns file crossed the cap had every edit recorded as `no_baseline` — "no patterns yet" — for a repo that had megabytes of them. Those edits are now stamped `too_large`, and the session says so once, with the measured size: "its saved patterns file is 9.0 MB, past the 8.0 MB the hook can read inside its time budget. Edits here are still recorded, marked as not checked." A genuinely missing baseline keeps its own `no_baseline` label, and a corrupt cache file now reads as "no usable baseline" everywhere (scan, MCP, watch) instead of throwing. The entry-count gate was already honest on this; the byte gate now matches.
+
 ## 0.21.4 — 2026-10-03
 
 ### Fixed — a mid-turn answer reaches the agent, not just the ledger

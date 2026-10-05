@@ -15,7 +15,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { loadBaselineUnchecked, type RepoDriftBaseline, type MinhashEntry } from "../core/baseline.js";
+import { loadBaselineStatus, type BaselineLoadStatus, type RepoDriftBaseline, type MinhashEntry } from "../core/baseline.js";
 import { detectLanguage } from "../core/language.js";
 import { detectDrift } from "./detect.js";
 import type { AnchorSite, FindingAnchor } from "./finding-anchor.js";
@@ -131,7 +131,10 @@ export interface EditCheckOptions {
   sessionsDir: string;
   file: string;
   body: string;
-  loadBaselineFor?: (rootDir: string) => Promise<RepoDriftBaseline | null>;
+  loadBaselineFor?: (rootDir: string) => Promise<BaselineLoadStatus>;
+  /** Stat-gate for the default baseline read; tests set a tiny cap so the
+   *  too_large path is exercisable without an 8 MiB fixture. */
+  baselineMaxBytes?: number;
   now?: () => number;
 }
 
@@ -233,8 +236,23 @@ export function formatChecksPausedNotice(a: { dir: string; indexed: number; inDi
   );
 }
 
+/**
+ * The line an agent gets when the repo's persisted patterns file is too many
+ * bytes for the hook to read inside its budget. Measured numbers, same voice
+ * as the entry-gate notice: "no flags here" is not "this code was looked at".
+ */
+export function formatBaselineTooLargeNotice(a: { bytes: number; maxBytes: number }): string {
+  const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+  return (
+    `[vibedrift] checks are paused in this repo for this session: its saved patterns file is ` +
+    `${mb(a.bytes)} MB, past the ${mb(a.maxBytes)} MB the hook can read inside its time budget. ` +
+    `Edits here are still recorded, marked as not checked.`
+  );
+}
+
 export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOutcome> {
-  const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineUnchecked(rootDir, HOOK_BASELINE_MAX_BYTES));
+  const maxBytes = opts.baselineMaxBytes ?? HOOK_BASELINE_MAX_BYTES;
+  const load = opts.loadBaselineFor ?? ((rootDir: string) => loadBaselineStatus(rootDir, maxBytes));
   const now = opts.now ?? Date.now;
 
   // Forward slashes on every platform: the baseline stores its relative paths
@@ -263,16 +281,30 @@ export async function runEditChecks(opts: EditCheckOptions): Promise<EditCheckOu
     return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false, reason: "not_code" };
   }
 
-  let baseline: RepoDriftBaseline | null;
+  let baseline: RepoDriftBaseline;
   try {
-    baseline = await load(opts.rootDir);
+    const res = await load(opts.rootDir);
+    if (!res.ok) {
+      if (res.reason === "too_large") {
+        // The repo HAS patterns — too many bytes for the hook to read in
+        // budget. "no_baseline" would claim the opposite (#118), so stamp the
+        // real state and say it once per session, the same once-only
+        // operational line the entry gate uses.
+        const state = await readState(opts);
+        let notice: string | null = null;
+        if (!state.pausedNoticed) {
+          state.pausedNoticed = true;
+          await writeState(opts, state);
+          notice = formatBaselineTooLargeNotice({ bytes: res.bytes, maxBytes });
+        }
+        return { flags: [], fyi: null, notice, baseline: null, anchors: {}, checked: false, reason: "too_large" };
+      }
+      return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false, reason: "no_baseline" };
+    }
+    baseline = res.baseline;
   } catch {
     return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false, reason: "no_baseline" };
   }
-  if (!baseline) {
-    return { flags: [], fyi: null, notice: null, baseline: null, anchors: {}, checked: false, reason: "no_baseline" };
-  }
-
 
   // Size gate, with the directory fallback (issue #118). The cost is the LCS
   // pass over the duplicate index, about 0.1 ms per entry, so a workspace-sized

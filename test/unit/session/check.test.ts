@@ -45,7 +45,7 @@ afterAll(() => {
   rmSync(sessionsDir, { recursive: true, force: true });
 });
 
-const loader = async () => baseline;
+const loader = async () => ({ ok: true as const, baseline });
 
 // Multi-line on purpose: the shared async classifier counts signal per line
 // and needs >= 2 async operations to classify at all.
@@ -154,7 +154,7 @@ describe("runEditChecks", () => {
         sessionId: "s-fallback",
         file: join(repo, "src", "lib", "retry.ts"),
         body: HELPER_BODY,
-        loadBaselineFor: async () => oversized("pad"),
+        loadBaselineFor: async () => ({ ok: true as const, baseline: oversized("pad") }),
       }),
     );
     expect(out.checked).toBe(true);
@@ -175,7 +175,7 @@ describe("runEditChecks", () => {
         sessionId: "s-fallback-other-dir",
         file: join(repo, "src", "retry.ts"),
         body: HELPER_BODY,
-        loadBaselineFor: async () => oversized("pad"),
+        loadBaselineFor: async () => ({ ok: true as const, baseline: oversized("pad") }),
       }),
     );
     expect(out.checked).toBe(true);
@@ -183,7 +183,7 @@ describe("runEditChecks", () => {
   });
 
   it("skips, and says so exactly once, when the file's own directory is over the gate too", async () => {
-    const tooBig = async () => oversized("src/lib");
+    const tooBig = async () => ({ ok: true as const, baseline: oversized("src/lib") });
     const first = await runEditChecks(
       opts({
         sessionId: "s-paused",
@@ -212,7 +212,7 @@ describe("runEditChecks", () => {
   });
 
   it("stays quiet when no baseline exists", async () => {
-    const out = await runEditChecks(opts({ sessionId: "s-none", loadBaselineFor: async () => null }));
+    const out = await runEditChecks(opts({ sessionId: "s-none", loadBaselineFor: async () => ({ ok: false as const, reason: "missing" }) }));
     expect(out.flags).toEqual([]);
     expect(out.fyi).toBeNull();
   });
@@ -247,12 +247,12 @@ describe("runEditChecks", () => {
         relativePath: "src/pad.ts",
       })),
     };
-    const out = await runEditChecks(opts({ sessionId: "s-chk-big", loadBaselineFor: async () => padded }));
+    const out = await runEditChecks(opts({ sessionId: "s-chk-big", loadBaselineFor: async () => ({ ok: true as const, baseline: padded }) }));
     expect(out.checked).toBe(false);
   });
 
   it("reports checked=false when no baseline exists", async () => {
-    const out = await runEditChecks(opts({ sessionId: "s-chk-none", loadBaselineFor: async () => null }));
+    const out = await runEditChecks(opts({ sessionId: "s-chk-none", loadBaselineFor: async () => ({ ok: false as const, reason: "missing" }) }));
     expect(out.checked).toBe(false);
   });
 
@@ -277,7 +277,7 @@ describe("runEditChecks", () => {
     // perCategoryVote used to serve here, but the in-loop path now reads
     // perDirectoryVote, so nulling it no longer throws anywhere.
     const broken = { ...baseline, minhashIndex: { length: 0 } } as unknown as RepoDriftBaseline;
-    const out = await runEditChecks(opts({ sessionId: "s-chk-err", loadBaselineFor: async () => broken }));
+    const out = await runEditChecks(opts({ sessionId: "s-chk-err", loadBaselineFor: async () => ({ ok: true as const, baseline: broken }) }));
     expect(out.flags).toEqual([]);
     expect(out.checked).toBe(false);
   });
@@ -510,7 +510,7 @@ describe("runEditChecks duplicate counterpart verification", () => {
       sessionsDir: sessionsDir2,
       file: join(repo2, "src", "shared.ts"),
       body: HELPER_BODY,
-      loadBaselineFor: async () => b2,
+      loadBaselineFor: async () => ({ ok: true as const, baseline: b2 }),
     });
     expect(out.flags.filter((f) => f.detail.category === "redundancy")).toHaveLength(0);
     rmSync(repo2, { recursive: true, force: true });
@@ -534,7 +534,7 @@ describe("runEditChecks duplicate counterpart verification", () => {
       sessionsDir: sessionsDir3,
       file: join(repo3, "src", "shared.ts"),
       body: HELPER_BODY,
-      loadBaselineFor: async () => b3,
+      loadBaselineFor: async () => ({ ok: true as const, baseline: b3 }),
     });
     expect(out.flags.filter((f) => f.detail.category === "redundancy").length).toBeGreaterThanOrEqual(1);
     rmSync(repo3, { recursive: true, force: true });

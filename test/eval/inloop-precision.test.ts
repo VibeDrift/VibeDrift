@@ -229,7 +229,7 @@ async function runCase(c: (typeof cases)[number]) {
     sessionsDir,
     file: join(repo, c.file),
     body: c.body,
-    loadBaselineFor: async () => baseline,
+    loadBaselineFor: async () => ({ ok: true as const, baseline }),
   });
   if (process.env.EVAL_DEBUG === "1" && out.flags.length) {
     console.log(`  [${c.id}] flagged:`, out.flags.map((f) => `${f.detail.category}:${JSON.stringify(f.detail).slice(0, 140)}`));
