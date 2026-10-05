@@ -43,6 +43,9 @@ export interface DiscoveryWarnings {
   truncatedAt: number;
   skippedDirs: string[];
   unreadableFiles: string[];
+  /** Files excluded from the scan, with why. A scan that silently skips
+   *  source looks clean while seeing less than the user believes (#110). */
+  excludedFiles: { path: string; reason: "vendored" | "too_large" | "minified_bundle" }[];
 }
 
 export async function discoverFiles(rootDir: string): Promise<{ files: SourceFile[]; warnings: DiscoveryWarnings }> {
@@ -53,6 +56,7 @@ export async function discoverFiles(rootDir: string): Promise<{ files: SourceFil
     truncatedAt: 0,
     skippedDirs: [],
     unreadableFiles: [],
+    excludedFiles: [],
   };
 
   async function walk(dir: string) {
@@ -94,21 +98,34 @@ export async function discoverFiles(rootDir: string): Promise<{ files: SourceFil
         await walk(fullPath);
       } else if (entry.isFile()) {
         if (ig.ignores(relPath)) continue;
-        if (VENDORED_FILE_RE.test(entry.name)) continue; // jquery-3.2.1.min.js, *.bundle.js, …
+        if (VENDORED_FILE_RE.test(entry.name)) {
+          // jquery-3.2.1.min.js, *.bundle.js, …
+          warnings.excludedFiles.push({ path: relPath, reason: "vendored" });
+          continue;
+        }
         const language = detectLanguage(entry.name);
         if (!language) continue;
 
         try {
           const info = await stat(fullPath);
-          if (info.size > MAX_FILE_SIZE) continue;
+          if (info.size > MAX_FILE_SIZE) {
+            warnings.excludedFiles.push({ path: relPath, reason: "too_large" });
+            continue;
+          }
 
           const content = await readFile(fullPath, "utf-8");
           const lines = content.split("\n");
           // Skip minified/generated bundles regardless of filename (e.g. ace.js):
-          // they pack code into very long lines; hand-written source does not.
-          let maxLineLen = 0;
-          for (const l of lines) if (l.length > maxLineLen) maxLineLen = l.length;
-          if (maxLineLen > MAX_SOURCE_LINE_LENGTH) continue;
+          // they pack code into very long lines. Judge the FILE, not one line
+          // (#110): a bundle is long on essentially every line, so its over-cap
+          // lines carry at least half the file's bytes; a hand-written file
+          // with one long inline SVG path or type union is kept.
+          let longLineBytes = 0;
+          for (const l of lines) if (l.length > MAX_SOURCE_LINE_LENGTH) longLineBytes += l.length;
+          if (longLineBytes > 0 && longLineBytes * 2 >= content.length) {
+            warnings.excludedFiles.push({ path: relPath, reason: "minified_bundle" });
+            continue;
+          }
           files.push({ path: fullPath, relativePath: relPath, language, content, lineCount: lines.length });
         } catch {
           // Unreadable file — permission denied, broken symlink, etc.

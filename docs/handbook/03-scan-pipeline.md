@@ -33,7 +33,7 @@ Not everything on disk should be analyzed. Discovery applies four filters, each 
 |---|---|---|
 | Skip directories | `SKIP_DIRS` (`node_modules`, `.git`, `dist`, `build`, `.next`, `.nuxt`, `target`, `vendor`, `__pycache__`, `.venv`, `venv`, `coverage`, `.turbo`, `.cache`, `.idea`, `.vscode`) plus any directory starting with `.` | Dependency and build output is not the user's code |
 | Ignore files | `.gitignore` and `.vibedriftignore`, both parsed with the `ignore` package | User-declared exclusions, one syntax |
-| Vendored/minified files | `VENDORED_FILE_RE` (`*.min.js`, `*.bundle.js`, and variants), plus any file containing a line longer than `MAX_SOURCE_LINE_LENGTH` (2000 chars) | A checked-in jquery bundle would drown the drift vote in functions nobody wrote; hand-written source effectively never has a 2000-character line, so line length catches bundles regardless of filename |
+| Vendored/minified files | `VENDORED_FILE_RE` (`*.min.js`, `*.bundle.js`, and variants), plus bundle-shaped files: those whose over-2000-char lines carry at least half the file's bytes | A checked-in jquery bundle would drown the drift vote in functions nobody wrote. Judging the file rather than one line keeps hand-written source with a long inline SVG path or type union; every exclusion is recorded in `DiscoveryWarnings.excludedFiles` and printed by the scan |
 | Caps | `MAX_FILE_SIZE` 1 MiB per file, `MAX_FILE_COUNT` 5000 files (with a truncation warning) | Bound memory and scan time on pathological inputs |
 
 Language detection is extension-based (`src/core/language.ts`): `.js/.jsx/.mjs/.cjs`, `.ts/.tsx/.mts/.cts`, `.py`, `.go`, `.rs`. Files in any other language are skipped at discovery time, so the rest of the pipeline never sees a file it cannot analyze.
