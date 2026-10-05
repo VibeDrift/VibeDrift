@@ -79,6 +79,23 @@ describe("findSequenceSimilarities", () => {
     expect(sims[0].similarity).toBeCloseTo(1, 1);
   });
 
+  it("keeps the pair when the checkout lives under an examples/ directory (#105)", () => {
+    // Same bodies, same repo-relative paths — only the ABSOLUTE checkout
+    // parent differs. The non-shippable filter must judge relativePath, so a
+    // clone under /tmp/vd/examples loses nothing.
+    const body = [
+      "const id = req.params.id;",
+      "const user = db.query(userSql);",
+      "return res.json(user);",
+    ].join("\n");
+    const fns = [
+      mkFn({ name: "getUser", file: "/tmp/vd/examples/app/src/a.ts", relativePath: "src/a.ts", domainCategory: "auth", rawBody: body }),
+      mkFn({ name: "getAccount", file: "/tmp/vd/examples/app/src/b.ts", relativePath: "src/b.ts", domainCategory: "auth", rawBody: body }),
+    ];
+    const seqs = extractOperationSequences(fns);
+    expect(findSequenceSimilarities(seqs, fns)).toHaveLength(1);
+  });
+
   it("does not emit a high-confidence match for short generic op sequences", () => {
     // Reproduces the bandcamp-audit false positive: summarizeReason() (joins two
     // strings) and appendDebugEvent() (pushes a debug record + trims an array)

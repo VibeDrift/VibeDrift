@@ -181,7 +181,7 @@ The weights are fixed constants (`DEFAULT_DEVIATION_WEIGHTS` in `src/core/config
 
 ## The non-shippable filter
 
-`src/codedna/nonshippable.ts` classifies paths as non-shippable: generated code (`generated/`, `.pb.go`, `_pb2.py`, `.min.*`), fixtures, mocks, snapshots, tests (`__tests__/`, `.test.*`, `_test.go`, `test_*.py`), and examples/demos/samples.
+`src/codedna/nonshippable.ts` classifies paths as non-shippable: generated code (`generated/`, `.pb.go`, `_pb2.py`, `.min.*`), fixtures, mocks, snapshots, tests (`__tests__/`, `.test.*`, `_test.go`, `test_*.py`), and examples/demos/samples. Every consumer judges the **repo-relative** path, never the absolute checkout path — a clone that happens to live under a directory named `examples/` or `tests/` must not disqualify itself (#105).
 
 The consumption rule matters more than the list: `allNonShippable` drops a duplicate group only when every member is non-shippable. Two identical `mkCtx()` helpers in two test files are not a consolidatable duplicate, but a `src/` helper copied into a test still surfaces, because that group has a shippable member. The header documents that this mirrors the paid API's pre-filter (`api/models/dup_prefilter.py` in the API repo), so the free CLI and the cloud path agree on what counts.
 

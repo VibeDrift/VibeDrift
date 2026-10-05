@@ -6,6 +6,10 @@ explicitly under **Breaking** so CI users can recalibrate.
 
 ## [Unreleased]
 
+### Fixed — duplicate detection no longer depends on where you keep your checkouts
+
+- **A repo cloned under a folder named `examples/` (or `tests/`, `fixtures/`, `demos/`) silently lost exact- and near-duplicate detection (#105).** The "not real code" filter was matched against the absolute path on disk instead of the path inside the repo, so a segment of the user's own directory layout could disqualify every file. All three call sites — exact-duplicate fingerprints, operation-sequence near-duplicates, and the deep-scan tease — now judge the repo-relative path.
+
 ### Fixed — one long line no longer vanishes a whole file, and every exclusion is said out loud
 
 - **A hand-written file used to disappear from the scan for a single long line (#110).** The rule meant to skip minified bundles dropped any file whose longest line passed 2,000 characters — a React component with an inline SVG path, a file holding one wide type union. Now the rule judges the file, not the line: only bundle-shaped files, whose over-cap lines carry at least half the file's bytes, are dropped. And nothing is dropped silently anymore — the bundle rule, the vendored-filename rule, and the 1 MB file cap each record what they excluded and why, and the scan prints the list in every interactive flow (it previously printed discovery warnings only with `--format terminal`).

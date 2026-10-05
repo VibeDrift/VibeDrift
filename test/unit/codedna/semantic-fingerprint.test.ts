@@ -24,6 +24,25 @@ function mkFn(partial: Partial<ExtractedFunction>): ExtractedFunction {
   };
 }
 
+describe("findDuplicateGroups — checkout location must not matter (#105)", () => {
+  // The same byte-identical repo cloned twice: once under a parent dir named
+  // "examples", once under a neutral parent. The non-shippable filter must
+  // judge the REPO-relative path, never the absolute checkout path — a repo
+  // that happens to live under examples/ must not lose duplicate detection.
+  const body = "const alpha = 1; const beta = 2; const total = alpha + beta; return total;";
+  for (const parent of ["/tmp/vd/plainroot", "/tmp/vd/examples"]) {
+    it(`keeps the duplicate group under ${parent}`, () => {
+      const fns = [
+        mkFn({ name: "getTotal", file: `${parent}/app/src/a.ts`, relativePath: "src/a.ts", rawBody: body }),
+        mkFn({ name: "fetchTotal", file: `${parent}/app/src/b.ts`, relativePath: "src/b.ts", rawBody: body }),
+      ];
+      const fps = computeSemanticFingerprints(fns);
+      const groups = findDuplicateGroups(fps, fns);
+      expect(groups.length).toBe(1);
+    });
+  }
+});
+
 describe("computeSemanticFingerprints", () => {
   it("empty body → stable hash across calls", () => {
     const [a] = computeSemanticFingerprints([mkFn({ rawBody: "" })]);
