@@ -19,6 +19,7 @@ import type {
 } from "./types.js";
 import { detectLanguage } from "./language.js";
 import { loadGitignore } from "../utils/gitignore.js";
+import { createTrackedLookup } from "../utils/git-tracked.js";
 
 export const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", ".nuxt",
@@ -50,6 +51,7 @@ export interface DiscoveryWarnings {
 
 export async function discoverFiles(rootDir: string): Promise<{ files: SourceFile[]; warnings: DiscoveryWarnings }> {
   const ig = await loadGitignore(rootDir, SKIP_DIRS);
+  const hasTracked = createTrackedLookup(rootDir);
   const files: SourceFile[] = [];
   const warnings: DiscoveryWarnings = {
     truncated: false,
@@ -93,7 +95,20 @@ export async function discoverFiles(rootDir: string): Promise<{ files: SourceFil
       const relPath = relative(rootDir, fullPath).replace(/\\/g, "/");
 
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+        if (entry.name.startsWith(".")) continue;
+        if (SKIP_DIRS.has(entry.name)) {
+          // A name is not proof of output (#116): a build/ or dist/ folder of
+          // git-tracked source (date-fns keeps 16 files in scripts/build/) is
+          // source. Skip only when the folder is genuinely output: untracked
+          // (or unreadable git, where the name rule stays as the fallback).
+          const tracked = await hasTracked(relPath);
+          if (tracked !== true) continue;
+          // Note: a gitlink (submodule) counts as tracked, so a vendor-named
+          // ancestor of a submodule now descends into it, a deliberate change
+          // from the name skip. And below, the ignore check still wins for
+          // force-added files under an ignored dir (git would show them; we
+          // honor the declared exclusion). Both are pinned by tests.
+        }
         if (ig.ignores(relPath + "/")) continue;
         await walk(fullPath);
       } else if (entry.isFile()) {
