@@ -4,6 +4,13 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed
+
+- **Scans no longer walk build folders looking for ignore files.** Since 0.21.5 the scan reads `.gitignore` and `.vibedriftignore` files in subfolders, but its search for them went into `target/`, `venv/`, `dist/`, `vendor/` and the other folders the scan itself never reads. On a Rust or Python repo with a large build folder that added up to about a second per scan. Those folders are now skipped, and which files get scanned is unchanged.
+- **`--format json` no longer prints discovery warnings.** The excluded-files and file-limit warnings were held back for `--json` but still printed for `--format json`. They went to stderr, so the JSON itself was never corrupted, but both spellings now behave the same.
+
 ## 0.21.5 — 2026-10-05
 
 ### Fixed — duplicate detection no longer depends on where you keep your checkouts

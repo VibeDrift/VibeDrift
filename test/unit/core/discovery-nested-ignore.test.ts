@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { discoverFiles } from "../../../src/core/discovery.js";
+import { discoverFiles, SKIP_DIRS } from "../../../src/core/discovery.js";
+import { loadGitignore } from "../../../src/utils/gitignore.js";
 
 /**
  * Issue #111: loadGitignore read only the ROOT .gitignore/.vibedriftignore,
@@ -99,5 +100,17 @@ describe("discovery: nested ignore files (#111)", () => {
     const names = files.map((f) => f.relativePath);
     expect(names).not.toContain("packages/app/generated/x.ts");
     expect(names).toContain("packages/app/keep/y.ts");
+  });
+
+  it("does not walk into skipped build dirs looking for ignore files", async () => {
+    // An ignore file inside target/ can never apply (discovery skips target/),
+    // so reading it only costs time. Observable proof the walk stayed out: its
+    // pattern does not reach the matcher.
+    await put("target/.gitignore", "*.ts\n");
+    await put("src/a.ts");
+    const ig = await loadGitignore(dir, SKIP_DIRS);
+    expect(ig.ignores("target/x.ts")).toBe(false);
+    // Callers that pass no skip set still get every nested file.
+    expect((await loadGitignore(dir)).ignores("target/x.ts")).toBe(true);
   });
 });
