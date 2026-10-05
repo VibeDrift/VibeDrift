@@ -208,10 +208,10 @@ async function discoverAndFilterFiles(
 
   const discoveryMs = Date.now() - t0;
 
-  // Report discovery warnings in every interactive flow (never into JSON
-  // output): a scan that skipped files must say so regardless of report
-  // format (#110).
-  if (!options.json) {
+  // Report discovery warnings in every interactive flow (never alongside JSON
+  // output, whether chosen by --json or --format json): a scan that skipped
+  // files must say so regardless of report format (#110).
+  if (!isJsonOutput(options)) {
     if (warnings.truncated) {
       console.warn(chalk.yellow(`\nWarning: File limit reached (${warnings.truncatedAt}). Only partial coverage — results may be incomplete.`));
     }

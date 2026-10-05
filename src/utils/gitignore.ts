@@ -52,12 +52,15 @@ export function reanchorPattern(pattern: string, dirRel: string): string {
 
 /**
  * Find every ignore file under the root, parents before children (pre-order),
- * so last-match-wins gives deeper files precedence the way git does. Only
- * dot-dirs and node_modules are skipped: discovery never descends into the
- * other skipped names, so ignore files there could never apply, and reading
- * them is harmless but walking node_modules is not cheap.
+ * so last-match-wins gives deeper files precedence the way git does. Skips
+ * dot-dirs, node_modules and the caller's `skipDirs`: discovery never
+ * descends into those, so an ignore file there could never apply, and walking
+ * a build tree (target/, venv/) costs about 30 µs per directory.
  */
-async function collectIgnoreFiles(rootDir: string): Promise<{ dirRel: string; file: string }[]> {
+async function collectIgnoreFiles(
+  rootDir: string,
+  skipDirs: ReadonlySet<string>,
+): Promise<{ dirRel: string; file: string }[]> {
   const found: { dirRel: string; file: string }[] = [];
   async function walk(dir: string): Promise<void> {
     let entries;
@@ -73,7 +76,7 @@ async function collectIgnoreFiles(rootDir: string): Promise<{ dirRel: string; fi
     }
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      if (e.name.startsWith(".") || e.name === "node_modules" || skipDirs.has(e.name)) continue;
       await walk(join(dir, e.name));
     }
   }
@@ -81,10 +84,10 @@ async function collectIgnoreFiles(rootDir: string): Promise<{ dirRel: string; fi
   return found;
 }
 
-export async function loadGitignore(rootDir: string): Promise<Ignore> {
+export async function loadGitignore(rootDir: string, skipDirs: ReadonlySet<string> = new Set()): Promise<Ignore> {
   const ig = ignore();
 
-  for (const { dirRel, file } of await collectIgnoreFiles(rootDir)) {
+  for (const { dirRel, file } of await collectIgnoreFiles(rootDir, skipDirs)) {
     let content: string;
     try {
       content = await readFile(file, "utf-8");

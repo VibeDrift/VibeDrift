@@ -49,7 +49,7 @@ export interface DiscoveryWarnings {
 }
 
 export async function discoverFiles(rootDir: string): Promise<{ files: SourceFile[]; warnings: DiscoveryWarnings }> {
-  const ig = await loadGitignore(rootDir);
+  const ig = await loadGitignore(rootDir, SKIP_DIRS);
   const files: SourceFile[] = [];
   const warnings: DiscoveryWarnings = {
     truncated: false,
