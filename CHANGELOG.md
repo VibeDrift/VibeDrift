@@ -4,6 +4,12 @@ All notable changes to `@vibedrift/cli` are documented here. The format
 follows Keep-a-Changelog loosely; breaking-shape changes are called out
 explicitly under **Breaking** so CI users can recalibrate.
 
+## [Unreleased]
+
+### Fixed — a folder of real source named build/ is no longer invisible
+
+- **The scan skipped any directory named `build` (or `dist`, `target`, `vendor`, and friends) at any depth, assuming it was generated output (#116).** date-fns keeps 16 hand-written source files in `pkgs/core/scripts/build/`, and because that folder was never read, the functions it imports looked dead. A build-named directory is now skipped only when it actually is output, meaning gitignored or untracked. Tracked source scans, and outside git repositories the name rule stays as it was.
+
 ## 0.21.6 — 2026-10-05
 
 ### Fixed
