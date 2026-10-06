@@ -18,6 +18,7 @@ import {
   findLshCandidatePairs,
   lcsSimilarity,
 } from "../codedna/minhash.js";
+import { extractFunctionsFromFile } from "../codedna/function-extractor.js";
 
 interface FunctionRecord {
   file: string;
@@ -27,70 +28,31 @@ interface FunctionRecord {
   signature: Uint32Array;
 }
 
-function extractBody(content: string, openBraceIndex: number): string {
-  const ch = content[openBraceIndex];
-
-  if (ch === "{") {
-    let depth = 1;
-    let i = openBraceIndex + 1;
-    while (i < content.length && depth > 0) {
-      if (content[i] === "{") depth++;
-      else if (content[i] === "}") depth--;
-      i++;
-    }
-    return content.slice(openBraceIndex, i);
-  }
-
-  if (ch === ":") {
-    const lines = content.slice(openBraceIndex + 1).split("\n");
-    const bodyLines: string[] = [];
-    let baseIndent = -1;
-    for (const line of lines) {
-      if (line.trim() === "") { bodyLines.push(line); continue; }
-      const indent = line.search(/\S/);
-      if (baseIndent === -1) baseIndent = indent;
-      if (indent >= baseIndent) bodyLines.push(line);
-      else break;
-    }
-    return bodyLines.join("\n");
-  }
-
-  return "";
-}
-
-function extractFunctions(content: string, file: string): FunctionRecord[] {
+/**
+ * Function discovery goes through the shared extractor
+ * (src/codedna/function-extractor.ts), the same one the fingerprint tier,
+ * baselines, and the MCP tools use: it skips optional return-type
+ * annotations before locating the body, so typed TypeScript functions are
+ * seen at all (#88). Scoring below is unchanged: the analyzer still builds
+ * its own signatures from the extracted body and keeps its own floors.
+ */
+function extractFunctions(file: AnalysisContext["files"][number]): FunctionRecord[] {
   const out: FunctionRecord[] = [];
-  const patterns = [
-    /(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*\{/g,
-    /(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>\s*\{/g,
-    /def\s+(\w+)\s*\([^)]*\)\s*:/g,
-    /func\s+(?:\([^)]*\)\s+)?(\w+)\s*\([^)]*\)\s*(?:\([^)]*\)\s*)?\{/g,
-    /(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?:->[^{]*)?\{/g,
-  ];
+  for (const fn of extractFunctionsFromFile(file)) {
+    const body = fn.rawBody;
+    if (body.length < 20) continue;
 
-  for (const pattern of patterns) {
-    const regex = new RegExp(pattern.source, pattern.flags);
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const funcName = match[1];
-      const startIndex = match.index;
-      const line = content.slice(0, startIndex).split("\n").length;
-      const body = extractBody(content, startIndex + match[0].length - 1);
-      if (body.length < 20) continue;
+    const sig = buildSignature(body);
+    if (sig.tokens.length < 15) continue;
 
-      const sig = buildSignature(body);
-      if (sig.tokens.length < 15) continue;
-
-      out.push({
-        file,
-        line,
-        funcName,
-        tokens: sig.tokens,
-        signature: sig.signature,
-      });
-    }
+    out.push({
+      file: fn.relativePath,
+      line: fn.line,
+      funcName: fn.name,
+      tokens: sig.tokens,
+      signature: sig.signature,
+    });
   }
-
   return out;
 }
 
@@ -103,7 +65,9 @@ export const duplicatesAnalyzer: Analyzer = {
   requiresAST: false,
   applicableLanguages: "all",
   // Bumped when detection changes. Invalidates the S1 findings cache.
-  version: 3,
+  // v4: extraction moved to the shared extractor (typed TS/Python, methods,
+  // generics, let/var arrows newly seen; throw-only stub bodies now filtered).
+  version: 4,
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
@@ -111,7 +75,7 @@ export const duplicatesAnalyzer: Analyzer = {
 
     for (const file of ctx.files) {
       if (!file.language) continue;
-      allFunctions.push(...extractFunctions(file.content, file.relativePath));
+      allFunctions.push(...extractFunctions(file));
     }
 
     if (allFunctions.length < 2) return findings;
